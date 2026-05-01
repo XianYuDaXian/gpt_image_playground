@@ -5,7 +5,7 @@ function isInsideLightbox(target: EventTarget | null) {
 }
 
 function findScrollableAncestor(target: EventTarget | null) {
-  let node = target instanceof Element ? target : null
+  let node = target instanceof HTMLElement ? target : null
   while (node && node !== document.body && node !== document.documentElement) {
     const style = window.getComputedStyle(node)
     const overflowY = style.overflowY

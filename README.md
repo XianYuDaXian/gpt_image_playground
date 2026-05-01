@@ -61,6 +61,74 @@
 - `/api` 后端接口
 - `/media` 媒体文件
 
+### 使用已构建镜像
+
+如果你只想直接使用现成镜像，优先使用：
+
+- `ghcr.io/xianyudaxian/gpt_image_playground:latest`
+
+也可以按版本固定：
+
+- `ghcr.io/xianyudaxian/gpt_image_playground:0.3.0`
+
+可以直接运行：
+
+```bash
+docker run -d \
+  --name gpt-image-playground \
+  -p 8787:8787 \
+  -e APP_PORT=8787 \
+  -e APP_HOST=0.0.0.0 \
+  -e APP_SECRET=change-this-secret \
+  -e UPSTREAM_API_URL=https://api.openai.com/v1 \
+  -e UPSTREAM_API_KEY=sk-xxxx \
+  -e UPSTREAM_MODEL=gpt-5.5 \
+  -e UPSTREAM_API_MODE=responses \
+  -e UPSTREAM_TIMEOUT_SECONDS=300 \
+  -e UPSTREAM_CODEX_CLI=false \
+  -v gpt-image-playground-data:/app/data \
+  ghcr.io/xianyudaxian/gpt_image_playground:latest
+```
+
+启动后访问：
+
+- [http://localhost:8787/](http://localhost:8787/)
+- [http://localhost:8787/health](http://localhost:8787/health)
+
+如果你希望宿主机直接看到数据库和媒体文件，也可以改用目录挂载：
+
+```bash
+docker run -d \
+  --name gpt-image-playground \
+  -p 8787:8787 \
+  -e APP_SECRET=change-this-secret \
+  -v ./docker-data:/app/data \
+  ghcr.io/xianyudaxian/gpt_image_playground:latest
+```
+
+### 使用 Docker Compose 运行已构建镜像
+
+```yaml
+services:
+  app:
+    image: ghcr.io/xianyudaxian/gpt_image_playground:latest
+    ports:
+      - "8787:8787"
+    environment:
+      APP_PORT: 8787
+      APP_HOST: 0.0.0.0
+      APP_SECRET: change-this-secret
+      UPSTREAM_API_URL: https://api.openai.com/v1
+      UPSTREAM_API_KEY: sk-xxxx
+      UPSTREAM_MODEL: gpt-5.5
+      UPSTREAM_API_MODE: responses
+      UPSTREAM_TIMEOUT_SECONDS: 300
+      UPSTREAM_CODEX_CLI: false
+    volumes:
+      - ./docker-data:/app/data
+    restart: unless-stopped
+```
+
 ### 快速启动
 
 ```bash
@@ -105,6 +173,34 @@ docker compose up -d --build
 - `media/thumbs`
 
 也就是说，**容器删掉后数据仍保留在宿主机**。
+
+### 镜像更新方式
+
+如果你使用的是远端镜像：
+
+```bash
+docker pull ghcr.io/xianyudaxian/gpt_image_playground:latest
+docker stop gpt-image-playground
+docker rm gpt-image-playground
+```
+
+然后用相同参数重新 `docker run` 即可。
+
+如果你使用的是 Docker Compose：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+如果你是本地重新构建镜像：
+
+```bash
+docker build -f deploy/Dockerfile -t gpt-image-playground:latest .
+docker compose up -d --build
+```
+
+更新时只要继续挂载原来的 `/app/data`，原有数据库和图片就不会丢。
 
 ---
 
