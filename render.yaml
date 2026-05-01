@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: gpt-image-playground
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /app/data
+      - key: WEB_DIST_DIR
+        value: /app/dist
+      - key: APP_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        value: "*"

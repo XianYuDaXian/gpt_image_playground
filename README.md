@@ -9,6 +9,18 @@
   <img src="asset/遮罩编辑.png" alt="遮罩编辑" width="45%" />
 </p>
 
+## Render一键部署
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/XianYuDaXian/gpt_image_playground)
+
+**请注意** Render 一键部署仅供**临时测试**：
+
+- 当前 `render.yaml` 不挂持久盘
+- 服务重启、重建或重新部署后，数据库与图片文件都会丢失
+- 如需正式使用，请自行在 Render 或其他平台配置持久化存储
+
+---
+
 基于 OpenAI 图像接口的图片生成与编辑工具，当前版本已经重构为**前后端一体**架构：
 
 - 前端只负责界面与编辑交互
@@ -78,7 +90,7 @@
 
 也可以按版本固定：
 
-- `ghcr.io/xianyudaxian/gpt_image_playground:0.3.1`
+- `ghcr.io/xianyudaxian/gpt_image_playground:0.3.2`
 
 可以直接运行：
 
@@ -86,9 +98,9 @@
 docker run -d \
   --name gpt-image-playground \
   -p 8787:8787 \
-  -e APP_PORT=8787 \
-  -e APP_HOST=0.0.0.0 \
-  -e APP_SECRET=change-this-secret \
+  -e PORT=8787 \
+  -e HOST=0.0.0.0 \
+  -e APP_SECRET=change-this-secret  \
   -e UPSTREAM_API_URL=https://api.openai.com/v1 \
   -e UPSTREAM_API_KEY=sk-xxxx \
   -e UPSTREAM_MODEL=gpt-5.5 \
@@ -124,8 +136,8 @@ services:
     ports:
       - "8787:8787"
     environment:
-      APP_PORT: 8787
-      APP_HOST: 0.0.0.0
+      PORT: 8787
+      HOST: 0.0.0.0
       APP_SECRET: change-this-secret
       UPSTREAM_API_URL: https://api.openai.com/v1
       UPSTREAM_API_KEY: sk-xxxx
@@ -157,8 +169,8 @@ docker compose up -d --build
 
 常用项：
 
-- `APP_PORT`
-- `APP_HOST`
+- `PORT`
+- `HOST`
 - `APP_SECRET`
 - `UPSTREAM_API_URL`
 - `UPSTREAM_API_KEY`
@@ -183,9 +195,26 @@ docker compose up -d --build
 
 也就是说，**容器删掉后数据仍保留在宿主机**。
 
+### `APP_SECRET` 是什么
+
+`APP_SECRET` 不是网页登录密码，也不是要让终端用户记住后手动输入的口令。
+
+它更像是**后端本地加密钥匙**，主要用来保护已经保存到数据库里的 `API Key`：
+
+- 平时正常使用时，用户几乎感觉不到它存在
+- 首次部署时设置一次即可，后续尽量不要改
+- 如果你迁移数据目录、恢复备份、重建容器后还想继续读取原来保存的 `API Key`，就必须继续使用同一个 `APP_SECRET`
+- 如果改了它，程序通常还能启动，但以前加密保存的 `API Key` 可能解不开，需要重新填写
+
+建议把它设置成一段**固定、足够长、只保存在部署环境里**的字符串，例如：
+
+```bash
+APP_SECRET=9b2f4d8d4d7c4d7fa1e58d7c0e9a4c6b7f2e1d9c5a8b3f6e
+```
+
 ### 镜像更新方式
 
-如果你使用的是远端镜像：
+如果你使用的是远端镜像，并且容器名是 `gpt-image-playground`：
 
 ```bash
 docker pull ghcr.io/xianyudaxian/gpt_image_playground:latest
@@ -195,6 +224,30 @@ docker rm gpt-image-playground
 
 然后用相同参数重新 `docker run` 即可。
 
+如果你固定使用版本号，比如 `0.3.2`，更新步骤就是：
+
+1. 把镜像标签从旧版本改成新版本
+2. 重新 `docker pull`
+3. 删掉旧容器
+4. 用相同挂载目录和环境变量重新运行
+
+例如更新到 `0.3.2`：
+
+```bash
+docker pull ghcr.io/xianyudaxian/gpt_image_playground:0.3.2
+docker stop gpt-image-playground
+docker rm gpt-image-playground
+
+docker run -d \
+  --name gpt-image-playground \
+  -p 8787:8787 \
+  -e PORT=8787 \
+  -e HOST=0.0.0.0 \
+  -e APP_SECRET=请继续使用原来的固定字符串 \
+  -v ./docker-data:/app/data \
+  ghcr.io/xianyudaxian/gpt_image_playground:0.3.2
+```
+
 如果你使用的是 Docker Compose：
 
 ```bash
@@ -202,9 +255,23 @@ docker compose pull
 docker compose up -d
 ```
 
+如果你希望更新后顺手清掉旧容器残留，可以用：
+
+```bash
+docker compose up -d --remove-orphans
+```
+
 如果你是本地重新构建镜像：
 
 ```bash
+docker build -f deploy/Dockerfile -t gpt-image-playground:latest .
+docker compose up -d --build
+```
+
+如果你本地改了代码并想更新正在运行的服务，推荐完整步骤：
+
+```bash
+git pull
 docker build -f deploy/Dockerfile -t gpt-image-playground:latest .
 docker compose up -d --build
 ```
