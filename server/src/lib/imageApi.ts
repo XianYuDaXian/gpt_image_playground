@@ -44,6 +44,10 @@ export interface GeneratedImageResult {
 
 export interface ExecuteImageTaskOptions {
   onImageComplete?: (completed: number, total: number) => void
+  onImagesReady?: (
+    images: GeneratedImageResult[],
+    state: { completed: number; total: number },
+  ) => Promise<void> | void
 }
 
 function normalizeBase64Image(value: string) {
@@ -212,6 +216,7 @@ async function runConcurrentSingles(
     Array.from({ length: total }).map(async () => {
       const images = await runner()
       completed += 1
+      await options.onImagesReady?.(images, { completed, total })
       options.onImageComplete?.(completed, total)
       return images
     }),

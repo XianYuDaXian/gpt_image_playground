@@ -47,7 +47,7 @@ app.decorate('taskWorker', new TaskWorker(app.db, app.taskEvents, {
   outputsDir: appConfig.outputsDir,
 }))
 
-if (appConfig.bootstrapProvider) {
+if (appConfig.bootstrapProvider && !app.db.getDefaultProviderProfile()) {
   app.db.upsertProviderProfile({
     id: 'env-default',
     name: '环境变量默认节点',

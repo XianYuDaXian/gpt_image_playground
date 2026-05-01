@@ -220,6 +220,7 @@ export default function TaskCard({
   const aggregateActualParams = task.outputImages?.length
     ? { ...task.actualParams, n: task.outputImages.length }
     : task.actualParams
+  const hasOutputImage = Boolean(task.outputImages?.length)
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const swipeBgClass = showSwipeAction
@@ -295,7 +296,27 @@ export default function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
-          {task.status === 'running' && (
+          {hasOutputImage && thumbSrc && (
+            <>
+              <img
+                src={thumbSrc}
+                className="saveable-image w-full h-full object-cover"
+                loading="lazy"
+                onLoad={(event) => {
+                  const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
+                  if (!remoteUrl || !task.outputImages[0]) return
+                  void cacheTaskImageForEditing(task.outputImages[0], remoteUrl, event.currentTarget)
+                }}
+                alt=""
+              />
+              {task.outputImages.length > 1 && (
+                <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
+                  {task.outputImages.length}
+                </span>
+              )}
+            </>
+          )}
+          {task.status === 'running' && !hasOutputImage && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -321,7 +342,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'error' && (
+          {task.status === 'error' && !hasOutputImage && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className="w-7 h-7 text-red-400"
@@ -341,26 +362,6 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'done' && thumbSrc && (
-            <>
-              <img
-                src={thumbSrc}
-                className="saveable-image w-full h-full object-cover"
-                loading="lazy"
-                onLoad={(event) => {
-                  const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
-                  if (!remoteUrl || !task.outputImages[0]) return
-                  void cacheTaskImageForEditing(task.outputImages[0], remoteUrl, event.currentTarget)
-                }}
-                alt=""
-              />
-              {task.outputImages.length > 1 && (
-                <span className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded">
-                  {task.outputImages.length}
-                </span>
-              )}
-            </>
-          )}
           {task.status === 'done' && !thumbSrc && (
             <svg
               className="w-8 h-8 text-gray-300"
@@ -378,7 +379,7 @@ export default function TaskCard({
           )}
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {task.status !== 'done' || !coverRatio || !coverSize ? (
+            {task.status !== 'done' || !hasOutputImage || !coverRatio || !coverSize ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -396,6 +397,13 @@ export default function TaskCard({
               </>
             )}
           </div>
+          {task.status === 'running' && hasOutputImage && task.currentStep && (
+            <div className="absolute bottom-1.5 left-1.5 right-1.5">
+              <span className="inline-flex max-w-full rounded bg-black/55 px-2 py-1 text-[10px] text-white/90 backdrop-blur-sm">
+                {task.currentStep}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 右侧信息区域 */}

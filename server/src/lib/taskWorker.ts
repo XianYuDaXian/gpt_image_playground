@@ -100,6 +100,30 @@ export class TaskWorker {
         moderation: 'auto' | 'low'
         n: number
       }
+      const shouldPersistIncrementally = params.n > 1
+      const outputDir = path.join(this.config.outputsDir, taskId)
+      let persistedImages = 0
+
+      const persistOutputImages = async (images: Awaited<ReturnType<typeof executeImageTask>>) => {
+        for (const image of images) {
+          if (this.isTaskInactive(taskId)) return false
+
+          const written = await writeOutputImage(outputDir, persistedImages, image)
+          const saved = this.db.addTaskImage({
+            id: crypto.randomUUID(),
+            taskId,
+            kind: 'output',
+            filePath: path.join('outputs', taskId, written.fileName),
+            mimeType: written.mimeType,
+            bytes: written.bytes,
+            sha256: written.sha256,
+          })
+          if (!saved) return false
+          persistedImages += 1
+        }
+
+        return true
+      }
 
       const images = await executeImageTask(
         this.db,
@@ -121,8 +145,20 @@ export class TaskWorker {
         },
         apiKey,
         {
+          onImagesReady: shouldPersistIncrementally
+            ? async (readyImages, state) => {
+                const ok = await persistOutputImages(readyImages)
+                if (!ok) return
+                void this.emit(taskId, {
+                  status: 'downloading',
+                  step: 'downloading',
+                  percent: Math.min(95, 82 + Math.floor((state.completed / state.total) * 13)),
+                  message: `已收到并保存第 ${state.completed}/${state.total} 张图片`,
+                })
+              }
+            : undefined,
           onImageComplete: (completed, total) => {
-            if (total <= 1) return
+            if (total <= 1 || shouldPersistIncrementally) return
             const percent = Math.min(80, 60 + Math.floor((completed / total) * 20))
             void this.emit(taskId, {
               status: 'processing',
@@ -135,30 +171,23 @@ export class TaskWorker {
       )
       if (this.isTaskInactive(taskId)) return
 
-      if (!this.emit(
-        taskId,
-        {
-          status: 'downloading',
-          step: 'downloading',
-          percent: 85,
-          message: images.length > 1 ? `正在保存输出图片（${images.length} 张）` : '正在保存输出图片',
-        },
-      )) return
-
-      const outputDir = path.join(this.config.outputsDir, taskId)
-      for (let index = 0; index < images.length; index++) {
-        if (this.isTaskInactive(taskId)) return
-        const written = await writeOutputImage(outputDir, index, images[index])
-        const saved = this.db.addTaskImage({
-          id: crypto.randomUUID(),
+      if (!shouldPersistIncrementally) {
+        if (!this.emit(
           taskId,
-          kind: 'output',
-          filePath: path.join('outputs', taskId, written.fileName),
-          mimeType: written.mimeType,
-          bytes: written.bytes,
-          sha256: written.sha256,
-        })
-        if (!saved) return
+          {
+            status: 'downloading',
+            step: 'downloading',
+            percent: 85,
+            message: images.length > 1 ? `正在保存输出图片（${images.length} 张）` : '正在保存输出图片',
+          },
+        )) return
+
+        const ok = await persistOutputImages(images)
+        if (!ok) return
+      } else if (persistedImages < images.length) {
+        const remainingImages = images.slice(persistedImages)
+        const ok = await persistOutputImages(remainingImages)
+        if (!ok) return
       }
 
       if (this.isTaskInactive(taskId)) return

@@ -169,6 +169,7 @@ export default function DetailModal() {
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const showPromptWarning = Boolean(currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
+  const hasRenderedOutput = Boolean(outputLen > 0 && currentOutputImageSrc)
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -293,7 +294,7 @@ export default function DetailModal() {
 
         {/* 左侧：图片 */}
         <div ref={imagePanelRef} className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
-          {task.status === 'done' && outputLen > 0 && (
+          {hasRenderedOutput && (
             <>
               <img
                 ref={mainImageRef}
@@ -390,7 +391,7 @@ export default function DetailModal() {
               </div>
             </>
           )}
-          {task.status === 'running' && (
+          {task.status === 'running' && !hasRenderedOutput && (
             <>
               <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -404,7 +405,7 @@ export default function DetailModal() {
               </svg>
             </>
           )}
-          {task.status === 'error' && (
+          {task.status === 'error' && !hasRenderedOutput && (
             <div className="w-full max-w-md px-4 text-center">
               <svg className="w-10 h-10 text-red-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -431,6 +432,13 @@ export default function DetailModal() {
                   <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
                 </svg>
               </button>
+            </div>
+          )}
+          {task.status === 'running' && hasRenderedOutput && (
+            <div className="absolute bottom-3 left-3">
+              <span className="inline-flex rounded-full bg-black/55 px-3 py-1.5 text-xs text-white/90 backdrop-blur-sm">
+                {task.currentStep || '正在继续生成剩余图片'}
+              </span>
             </div>
           )}
         </div>

@@ -195,9 +195,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.put('/api/runtime-settings', async (request) => {
     const payload = runtimeSettingsSchema.parse(request.body)
+    const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const profile = app.db.upsertProviderProfile({
-      id: 'default',
-      name: '默认节点',
+      id: currentDefaultProfile?.id ?? 'default',
+      name: currentDefaultProfile?.name ?? '默认节点',
       baseUrl: payload.baseUrl,
       apiKeyEncrypted: encryptText(payload.apiKey, app.config.appSecret),
       model: payload.model,
@@ -265,8 +266,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.put('/api/admin/provider-profiles/default', async (request) => {
     const payload = providerProfileSchema.parse(request.body)
+    const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const profile = app.db.upsertProviderProfile({
-      id: payload.id ?? crypto.randomUUID(),
+      id: payload.id ?? currentDefaultProfile?.id ?? crypto.randomUUID(),
       name: payload.name,
       baseUrl: payload.baseUrl,
       apiKeyEncrypted: encryptText(payload.apiKey, app.config.appSecret),
