@@ -111,7 +111,6 @@ export default function TaskGrid() {
       if (e.button !== 0) return
       const target = e.target as HTMLElement | null
       if (!target) return
-      if (!target.closest('[data-home-main]')) return
       if (target.closest('[data-input-bar]')) return
       if (target.closest('[data-no-drag-select]')) return
       if (target.closest('button, a, input, textarea, select')) return

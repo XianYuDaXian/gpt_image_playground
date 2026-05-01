@@ -116,7 +116,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       percent: 5,
       message: maskImageId ? '任务已创建，等待带遮罩处理' : '任务已创建，等待执行',
     })
-    app.taskEvents.emit(taskId, event)
+    if (event) {
+      app.taskEvents.emit(taskId, event)
+    }
     app.taskWorker.enqueue(taskId)
 
     reply.code(201)
@@ -200,6 +202,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const images = app.db.listTaskImages(params.taskId)
+    app.taskWorker.cancel(params.taskId)
     app.db.deleteTask(params.taskId)
     app.taskEvents.emitDeleted(params.taskId)
     for (const image of images) {

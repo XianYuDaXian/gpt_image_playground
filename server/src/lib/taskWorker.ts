@@ -7,6 +7,7 @@ import type { TaskEventBus } from './eventBus.js'
 
 export class TaskWorker {
   private running = new Set<string>()
+  private cancelled = new Set<string>()
 
   constructor(
     private readonly db: AppDatabase,
@@ -21,13 +22,29 @@ export class TaskWorker {
   enqueue(taskId: string) {
     if (this.running.has(taskId)) return
     this.running.add(taskId)
-    void this.process(taskId).finally(() => {
-      this.running.delete(taskId)
-    })
+    this.cancelled.delete(taskId)
+    void this.process(taskId)
+      .catch((error) => {
+        console.error(`[TaskWorker] 未处理任务异常: ${taskId}`, error)
+      })
+      .finally(() => {
+        this.running.delete(taskId)
+        this.cancelled.delete(taskId)
+      })
+  }
+
+  cancel(taskId: string) {
+    this.cancelled.add(taskId)
+  }
+
+  private isTaskInactive(taskId: string) {
+    return this.cancelled.has(taskId) || !this.db.taskExists(taskId)
   }
 
   private emit(taskId: string, input: { status: string; step: string; percent: number; message?: string | null }) {
-    this.db.updateTaskProgress({
+    if (this.isTaskInactive(taskId)) return false
+
+    const updatedTask = this.db.updateTaskProgress({
       id: taskId,
       status: input.status,
       progressPercent: input.percent,
@@ -35,6 +52,8 @@ export class TaskWorker {
       errorMessage: input.status === 'failed' ? input.message ?? null : null,
       finishedAt: input.status === 'succeeded' || input.status === 'failed' ? new Date().toISOString() : null,
     })
+    if (!updatedTask) return false
+
     const event = this.db.appendTaskEvent({
       taskId,
       status: input.status,
@@ -42,7 +61,10 @@ export class TaskWorker {
       percent: input.percent,
       message: input.message ?? null,
     })
+    if (!event) return false
+
     this.taskEvents.emit(taskId, event)
+    return true
   }
 
   private async process(taskId: string) {
@@ -67,8 +89,8 @@ export class TaskWorker {
       const maskImage = this.db.listTaskImages(taskId).find((image) => image.kind === 'mask') ?? null
       const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
 
-      this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 35, message: '已提交到上游接口' })
-      this.emit(taskId, { status: 'processing', step: 'processing', percent: 60, message: '正在生成图片' })
+      if (!this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 35, message: '已提交到上游接口' })) return
+      if (!this.emit(taskId, { status: 'processing', step: 'processing', percent: 60, message: '正在生成图片' })) return
 
       const params = JSON.parse(task.paramsJson) as {
         size: string
@@ -102,7 +124,7 @@ export class TaskWorker {
           onImageComplete: (completed, total) => {
             if (total <= 1) return
             const percent = Math.min(80, 60 + Math.floor((completed / total) * 20))
-            this.emit(taskId, {
+            void this.emit(taskId, {
               status: 'processing',
               step: 'processing',
               percent,
@@ -111,8 +133,9 @@ export class TaskWorker {
           },
         },
       )
+      if (this.isTaskInactive(taskId)) return
 
-      this.emit(
+      if (!this.emit(
         taskId,
         {
           status: 'downloading',
@@ -120,12 +143,13 @@ export class TaskWorker {
           percent: 85,
           message: images.length > 1 ? `正在保存输出图片（${images.length} 张）` : '正在保存输出图片',
         },
-      )
+      )) return
 
       const outputDir = path.join(this.config.outputsDir, taskId)
       for (let index = 0; index < images.length; index++) {
+        if (this.isTaskInactive(taskId)) return
         const written = await writeOutputImage(outputDir, index, images[index])
-        this.db.addTaskImage({
+        const saved = this.db.addTaskImage({
           id: crypto.randomUUID(),
           taskId,
           kind: 'output',
@@ -134,10 +158,13 @@ export class TaskWorker {
           bytes: written.bytes,
           sha256: written.sha256,
         })
+        if (!saved) return
       }
 
+      if (this.isTaskInactive(taskId)) return
       this.emit(taskId, { status: 'succeeded', step: 'succeeded', percent: 100, message: `生成完成，共 ${images.length} 张图片` })
     } catch (error) {
+      if (this.isTaskInactive(taskId)) return
       this.emit(taskId, {
         status: 'failed',
         step: 'failed',

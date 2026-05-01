@@ -959,6 +959,13 @@ export default function InputBar() {
                 </svg>
               </button>
               <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <div
+                className="min-w-[2.25rem] px-2 py-1 text-center text-sm font-semibold tabular-nums text-white/90"
+                title={`已选中 ${selectedTaskIds.length} 条记录`}
+              >
+                {selectedTaskIds.length}
+              </div>
+              <div className="w-px h-5 bg-white/20 mx-1"></div>
               <button
                 onClick={handleSelectAllToggle}
                 className="p-2 text-blue-400 hover:text-blue-300 transition-colors"

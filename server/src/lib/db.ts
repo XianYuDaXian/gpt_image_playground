@@ -337,6 +337,13 @@ export class AppDatabase {
       .get(id) as TaskRecord | undefined
   }
 
+  taskExists(id: string) {
+    const row = this.sqlite
+      .prepare('SELECT 1 as existsFlag FROM tasks WHERE id = ? LIMIT 1')
+      .get(id) as { existsFlag: number } | undefined
+    return Boolean(row)
+  }
+
   updateTaskProgress(input: {
     id: string
     status: string
@@ -346,7 +353,7 @@ export class AppDatabase {
     finishedAt?: string | null
   }) {
     const now = new Date().toISOString()
-    this.sqlite.prepare(`
+    const result = this.sqlite.prepare(`
       UPDATE tasks
       SET
         status = @status,
@@ -363,6 +370,8 @@ export class AppDatabase {
       finishedAt: input.finishedAt ?? null,
     })
 
+    if (!result.changes) return null
+
     return this.getTask(input.id)
   }
 
@@ -374,17 +383,28 @@ export class AppDatabase {
     message?: string | null
   }) {
     const now = new Date().toISOString()
-    const result = this.sqlite.prepare(`
-      INSERT INTO task_events (
-        task_id,
-        status,
-        step,
-        percent,
-        message,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(input.taskId, input.status, input.step, input.percent, input.message ?? null, now)
+    let result: Database.RunResult
+    try {
+      result = this.sqlite.prepare(`
+        INSERT INTO task_events (
+          task_id,
+          status,
+          step,
+          percent,
+          message,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(input.taskId, input.status, input.step, input.percent, input.message ?? null, now)
+    } catch (error) {
+      const isForeignKeyError =
+        error instanceof Error
+        && /FOREIGN KEY constraint failed/i.test(error.message)
+      if (isForeignKeyError && !this.taskExists(input.taskId)) {
+        return null
+      }
+      throw error
+    }
 
     return this.sqlite
       .prepare(`
@@ -432,32 +452,43 @@ export class AppDatabase {
     sha256: string
   }) {
     const now = new Date().toISOString()
-    this.sqlite.prepare(`
-      INSERT INTO task_images (
-        id,
-        task_id,
-        kind,
-        file_path,
-        mime_type,
-        width,
-        height,
-        bytes,
-        sha256,
-        created_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      input.id,
-      input.taskId,
-      input.kind,
-      input.filePath,
-      input.mimeType,
-      input.width ?? null,
-      input.height ?? null,
-      input.bytes,
-      input.sha256,
-      now,
-      )
+    try {
+      this.sqlite.prepare(`
+        INSERT INTO task_images (
+          id,
+          task_id,
+          kind,
+          file_path,
+          mime_type,
+          width,
+          height,
+          bytes,
+          sha256,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.id,
+        input.taskId,
+        input.kind,
+        input.filePath,
+        input.mimeType,
+        input.width ?? null,
+        input.height ?? null,
+        input.bytes,
+        input.sha256,
+        now,
+        )
+      return true
+    } catch (error) {
+      const isForeignKeyError =
+        error instanceof Error
+        && /FOREIGN KEY constraint failed/i.test(error.message)
+      if (isForeignKeyError && !this.taskExists(input.taskId)) {
+        return false
+      }
+      throw error
+    }
   }
 
   replaceImportedData(input: {
