@@ -1,5 +1,14 @@
 # GPT Image Playground
 
+<p align="center">
+  <img src="asset/主界面.png" alt="主界面" width="45%" />
+  <img src="asset/设置界面.png" alt="设置界面" width="45%" />
+</p>
+<p align="center">
+  <img src="asset/高级编辑.png" alt="高级编辑" width="45%" />
+  <img src="asset/遮罩编辑.png" alt="遮罩编辑" width="45%" />
+</p>
+
 基于 OpenAI 图像接口的图片生成与编辑工具，当前版本已经重构为**前后端一体**架构：
 
 - 前端只负责界面与编辑交互
@@ -69,7 +78,7 @@
 
 也可以按版本固定：
 
-- `ghcr.io/xianyudaxian/gpt_image_playground:0.3.0`
+- `ghcr.io/xianyudaxian/gpt_image_playground:0.3.1`
 
 可以直接运行：
 

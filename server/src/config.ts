@@ -14,6 +14,8 @@ const envSchema = z.object({
   UPSTREAM_API_MODE: z.enum(['images', 'responses']).optional(),
   UPSTREAM_TIMEOUT_SECONDS: z.coerce.number().int().positive().optional(),
   UPSTREAM_CODEX_CLI: z.string().optional(),
+  VERSION_CHECK_REPO_OWNER: z.string().default('XianYuDaXian'),
+  VERSION_CHECK_REPO_NAME: z.string().default('gpt_image_playground'),
 })
 
 const parsed = envSchema.parse(process.env)
@@ -37,6 +39,8 @@ export const appConfig = {
   thumbsDir: path.join(dataDir, 'media', 'thumbs'),
   appSecret: parsed.APP_SECRET,
   corsOrigin: parsed.CORS_ORIGIN,
+  versionCheckRepoOwner: parsed.VERSION_CHECK_REPO_OWNER,
+  versionCheckRepoName: parsed.VERSION_CHECK_REPO_NAME,
   bootstrapProvider: parsed.UPSTREAM_API_URL && parsed.UPSTREAM_API_KEY
     ? {
         baseUrl: parsed.UPSTREAM_API_URL,

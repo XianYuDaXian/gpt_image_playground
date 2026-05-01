@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { cycleThemeMode, getThemeModeLabel } from '../lib/theme'
+import { useVersionCheck } from '../hooks/useVersionCheck'
 import HelpModal from './HelpModal'
 
 export default function Header() {
@@ -8,6 +9,7 @@ export default function Header() {
   const themeMode = useStore((s) => s.themeMode)
   const setThemeMode = useStore((s) => s.setThemeMode)
   const [showHelp, setShowHelp] = useState(false)
+  const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
 
   return (
     <header className="safe-area-top glass-surface sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.08]">
@@ -23,6 +25,18 @@ export default function Header() {
               GPT Image Playground
             </a>
           </h1>
+          {hasUpdate && latestRelease ? (
+            <a
+              href={latestRelease.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={dismiss}
+              className="mt-0.5 inline-flex items-center rounded-md bg-red-500 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm transition-opacity hover:opacity-90"
+              title={`发现新版本 ${latestRelease.tag}`}
+            >
+              NEW
+            </a>
+          ) : null}
         </div>
         <div className="flex items-center gap-1">
           <button

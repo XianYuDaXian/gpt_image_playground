@@ -1,7 +1,4 @@
-import { useState, useEffect } from 'react'
-
-const REPO = 'CookSleep/gpt_image_playground'
-const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`
+import { useEffect, useMemo, useState } from 'react'
 
 function compareVersions(a: string, b: string) {
   const aParts = a.split('.').map((part) => Number.parseInt(part, 10) || 0)
@@ -19,38 +16,53 @@ function compareVersions(a: string, b: string) {
 export interface LatestRelease {
   tag: string
   url: string
+  source: 'release' | 'tag'
+}
+
+interface LatestVersionResponse {
+  repo?: string
+  latest?: {
+    tag?: string
+    version?: string
+    url?: string
+    source?: 'release' | 'tag'
+  } | null
 }
 
 /**
- * 检查 GitHub 最新 Release 版本。
- * - 仅当最新 Release 版本高于当前 __APP_VERSION__ 时提示。
- * - 用户点击后调用 dismiss()，本次浏览期间不再提示（sessionStorage）。
- * - 刷新页面后重新检查。
+ * 检查当前 fork 仓库的最新版本。
+ * - 由后端代理查询 GitHub，避免前端直接撞匿名限流。
+ * - 优先使用 release，找不到时回退到 tag。
+ * - 用户关闭后，仅对当前最新 tag 生效；发现更高版本会重新提示。
  */
 export function useVersionCheck() {
   const [latestRelease, setLatestRelease] = useState<LatestRelease | null>(null)
-  const [dismissed, setDismissed] = useState(() =>
-    sessionStorage.getItem('version-dismissed') === 'true',
-  )
+  const [dismissedTag, setDismissedTag] = useState(() => sessionStorage.getItem('version-dismissed-tag'))
 
   useEffect(() => {
     let cancelled = false
 
-    fetch(API_URL, { headers: { Accept: 'application/vnd.github.v3+json' } })
+    fetch('/api/meta/latest-version')
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.json()
+        return res.json() as Promise<LatestVersionResponse>
       })
       .then((data) => {
         if (cancelled) return
-        const tag: string = data.tag_name ?? ''
-        const version = tag.replace(/^v/, '')
-        if (version && compareVersions(version, __APP_VERSION__) > 0) {
-          setLatestRelease({
-            tag,
-            url: data.html_url ?? `https://github.com/${REPO}/releases/latest`,
-          })
-        }
+
+        const tag = data.latest?.tag?.trim() ?? ''
+        const version = data.latest?.version?.trim() ?? tag.replace(/^v/i, '')
+        const url = data.latest?.url?.trim() ?? ''
+        const source = data.latest?.source ?? 'tag'
+
+        if (!tag || !version || !url) return
+        if (compareVersions(version, __APP_VERSION__) <= 0) return
+
+        setLatestRelease({
+          tag,
+          url,
+          source,
+        })
       })
       .catch(() => {
         /* 静默失败，不影响正常使用 */
@@ -62,11 +74,15 @@ export function useVersionCheck() {
   }, [])
 
   const dismiss = () => {
-    setDismissed(true)
-    sessionStorage.setItem('version-dismissed', 'true')
+    if (!latestRelease) return
+    setDismissedTag(latestRelease.tag)
+    sessionStorage.setItem('version-dismissed-tag', latestRelease.tag)
   }
 
-  const hasUpdate = latestRelease !== null && !dismissed
+  const hasUpdate = useMemo(
+    () => latestRelease !== null && latestRelease.tag !== dismissedTag,
+    [dismissedTag, latestRelease],
+  )
 
   return { hasUpdate, latestRelease, dismiss }
 }

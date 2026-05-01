@@ -9,6 +9,7 @@ import { AppDatabase } from './lib/db.js'
 import { encryptText } from './lib/crypto.js'
 import { TaskEventBus } from './lib/eventBus.js'
 import { TaskWorker } from './lib/taskWorker.js'
+import { metaRoutes } from './routes/meta.js'
 import { settingsRoutes } from './routes/settings.js'
 import { taskRoutes } from './routes/tasks.js'
 
@@ -103,6 +104,7 @@ app.get('/health', async () => ({
 
 await app.register(settingsRoutes)
 await app.register(taskRoutes)
+await app.register(metaRoutes)
 
 if (webIndexHtml) {
   app.get('/*', async (request, reply) => {
