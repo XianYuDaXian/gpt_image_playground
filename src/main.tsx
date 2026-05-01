@@ -50,9 +50,6 @@ if ('serviceWorker' in navigator) {
           }
 
           activateWaitingWorker(registration.waiting)
-          registration.update().catch(() => {
-            /* 忽略主动更新失败 */
-          })
 
           registration.addEventListener('updatefound', () => {
             const worker = registration.installing
