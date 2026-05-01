@@ -16,6 +16,9 @@ import ImageContextMenu from './components/ImageContextMenu'
 
 export default function App() {
   const themeMode = useStore((s) => s.themeMode)
+  const hasOverlayOpen = useStore((s) =>
+    Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
+  )
 
   useEffect(() => {
     void (async () => {
@@ -39,6 +42,28 @@ export default function App() {
     document.addEventListener('dragstart', preventPageImageDrag)
     return () => document.removeEventListener('dragstart', preventPageImageDrag)
   }, [])
+
+  useEffect(() => {
+    const html = document.documentElement
+    const body = document.body
+
+    if (hasOverlayOpen) {
+      html.dataset.appScrollLock = '1'
+      body.dataset.appScrollLock = '1'
+      html.style.overflow = 'hidden'
+      body.style.overflow = 'hidden'
+      return
+    }
+
+    if (html.dataset.appScrollLock === '1') {
+      delete html.dataset.appScrollLock
+      html.style.overflow = ''
+    }
+    if (body.dataset.appScrollLock === '1') {
+      delete body.dataset.appScrollLock
+      body.style.overflow = ''
+    }
+  }, [hasOverlayOpen])
 
   return (
     <>

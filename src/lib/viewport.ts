@@ -1,5 +1,16 @@
 const VIEWPORT_CONTENT = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover'
 
+function shouldUseIosRubberBandGuard() {
+  const platform = navigator.platform || ''
+  const userAgent = navigator.userAgent || ''
+  const hasTouch = navigator.maxTouchPoints > 0
+  const isAppleMobile = /iPhone|iPad|iPod/i.test(userAgent)
+    || (platform === 'MacIntel' && hasTouch)
+  const isWebKit = /AppleWebKit/i.test(userAgent) && !/Chrome|Chromium|CriOS|EdgA?|OPR|SamsungBrowser/i.test(userAgent)
+
+  return hasTouch && isAppleMobile && isWebKit
+}
+
 function isInsideLightbox(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('[data-lightbox-root]'))
 }
@@ -21,6 +32,9 @@ export function installMobileViewportGuards() {
   const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]')
   if (viewport) viewport.content = VIEWPORT_CONTENT
 
+  const useIosRubberBandGuard = shouldUseIosRubberBandGuard()
+  if (!useIosRubberBandGuard) return
+
   const preventPageGesture = (event: Event) => {
     if (!isInsideLightbox(event.target)) event.preventDefault()
   }
@@ -35,12 +49,14 @@ export function installMobileViewportGuards() {
   }
 
   const rememberTouchStart = (event: TouchEvent) => {
+    if (!useIosRubberBandGuard) return
     if (isInsideLightbox(event.target) || event.touches.length !== 1) return
     overscrollTouch.startY = event.touches[0]?.clientY ?? 0
     overscrollTouch.scrollable = findScrollableAncestor(event.target)
   }
 
   const preventPageRubberBand = (event: TouchEvent) => {
+    if (!useIosRubberBandGuard) return
     if (isInsideLightbox(event.target) || event.touches.length !== 1) return
 
     const currentY = event.touches[0]?.clientY ?? overscrollTouch.startY

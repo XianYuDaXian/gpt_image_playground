@@ -159,16 +159,6 @@ export default function ReferenceImageEditorModal({ imageId, src, saveMode, onCl
     toolModeRef.current = toolMode
   }, [toolMode])
 
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    document.body.dataset.referenceEditorActive = '1'
-    return () => {
-      document.body.style.overflow = previousOverflow
-      delete document.body.dataset.referenceEditorActive
-    }
-  }, [])
-
   const updateHistoryFlags = useCallback(() => {
     setHistoryState({
       canUndo: historyIndexRef.current > 0,
