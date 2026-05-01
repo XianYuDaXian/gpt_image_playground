@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
-import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks } from '../store'
+import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, ensureTaskImageAvailable } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { normalizeImageSize } from '../lib/size'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
@@ -80,6 +80,12 @@ export default function InputBar() {
     })
   }, [tasks, searchQuery, filterStatus, filterFavorite])
 
+  const isIOS = useMemo(() => {
+    const ua = navigator.userAgent || ''
+    const platform = navigator.platform || ''
+    return /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  }, [])
+
   const handleSelectAllToggle = useCallback(() => {
     if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {
       clearSelection()
@@ -116,6 +122,55 @@ export default function InputBar() {
       },
     })
   }, [selectedTaskIds, setConfirmDialog])
+
+  const handleBatchDownload = useCallback(async () => {
+    if (isIOS) {
+      useStore.getState().showToast('iOS 暂不支持批量下载，请长按单张图片保存', 'info')
+      return
+    }
+
+    const selectedTasks = tasks.filter((task) => selectedTaskIds.includes(task.id))
+    const targets: Array<{ url: string; filename: string }> = []
+
+    for (const task of selectedTasks) {
+      const baseName = (task.prompt || task.id)
+        .replace(/[\\/:*?"<>|]+/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 48) || task.id
+
+      for (let index = 0; index < task.outputImages.length; index += 1) {
+        const imageId = task.outputImages[index]
+        const remoteUrl = task.imageUrlsById?.[imageId]
+        const url = remoteUrl || await ensureTaskImageAvailable(imageId)
+        if (!url) continue
+
+        const extFromParams = task.params.output_format || 'png'
+        targets.push({
+          url,
+          filename: `${baseName}-${index + 1}.${extFromParams}`,
+        })
+      }
+    }
+
+    if (targets.length === 0) {
+      useStore.getState().showToast('选中的记录里没有可下载图片', 'error')
+      return
+    }
+
+    for (const item of targets) {
+      const anchor = document.createElement('a')
+      anchor.href = item.url
+      anchor.download = item.filename
+      anchor.rel = 'noopener'
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      await new Promise((resolve) => window.setTimeout(resolve, 120))
+    }
+
+    useStore.getState().showToast(`已开始下载 ${targets.length} 张图片`, 'success')
+  }, [isIOS, selectedTaskIds, tasks])
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
@@ -935,6 +990,16 @@ export default function InputBar() {
                     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
                   </svg>
                 )}
+              </button>
+              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <button
+                onClick={handleBatchDownload}
+                className="p-2 text-emerald-400 hover:text-emerald-300 transition-colors"
+                title={isIOS ? 'iOS 暂不支持批量下载' : '批量下载'}
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0l4-4m-4 4l-4-4M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1" />
+                </svg>
               </button>
               <div className="w-px h-5 bg-white/20 mx-1"></div>
               <button

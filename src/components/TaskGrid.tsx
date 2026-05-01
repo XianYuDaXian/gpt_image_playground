@@ -212,8 +212,7 @@ export default function TaskGrid() {
                 if (isCtrl) {
                   useStore.getState().toggleTaskSelection(task.id)
                 } else if (selectedTaskIds.length > 0) {
-                  clearSelection()
-                  setDetailTaskId(task.id)
+                  useStore.getState().toggleTaskSelection(task.id)
                 } else {
                   setDetailTaskId(task.id)
                 }

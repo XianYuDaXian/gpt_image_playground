@@ -4,6 +4,7 @@ import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { serializeTaskRecord, loadSerializedTask } from '../lib/taskDto.js'
+import type { TaskListEventRecord } from '../lib/eventBus.js'
 
 const taskParamsSchema = z.object({
   size: z.string().default('auto'),
@@ -147,6 +148,49 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  app.get('/api/tasks/events', async (request, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    })
+
+    const buildTaskList = () =>
+      app.db.listTasks(200).map((task) => serializeTaskRecord(task, app.db.listTaskImages(task.id)))
+
+    reply.raw.write(formatSseEvent('snapshot', { tasks: buildTaskList() }))
+
+    const heartbeat = setInterval(() => {
+      reply.raw.write(': keep-alive\n\n')
+    }, 15000)
+
+    const unsubscribe = app.taskEvents.subscribeAll((event: TaskListEventRecord) => {
+      if (event.type === 'delete') {
+        reply.raw.write(formatSseEvent('task', event))
+        return
+      }
+
+      const task = loadSerializedTask(app.db, event.taskId)
+      if (!task) {
+        reply.raw.write(formatSseEvent('task', {
+          type: 'delete',
+          taskId: event.taskId,
+        } satisfies TaskListEventRecord))
+        return
+      }
+
+      reply.raw.write(formatSseEvent('task', {
+        type: 'upsert',
+        task,
+      }))
+    })
+
+    request.raw.on('close', () => {
+      clearInterval(heartbeat)
+      unsubscribe()
+    })
+  })
+
   app.delete('/api/tasks/:taskId', async (request, reply) => {
     const params = z.object({ taskId: z.string().uuid() }).parse(request.params)
     const task = app.db.getTask(params.taskId)
@@ -157,6 +201,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const images = app.db.listTaskImages(params.taskId)
     app.db.deleteTask(params.taskId)
+    app.taskEvents.emitDeleted(params.taskId)
     for (const image of images) {
       try {
         await fs.rm(resolveAbsoluteMediaPath(app, image.filePath), { force: true })

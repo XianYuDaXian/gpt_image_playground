@@ -70,11 +70,20 @@ export class TaskWorker {
       this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 35, message: '已提交到上游接口' })
       this.emit(taskId, { status: 'processing', step: 'processing', percent: 60, message: '正在生成图片' })
 
+      const params = JSON.parse(task.paramsJson) as {
+        size: string
+        quality: 'auto' | 'low' | 'medium' | 'high'
+        output_format: 'png' | 'jpeg' | 'webp'
+        output_compression: number | null
+        moderation: 'auto' | 'low'
+        n: number
+      }
+
       const images = await executeImageTask(
         this.db,
         {
           prompt: task.prompt,
-          params: JSON.parse(task.paramsJson),
+          params,
           provider,
           runtime,
           inputImages: inputImages.map((image) => ({
@@ -89,9 +98,29 @@ export class TaskWorker {
             : null,
         },
         apiKey,
+        {
+          onImageComplete: (completed, total) => {
+            if (total <= 1) return
+            const percent = Math.min(80, 60 + Math.floor((completed / total) * 20))
+            this.emit(taskId, {
+              status: 'processing',
+              step: 'processing',
+              percent,
+              message: `正在生成图片（${completed}/${total}）`,
+            })
+          },
+        },
       )
 
-      this.emit(taskId, { status: 'downloading', step: 'downloading', percent: 85, message: '正在下载输出图片' })
+      this.emit(
+        taskId,
+        {
+          status: 'downloading',
+          step: 'downloading',
+          percent: 85,
+          message: images.length > 1 ? `正在保存输出图片（${images.length} 张）` : '正在保存输出图片',
+        },
+      )
 
       const outputDir = path.join(this.config.outputsDir, taskId)
       for (let index = 0; index < images.length; index++) {

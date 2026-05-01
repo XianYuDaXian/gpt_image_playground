@@ -21,10 +21,9 @@ export default function ImageContextMenu() {
         // 忽略没有 src 或空的 img
         if (!imgTarget.src) return
 
-        // iOS 触控设备上，放行原生长按菜单，保留系统级保存图片能力。
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
         const isTouch = window.matchMedia('(pointer: coarse)').matches
-        if (isIOS && isTouch) return
+        const isSaveableImage = imgTarget.classList.contains('saveable-image')
+        if (isTouch && isSaveableImage) return
 
         // 当前页面不是安全上下文时，放行浏览器原生右键菜单，避免图片复制失效。
         if (!window.isSecureContext) return

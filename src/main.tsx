@@ -15,16 +15,65 @@ try {
   applyThemeMode('system')
 }
 
+const SW_CACHE_PREFIX = 'gpt-image-playground'
+
+async function clearLegacyServiceWorkerCaches() {
+  if (!('caches' in window)) return
+  const keys = await caches.keys()
+  await Promise.all(
+    keys
+      .filter((key) => key.startsWith(SW_CACHE_PREFIX) && key !== `${SW_CACHE_PREFIX}-${__APP_VERSION__}`)
+      .map((key) => caches.delete(key)),
+  )
+}
+
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((error) => {
-        console.error('Service worker registration failed:', error)
+      let refreshing = false
+
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return
+        refreshing = true
+        window.location.reload()
       })
+
+      clearLegacyServiceWorkerCaches().catch(() => {
+        /* 忽略旧缓存清理失败 */
+      })
+
+      navigator.serviceWorker
+        .register(`${import.meta.env.BASE_URL}sw.js?v=${__APP_VERSION__}`)
+        .then((registration) => {
+          const activateWaitingWorker = (worker: ServiceWorker | null) => {
+            worker?.postMessage({ type: 'SKIP_WAITING' })
+          }
+
+          activateWaitingWorker(registration.waiting)
+          registration.update().catch(() => {
+            /* 忽略主动更新失败 */
+          })
+
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing
+            if (!worker) return
+            worker.addEventListener('statechange', () => {
+              if (worker.state === 'installed') {
+                activateWaitingWorker(registration.waiting ?? worker)
+              }
+            })
+          })
+        })
+        .catch((error) => {
+          console.error('Service worker registration failed:', error)
+        })
     })
   } else {
     navigator.serviceWorker.getRegistrations().then((registrations) => {
       registrations.forEach((registration) => registration.unregister())
+    })
+    clearLegacyServiceWorkerCaches().catch(() => {
+      /* 忽略开发态缓存清理失败 */
     })
   }
 }

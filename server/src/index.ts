@@ -90,9 +90,21 @@ if (webIndexHtml) {
     decorateReply: false,
     wildcard: false,
     index: false,
+    setHeaders: (res, filePath) => {
+      const filename = path.basename(filePath)
+      if (filename === 'index.html' || filename === 'sw.js' || filename === 'manifest.webmanifest') {
+        res.setHeader('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate')
+        return
+      }
+
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      }
+    },
   })
 
   app.get('/', async (_request, reply) => {
+    reply.header('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate')
     return reply.type('text/html; charset=utf-8').send(webIndexHtml)
   })
 }
@@ -112,6 +124,7 @@ if (webIndexHtml) {
     if (!accept.includes('text/html')) {
       return reply.code(404).send({ message: '未找到资源' })
     }
+    reply.header('Cache-Control', 'no-store, no-cache, max-age=0, must-revalidate')
     return reply.type('text/html; charset=utf-8').send(webIndexHtml)
   })
 }

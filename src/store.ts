@@ -28,6 +28,7 @@ import { normalizeImageSize } from './lib/size'
 
 const imageCache = new Map<string, string>()
 const taskEventSources = new Map<string, EventSource>()
+let taskListEventSource: EventSource | null = null
 let taskStreamInitialized = false
 let taskRefreshLifecycleInitialized = false
 
@@ -774,6 +775,25 @@ function closeAllTaskEventSources() {
   taskEventSources.clear()
 }
 
+function closeTaskListEventSource() {
+  taskListEventSource?.close()
+  taskListEventSource = null
+}
+
+function removeTaskFromStore(taskId: string) {
+  const state = useStore.getState()
+  const nextTasks = state.tasks.filter((task) => task.id !== taskId)
+  if (nextTasks.length !== state.tasks.length) {
+    state.setTasks(sortTasksForDisplay(nextTasks))
+  }
+  if (state.selectedTaskIds.includes(taskId)) {
+    state.setSelectedTaskIds((prev) => prev.filter((id) => id !== taskId))
+  }
+  if (state.detailTaskId === taskId) {
+    state.setDetailTaskId(null)
+  }
+}
+
 async function refreshTasksFromServer(options: { silent?: boolean } = {}) {
   try {
     const tasksFromServer = await fetchBackendTasks()
@@ -820,6 +840,41 @@ function syncTaskEventSources(tasks: TaskRecord[]) {
   }
 }
 
+function setupGlobalTaskListStream() {
+  if (taskListEventSource || typeof window === 'undefined') return
+
+  const source = new EventSource('/api/tasks/events')
+  source.addEventListener('snapshot', (event) => {
+    const payload = JSON.parse((event as MessageEvent<string>).data) as { tasks?: TaskRecord[] }
+    if (!payload.tasks) return
+    useStore.getState().setTasks(sortTasksForDisplay(payload.tasks))
+    syncTaskEventSources(payload.tasks)
+  })
+  source.addEventListener('task', (event) => {
+    const payload = JSON.parse((event as MessageEvent<string>).data) as
+      | { type: 'delete'; taskId: string }
+      | { type: 'upsert'; task: TaskRecord }
+
+    if (payload.type === 'delete') {
+      closeTaskEventSource(payload.taskId)
+      removeTaskFromStore(payload.taskId)
+      return
+    }
+
+    upsertTaskFromServer(payload.task)
+    syncTaskEventSources(useStore.getState().tasks)
+  })
+  source.onerror = () => {
+    closeTaskListEventSource()
+    window.setTimeout(() => {
+      setupGlobalTaskListStream()
+      void refreshTasksFromServer({ silent: true })
+    }, 1500)
+  }
+
+  taskListEventSource = source
+}
+
 function setupTaskRefreshLifecycle() {
   if (taskRefreshLifecycleInitialized || typeof window === 'undefined') return
   taskRefreshLifecycleInitialized = true
@@ -844,6 +899,7 @@ function setupTaskStreams() {
   if (taskStreamInitialized || typeof window === 'undefined') return
   taskStreamInitialized = true
 
+  setupGlobalTaskListStream()
   syncTaskEventSources(useStore.getState().tasks)
   setupTaskRefreshLifecycle()
   useStore.subscribe((state, prevState) => {

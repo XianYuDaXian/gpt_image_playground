@@ -18,18 +18,24 @@
 html {
   min-height: 100%;
   overflow-y: scroll;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
   overscroll-behavior-y: none;
 }
 
 body {
   min-height: 100dvh;
   padding: 0;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
 }
 
 #root {
   min-height: 100dvh;
+  overflow-x: clip;
+  overscroll-behavior-x: none;
   overscroll-behavior-y: none;
 }
 

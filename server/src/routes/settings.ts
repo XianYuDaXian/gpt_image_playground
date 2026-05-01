@@ -400,6 +400,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/admin/data/reset', async (request) => {
     const payload = resetRemoteDataSchema.parse(request.body)
+    const existingTaskIds = app.db.listTasks(200).map((task) => task.id)
 
     await fs.rm(app.config.mediaDir, { recursive: true, force: true })
     await fs.mkdir(app.config.mediaDir, { recursive: true })
@@ -412,6 +413,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       app.db.clearRuntimeData()
     } else {
       app.db.clearTaskData()
+    }
+
+    for (const taskId of existingTaskIds) {
+      app.taskEvents.emitDeleted(taskId)
     }
 
     return {

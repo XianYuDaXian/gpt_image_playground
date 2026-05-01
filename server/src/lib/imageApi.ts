@@ -42,6 +42,10 @@ export interface GeneratedImageResult {
   mimeType: string
 }
 
+export interface ExecuteImageTaskOptions {
+  onImageComplete?: (completed: number, total: number) => void
+}
+
 function normalizeBase64Image(value: string) {
   const match = value.match(/^data:([^;]+);base64,(.+)$/)
   if (match) {
@@ -100,9 +104,7 @@ function createResponsesInput(prompt: string, inputImageDataUrls: string[]) {
   ]
 }
 
-function createResponsesImageTool(
-  payload: TaskExecutionPayload,
-): Record<string, unknown> {
+function createResponsesImageTool(payload: TaskExecutionPayload): Record<string, unknown> {
   const tool: Record<string, unknown> = {
     type: 'image_generation',
     action: payload.inputImages.length > 0 ? 'edit' : 'generate',
@@ -160,96 +162,116 @@ function buildPrompt(prompt: string, codexCli: boolean) {
     : prompt
 }
 
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutSeconds: number,
+) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function extractImageResults(result: Array<{ b64_json?: string; url?: string }> | undefined) {
+  if (!Array.isArray(result) || result.length === 0) {
+    throw new Error('接口未返回图片数据')
+  }
+
+  const images: GeneratedImageResult[] = []
+  for (const item of result) {
+    if (item.b64_json) {
+      images.push(normalizeBase64Image(item.b64_json))
+    } else if (item.url) {
+      images.push(await fetchRemoteImage(item.url))
+    }
+  }
+
+  if (!images.length) {
+    throw new Error('接口未返回可用图片数据')
+  }
+
+  return images
+}
+
+async function runConcurrentSingles(
+  total: number,
+  runner: () => Promise<GeneratedImageResult[]>,
+  options: ExecuteImageTaskOptions,
+) {
+  let completed = 0
+
+  const settled = await Promise.allSettled(
+    Array.from({ length: total }).map(async () => {
+      const images = await runner()
+      completed += 1
+      options.onImageComplete?.(completed, total)
+      return images
+    }),
+  )
+
+  const rejected = settled.find((item) => item.status === 'rejected')
+  if (rejected?.status === 'rejected') {
+    throw rejected.reason
+  }
+
+  return settled.flatMap((item) => item.status === 'fulfilled' ? item.value : [])
+}
+
 async function callImagesApi(
   payload: TaskExecutionPayload,
   apiKey: string,
+  options: ExecuteImageTaskOptions = {},
 ): Promise<GeneratedImageResult[]> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), payload.provider.timeoutSeconds * 1000)
   const prompt = buildPrompt(payload.prompt, Boolean(payload.runtime?.codexCli))
+  const shouldUseConcurrentSingles = payload.params.n > 1
 
-  try {
-    if (payload.inputImages.length > 0) {
-      const formData = new FormData()
-      formData.append('model', payload.provider.model)
-      formData.append('prompt', prompt)
-      formData.append('size', payload.params.size)
-      formData.append('output_format', payload.params.output_format)
-      formData.append('moderation', payload.params.moderation)
+  const runSingleEdit = async () => {
+    const formData = new FormData()
+    formData.append('model', payload.provider.model)
+    formData.append('prompt', prompt)
+    formData.append('size', payload.params.size)
+    formData.append('output_format', payload.params.output_format)
+    formData.append('moderation', payload.params.moderation)
 
-      if (!payload.runtime?.codexCli) {
-        formData.append('quality', payload.params.quality)
-      }
-      if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
-        formData.append('output_compression', String(payload.params.output_compression))
-      }
-      if (payload.params.n > 1) {
-        formData.append('n', String(payload.params.n))
-      }
+    if (!payload.runtime?.codexCli) {
+      formData.append('quality', payload.params.quality)
+    }
+    if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
+      formData.append('output_compression', String(payload.params.output_compression))
+    }
+    if (!shouldUseConcurrentSingles && payload.params.n > 1) {
+      formData.append('n', String(payload.params.n))
+    }
 
-      for (let index = 0; index < payload.inputImages.length; index++) {
-        const inputImage = payload.inputImages[index]
-        const buffer = await fs.readFile(inputImage.filePath)
-        const ext = inputImage.mimeType.split('/')[1] || 'png'
-        formData.append('image[]', new Blob([buffer], { type: inputImage.mimeType }), `input-${index + 1}.${ext}`)
-      }
+    for (let index = 0; index < payload.inputImages.length; index += 1) {
+      const inputImage = payload.inputImages[index]
+      const buffer = await fs.readFile(inputImage.filePath)
+      const ext = inputImage.mimeType.split('/')[1] || 'png'
+      formData.append('image[]', new Blob([buffer], { type: inputImage.mimeType }), `input-${index + 1}.${ext}`)
+    }
 
-      if (payload.maskImage) {
-        const maskBuffer = await fs.readFile(payload.maskImage.filePath)
-        formData.append('mask', new Blob([maskBuffer], { type: payload.maskImage.mimeType }), 'mask.png')
-      }
+    if (payload.maskImage) {
+      const maskBuffer = await fs.readFile(payload.maskImage.filePath)
+      formData.append('mask', new Blob([maskBuffer], { type: payload.maskImage.mimeType }), 'mask.png')
+    }
 
-      const response = await fetch(buildApiUrl(payload.provider.baseUrl, 'images/edits'), {
+    const response = await fetchWithTimeout(
+      buildApiUrl(payload.provider.baseUrl, 'images/edits'),
+      {
         method: 'POST',
         headers: buildHeaders(apiKey),
         body: formData,
-        signal: controller.signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response))
-      }
-
-      const result = await response.json() as {
-        data?: Array<{ b64_json?: string; url?: string }>
-      }
-
-      if (!Array.isArray(result.data) || !result.data.length) {
-        throw new Error('接口未返回图片数据')
-      }
-
-      const images: GeneratedImageResult[] = []
-      for (const item of result.data) {
-        if (item.b64_json) {
-          const parsed = normalizeBase64Image(item.b64_json)
-          images.push(parsed)
-        } else if (item.url) {
-          images.push(await fetchRemoteImage(item.url))
-        }
-      }
-      return images
-    }
-
-    const response = await fetch(buildApiUrl(payload.provider.baseUrl, 'images/generations'), {
-      method: 'POST',
-      headers: {
-        ...buildHeaders(apiKey),
-        'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: payload.provider.model,
-        prompt,
-        size: payload.params.size,
-        output_format: payload.params.output_format,
-        moderation: payload.params.moderation,
-        ...(payload.runtime?.codexCli ? {} : { quality: payload.params.quality }),
-        ...(payload.params.output_format !== 'png' && payload.params.output_compression != null
-          ? { output_compression: payload.params.output_compression }
-          : {}),
-        ...(payload.params.n > 1 ? { n: payload.params.n } : {}),
-      }),
-      signal: controller.signal,
-    })
+      payload.provider.timeoutSeconds,
+    )
 
     if (!response.ok) {
       throw new Error(await readErrorMessage(response))
@@ -258,104 +280,141 @@ async function callImagesApi(
     const result = await response.json() as {
       data?: Array<{ b64_json?: string; url?: string }>
     }
-    if (!Array.isArray(result.data) || !result.data.length) {
-      throw new Error('接口未返回图片数据')
+
+    return extractImageResults(result.data)
+  }
+
+  const runSingleGeneration = async () => {
+    const response = await fetchWithTimeout(
+      buildApiUrl(payload.provider.baseUrl, 'images/generations'),
+      {
+        method: 'POST',
+        headers: {
+          ...buildHeaders(apiKey),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: payload.provider.model,
+          prompt,
+          size: payload.params.size,
+          output_format: payload.params.output_format,
+          moderation: payload.params.moderation,
+          ...(payload.runtime?.codexCli ? {} : { quality: payload.params.quality }),
+          ...(payload.params.output_format !== 'png'
+            && payload.params.output_compression != null
+            ? { output_compression: payload.params.output_compression }
+            : {}),
+          ...(!shouldUseConcurrentSingles && payload.params.n > 1 ? { n: payload.params.n } : {}),
+        }),
+      },
+      payload.provider.timeoutSeconds,
+    )
+
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response))
     }
 
-    const images: GeneratedImageResult[] = []
-    for (const item of result.data) {
-      if (item.b64_json) {
-        images.push(normalizeBase64Image(item.b64_json))
-      } else if (item.url) {
-        images.push(await fetchRemoteImage(item.url))
-      }
+    const result = await response.json() as {
+      data?: Array<{ b64_json?: string; url?: string }>
     }
-    return images
-  } finally {
-    clearTimeout(timeoutId)
+
+    return extractImageResults(result.data)
   }
+
+  if (payload.inputImages.length > 0) {
+    return shouldUseConcurrentSingles
+      ? runConcurrentSingles(payload.params.n, runSingleEdit, options)
+      : runSingleEdit()
+  }
+
+  return shouldUseConcurrentSingles
+    ? runConcurrentSingles(payload.params.n, runSingleGeneration, options)
+    : runSingleGeneration()
 }
 
 async function callResponsesApi(
   payload: TaskExecutionPayload,
   apiKey: string,
+  options: ExecuteImageTaskOptions = {},
 ): Promise<GeneratedImageResult[]> {
-  const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), payload.provider.timeoutSeconds * 1000)
+  const inputImageDataUrls = await Promise.all(
+    payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
+  )
+  const maskDataUrl = payload.maskImage
+    ? await fileToDataUrl(payload.maskImage.filePath, payload.maskImage.mimeType)
+    : null
 
-  try {
-    const inputImageDataUrls = await Promise.all(
-      payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
-    )
-    const maskDataUrl = payload.maskImage
-      ? await fileToDataUrl(payload.maskImage.filePath, payload.maskImage.mimeType)
-      : null
+  const body = {
+    model: payload.provider.model,
+    input: createResponsesInput(payload.prompt, inputImageDataUrls),
+    tools: [
+      {
+        ...createResponsesImageTool(payload),
+        ...(maskDataUrl
+          ? {
+              input_image_mask: {
+                image_url: maskDataUrl,
+              },
+            }
+          : {}),
+      },
+    ],
+    tool_choice: 'required',
+  }
 
-    const body = {
-      model: payload.provider.model,
-      input: createResponsesInput(payload.prompt, inputImageDataUrls),
-      tools: [
-        {
-          ...createResponsesImageTool(payload),
-          ...(maskDataUrl
-            ? {
-                input_image_mask: {
-                  image_url: maskDataUrl,
-                },
-              }
-            : {}),
-        },
-      ],
-      tool_choice: 'required',
-    }
-
-    const runSingle = async () => {
-      const response = await fetch(buildApiUrl(payload.provider.baseUrl, 'responses'), {
+  const runSingle = async () => {
+    const response = await fetchWithTimeout(
+      buildApiUrl(payload.provider.baseUrl, 'responses'),
+      {
         method: 'POST',
         headers: {
           ...buildHeaders(apiKey),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: controller.signal,
-      })
+      },
+      payload.provider.timeoutSeconds,
+    )
 
-      if (!response.ok) {
-        throw new Error(await readErrorMessage(response))
-      }
-
-      const result = await response.json() as {
-        output?: Array<{ type?: string; result?: string }>
-      }
-      const output = result.output ?? []
-      const images: GeneratedImageResult[] = []
-      for (const item of output) {
-        if (item.type === 'image_generation_call' && typeof item.result === 'string' && item.result.trim()) {
-          images.push(normalizeBase64Image(item.result))
-        }
-      }
-      return images
+    if (!response.ok) {
+      throw new Error(await readErrorMessage(response))
     }
 
-    if (payload.params.n === 1) {
-      return runSingle()
+    const result = await response.json() as {
+      output?: Array<{ type?: string; result?: string }>
+    }
+    const output = result.output ?? []
+    const images: GeneratedImageResult[] = []
+    for (const item of output) {
+      if (item.type === 'image_generation_call' && typeof item.result === 'string' && item.result.trim()) {
+        images.push(normalizeBase64Image(item.result))
+      }
     }
 
-    const results = await Promise.all(Array.from({ length: payload.params.n }).map(() => runSingle()))
-    return results.flat()
-  } finally {
-    clearTimeout(timeoutId)
+    if (!images.length) {
+      throw new Error('接口未返回图片数据')
+    }
+
+    return images
   }
+
+  if (payload.params.n === 1) {
+    return runSingle()
+  }
+
+  return runConcurrentSingles(payload.params.n, runSingle, options)
 }
 
 export async function executeImageTask(
   db: AppDatabase,
   payload: TaskExecutionPayload,
   apiKey: string,
+  options: ExecuteImageTaskOptions = {},
 ) {
+  void db
   return payload.provider.apiMode === 'responses'
-    ? callResponsesApi(payload, apiKey)
-    : callImagesApi(payload, apiKey)
+    ? callResponsesApi(payload, apiKey, options)
+    : callImagesApi(payload, apiKey, options)
 }
 
 export async function writeOutputImage(outputDir: string, index: number, image: GeneratedImageResult) {

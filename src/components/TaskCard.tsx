@@ -44,6 +44,9 @@ export default function TaskCard({
     }
   }
 
+  const isPreviewImageTarget = (target: EventTarget | null) =>
+    target instanceof HTMLElement && Boolean(target.closest('img.saveable-image'))
+
   const handleTouchStart = (e: React.TouchEvent) => {
     if (swipeResetTimerRef.current != null) {
       window.clearTimeout(swipeResetTimerRef.current)
@@ -57,7 +60,10 @@ export default function TaskCard({
     setIsSwiping(true)
 
     const target = e.target as HTMLElement | null
-    if (!target?.closest('button, a, input, textarea, select, [data-no-long-press]')) {
+    if (
+      !target?.closest('button, a, input, textarea, select, [data-no-long-press]') &&
+      !isPreviewImageTarget(target)
+    ) {
       clearLongPressTimer()
       longPressTimerRef.current = window.setTimeout(() => {
         longPressTriggeredRef.current = true
@@ -256,6 +262,7 @@ export default function TaskCard({
           WebkitTouchCallout: 'none',
           WebkitUserSelect: 'none',
           userSelect: 'none',
+          touchAction: 'pan-y',
         }}
         onClick={(e) => {
           if (Date.now() < suppressClickUntilRef.current) {
@@ -263,13 +270,19 @@ export default function TaskCard({
             e.stopPropagation()
             return
           }
-          onClick(e)
-        }}
+        onClick(e)
+      }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
-        onContextMenu={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          if (isPreviewImageTarget(e.target)) {
+            suppressClickUntilRef.current = Date.now() + 800
+            return
+          }
+          e.preventDefault()
+        }}
       >
         {/* 选中时的角标 */}
       {isSelected && (
