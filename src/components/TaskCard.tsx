@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, getCachedImage, ensureImageCached, updateTaskInStore } from '../store'
+import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable, updateTaskInStore } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
 
@@ -34,6 +34,15 @@ export default function TaskCard({
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
   const horizontalSwipeRef = useRef(false)
+  const longPressTimerRef = useRef<number | null>(null)
+  const longPressTriggeredRef = useRef(false)
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current != null) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (swipeResetTimerRef.current != null) {
@@ -42,15 +51,39 @@ export default function TaskCard({
     }
     touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
     horizontalSwipeRef.current = false
+    longPressTriggeredRef.current = false
     setSwipeStartedSelected(Boolean(isSelected))
     setSwipeActionActive(false)
     setIsSwiping(true)
+
+    const target = e.target as HTMLElement | null
+    if (!target?.closest('button, a, input, textarea, select, [data-no-long-press]')) {
+      clearLongPressTimer()
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTriggeredRef.current = true
+        suppressClickUntilRef.current = Date.now() + 500
+        touchStartRef.current = null
+        horizontalSwipeRef.current = false
+        setIsSwiping(false)
+        setSwipeOffset(0)
+        setSwipeActionActive(true)
+        toggleTaskSelection(task.id)
+        swipeResetTimerRef.current = window.setTimeout(() => {
+          setSwipeActionActive(false)
+          swipeResetTimerRef.current = null
+        }, 220)
+      }, 420)
+    }
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
     if (!touchStartRef.current) return
     const deltaX = e.touches[0].clientX - touchStartRef.current.x
     const deltaY = e.touches[0].clientY - touchStartRef.current.y
+
+    if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+      clearLongPressTimer()
+    }
     
     // 如果主要是水平滑动
     if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
@@ -64,8 +97,16 @@ export default function TaskCard({
   }
 
   const handleTouchEnd = (e: React.TouchEvent) => {
+    clearLongPressTimer()
     setIsSwiping(false)
     setSwipeOffset(0)
+
+    if (longPressTriggeredRef.current) {
+      longPressTriggeredRef.current = false
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     
     if (!touchStartRef.current) return
     const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x
@@ -88,6 +129,8 @@ export default function TaskCard({
   }
 
   const handleTouchCancel = () => {
+    clearLongPressTimer()
+    longPressTriggeredRef.current = false
     touchStartRef.current = null
     horizontalSwipeRef.current = false
     setIsSwiping(false)
@@ -96,6 +139,7 @@ export default function TaskCard({
   }
 
   useEffect(() => () => {
+    clearLongPressTimer()
     if (swipeResetTimerRef.current != null) {
       window.clearTimeout(swipeResetTimerRef.current)
     }
@@ -112,18 +156,25 @@ export default function TaskCard({
   useEffect(() => {
     setCoverRatio('')
     setCoverSize('')
+    setThumbSrc('')
 
     if (task.outputImages?.[0]) {
+      const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
+      if (remoteUrl) {
+        setThumbSrc(remoteUrl)
+        return
+      }
+
       const cached = getCachedImage(task.outputImages[0])
       if (cached) {
         setThumbSrc(cached)
       } else {
-        ensureImageCached(task.outputImages[0]).then((url) => {
+        ensureTaskImageAvailable(task.outputImages[0]).then((url) => {
           if (url) setThumbSrc(url)
         })
       }
     }
-  }, [task.outputImages])
+  }, [task.outputImages, task.imageUrlsById])
 
   useEffect(() => {
     if (!thumbSrc) return
@@ -202,6 +253,9 @@ export default function TaskCard({
         }`}
         style={{
           transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined,
+          WebkitTouchCallout: 'none',
+          WebkitUserSelect: 'none',
+          userSelect: 'none',
         }}
         onClick={(e) => {
           if (Date.now() < suppressClickUntilRef.current) {
@@ -215,6 +269,7 @@ export default function TaskCard({
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
         onTouchCancel={handleTouchCancel}
+        onContextMenu={(e) => e.preventDefault()}
       >
         {/* 选中时的角标 */}
       {isSelected && (
@@ -248,7 +303,9 @@ export default function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <span className="text-xs text-gray-400 dark:text-gray-500">
+                {task.currentStep ? `${task.currentStep}...` : '生成中...'}
+              </span>
             </div>
           )}
           {task.status === 'error' && (
@@ -275,8 +332,13 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
-                className="w-full h-full object-cover"
+                className="saveable-image w-full h-full object-cover"
                 loading="lazy"
+                onLoad={(event) => {
+                  const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
+                  if (!remoteUrl || !task.outputImages[0]) return
+                  void cacheTaskImageForEditing(task.outputImages[0], remoteUrl, event.currentTarget)
+                }}
                 alt=""
               />
               {task.outputImages.length > 1 && (

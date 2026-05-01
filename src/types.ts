@@ -1,23 +1,16 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type StorageMode = 'local' | 'webdav'
-
-export interface WebDavSettings {
-  url: string
-  username: string
-  password: string
-  syncOnStartup: boolean
-}
+export type ThemeMode = 'system' | 'light' | 'dark'
 
 export interface AppSettings {
   baseUrl: string
   apiKey: string
+  apiKeyMasked?: string | null
+  apiKeyConfigured?: boolean
   model: string
   timeout: number
   apiMode: ApiMode
-  storageMode: StorageMode
-  webdav: WebDavSettings
   codexCli: boolean
   updatedAt?: number
 }
@@ -29,16 +22,11 @@ export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_SETTINGS: AppSettings = {
   baseUrl: DEFAULT_BASE_URL,
   apiKey: '',
+  apiKeyMasked: null,
+  apiKeyConfigured: false,
   model: DEFAULT_IMAGES_MODEL,
   timeout: 300,
   apiMode: 'images',
-  storageMode: 'local',
-  webdav: {
-    url: '',
-    username: '',
-    password: '',
-    syncOnStartup: true,
-  },
   codexCli: false,
 }
 
@@ -99,7 +87,11 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  imageUrlsById?: Record<string, string>
   status: TaskStatus
+  serverStatus?: string
+  currentStep?: string
+  progressPercent?: number
   error: string | null
   createdAt: number
   finishedAt: number | null
@@ -122,85 +114,3 @@ export interface StoredImage {
   source?: 'upload' | 'generated' | 'mask'
 }
 
-// ===== API 请求体 =====
-
-export interface ImageGenerationRequest {
-  model: string
-  prompt: string
-  size: string
-  quality: string
-  output_format: string
-  moderation: string
-  output_compression?: number
-  n?: number
-}
-
-// ===== API 响应 =====
-
-export interface ImageResponseItem {
-  b64_json?: string
-  url?: string
-  revised_prompt?: string
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-}
-
-export interface ImageApiResponse {
-  data: ImageResponseItem[]
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-  n?: number
-}
-
-export interface ResponsesOutputItem {
-  type?: string
-  result?: string | {
-    b64_json?: string
-    image?: string
-    data?: string
-  }
-  size?: string
-  quality?: string
-  output_format?: string
-  output_compression?: number
-  moderation?: string
-  revised_prompt?: string
-}
-
-export interface ResponsesApiResponse {
-  output?: ResponsesOutputItem[]
-  tools?: Array<{
-    type?: string
-    size?: string
-    quality?: string
-    output_format?: string
-    output_compression?: number
-    moderation?: string
-    n?: number
-  }>
-}
-
-// ===== 导出数据 =====
-
-/** ZIP manifest.json 格式 */
-export interface ExportData {
-  version: number
-  exportedAt: string
-  settings: AppSettings
-  tasks: TaskRecord[]
-  deletedTaskIds?: Record<string, number>
-  deletedImageIds?: Record<string, number>
-  /** imageId → 图片信息 */
-  imageFiles: Record<string, {
-    path: string
-    createdAt?: number
-    updatedAt?: number
-    source?: 'upload' | 'generated' | 'mask'
-  }>
-}

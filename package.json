@@ -1,11 +1,14 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "0.2.15",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "npm --prefix server run dev",
+    "build:server": "npm --prefix server run build",
     "build": "tsc -b && vite build",
+    "build:web": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"

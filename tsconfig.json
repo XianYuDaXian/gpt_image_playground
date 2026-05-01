@@ -17,5 +17,11 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/lib/api.ts",
+    "src/lib/api.test.ts",
+    "src/lib/snapshot.ts",
+    "src/lib/webdavSync.ts"
+  ]
 }

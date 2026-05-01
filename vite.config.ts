@@ -31,20 +31,32 @@ export default defineConfig(({ command }) => {
       host: true,
       allowedHosts: ['xian-yu.top', '.xian-yu.top'],
       proxy:
-        devProxyConfig?.enabled
-          ? {
-              [devProxyConfig.prefix]: {
-                target: devProxyConfig.target,
-                changeOrigin: devProxyConfig.changeOrigin,
-                secure: devProxyConfig.secure,
-                rewrite: (path) =>
-                  path.replace(
-                    new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
-                    '',
-                  ),
-              },
-            }
-          : undefined,
+        {
+          ...(devProxyConfig?.enabled
+            ? {
+                [devProxyConfig.prefix]: {
+                  target: devProxyConfig.target,
+                  changeOrigin: devProxyConfig.changeOrigin,
+                  secure: devProxyConfig.secure,
+                  rewrite: (path) =>
+                    path.replace(
+                      new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+                      '',
+                    ),
+                },
+              }
+            : {}),
+          '/api': {
+            target: 'http://127.0.0.1:8787',
+            changeOrigin: true,
+            secure: false,
+          },
+          '/media': {
+            target: 'http://127.0.0.1:8787',
+            changeOrigin: true,
+            secure: false,
+          },
+        },
     },
     preview: {
       allowedHosts: ['xian-yu.top', '.xian-yu.top'],

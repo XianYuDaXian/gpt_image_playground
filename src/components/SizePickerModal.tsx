@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import {
+  calculateImageScaleBounds,
+  calculateImageSize,
+  calculateImageSizeWithScale,
+  normalizeImageSize,
+  parseRatio,
+  type SizeTier,
+} from '../lib/size'
 
 const TIERS: SizeTier[] = ['1K', '2K', '4K']
 const SIZE_LIMIT_TEXT = '由于模型限制，最终输出会自动规整到合法尺寸：宽高均为 16 的倍数，最大边长 3840px，宽高比不超过 3:1，总像素限制为 655360-8294400。'
@@ -33,7 +40,16 @@ function findPresetForSize(size: string) {
   for (const tier of TIERS) {
     for (const ratio of RATIOS) {
       if (calculateImageSize(tier, ratio.value) === normalized) {
-        return { tier, ratio: ratio.value }
+        return { tier, ratio: ratio.value, scalePercent: 100 }
+      }
+
+      const bounds = calculateImageScaleBounds(tier, ratio.value)
+      if (!bounds) continue
+
+      for (let scalePercent = bounds.max - 1; scalePercent >= bounds.min; scalePercent--) {
+        if (calculateImageSizeWithScale(tier, ratio.value, scalePercent) === normalized) {
+          return { tier, ratio: ratio.value, scalePercent }
+        }
       }
     }
   }
@@ -52,6 +68,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
   // Ratio mode state
   const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? '1:1')
+  const [scalePercent, setScalePercent] = useState(currentPreset?.scalePercent ?? 100)
   const [customRatio, setCustomRatio] = useState('16:9')
 
   // Resolution mode state
@@ -67,6 +84,10 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
 
   const activeRatio = ratio === 'custom' ? customRatio : ratio
   const parsedCustomRatio = parseRatio(customRatio)
+  const scaleBounds = useMemo(
+    () => calculateImageScaleBounds(tier, activeRatio),
+    [tier, activeRatio],
+  )
   const customRatioValid = ratio !== 'custom' || Boolean(parsedCustomRatio)
   const customRatioClamped = Boolean(
     ratio === 'custom' &&
@@ -74,11 +95,16 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
     Math.max(parsedCustomRatio.width, parsedCustomRatio.height) / Math.min(parsedCustomRatio.width, parsedCustomRatio.height) > 3,
   )
 
+  useEffect(() => {
+    if (!scaleBounds) return
+    setScalePercent((prev) => Math.max(scaleBounds.min, Math.min(scaleBounds.max, prev)))
+  }, [scaleBounds])
+
   const previewSize = useMemo(() => {
     if (mode === 'auto') return 'auto'
     
     if (mode === 'ratio') {
-      const size = calculateImageSize(tier, activeRatio)
+      const size = calculateImageSizeWithScale(tier, activeRatio, scalePercent)
       return size ? normalizeImageSize(size) : ''
     }
     
@@ -92,7 +118,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
     }
     
     return ''
-  }, [mode, tier, activeRatio, customW, customH])
+  }, [mode, tier, activeRatio, scalePercent, customW, customH])
 
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
@@ -140,7 +166,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
+      <div className="glass-overlay-soft absolute inset-0 animate-overlay-in" />
       <div
         className="relative z-10 w-full max-w-md rounded-3xl border border-white/50 bg-white/95 p-5 shadow-2xl ring-1 ring-black/5 animate-modal-in dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10"
         onClick={(e) => e.stopPropagation()}
@@ -239,6 +265,32 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
                       }`}
                     />
                   </label>
+                )}
+
+                {scaleBounds && (
+                  <section className="animate-fade-in">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="text-xs font-medium text-gray-400 dark:text-gray-500">缩放百分比</div>
+                      <div className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">
+                        {scalePercent}%
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-gray-200/70 bg-white/60 px-4 py-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                      <input
+                        type="range"
+                        min={scaleBounds.min}
+                        max={scaleBounds.max}
+                        step={1}
+                        value={scalePercent}
+                        onChange={(e) => setScalePercent(Number(e.target.value))}
+                        className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gray-200 accent-blue-500 dark:bg-white/[0.08]"
+                      />
+                      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-400 dark:text-gray-500">
+                        <span>{scaleBounds.min}%</span>
+                        <span>100%</span>
+                      </div>
+                    </div>
+                  </section>
                 )}
               </div>
             )}

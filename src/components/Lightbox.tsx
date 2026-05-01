@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState, useRef, useCallback } from 'react'
-import { useStore, getCachedImage, ensureImageCached } from '../store'
+import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 
@@ -46,7 +46,7 @@ export default function Lightbox() {
     if (cached) {
       setSrc(cached)
     } else {
-      ensureImageCached(lightboxImageId).then((url) => {
+      ensureTaskImageAvailable(lightboxImageId).then((url) => {
         if (url) setSrc(url)
       })
     }
@@ -78,7 +78,7 @@ export default function Lightbox() {
       if (cached) {
         setMaskImageSrc(cached)
       } else {
-        ensureImageCached(taskWithMask.maskImageId).then((url) => {
+        ensureTaskImageAvailable(taskWithMask.maskImageId).then((url) => {
           if (url) setMaskImageSrc(url)
         })
       }
@@ -138,6 +138,7 @@ export default function Lightbox() {
   return (
     <>
       <LightboxInner
+        imageId={lightboxImageId}
         src={src}
         maskPreviewSrc={maskPreviewSrc}
         onClose={close}
@@ -170,6 +171,7 @@ export default function Lightbox() {
 }
 
 interface LightboxInnerProps {
+  imageId: string
   src: string
   maskPreviewSrc?: string
   onClose: () => void
@@ -183,7 +185,8 @@ interface LightboxInnerProps {
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, isReferenceImage, onEdit }: LightboxInnerProps) {
+function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, isReferenceImage, onEdit }: LightboxInnerProps) {
+  const tasks = useStore((s) => s.tasks)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // 用 ref 追踪最新变换，避免闭包过期
@@ -503,7 +506,7 @@ function LightboxInner({ src, maskPreviewSrc, onClose, showNav, currentIndex, to
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-md animate-fade-in" />
+      <div className="glass-overlay absolute inset-0 animate-fade-in" />
       <button
         data-lightbox-control
         className="absolute right-5 top-5 z-20 rounded-full bg-black/45 px-4 py-2 text-sm text-white backdrop-blur-sm transition hover:bg-black/65"
@@ -528,7 +531,17 @@ function LightboxInner({ src, maskPreviewSrc, onClose, showNav, currentIndex, to
         >
           <img
             src={src}
-            className="max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            className="saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            onLoad={(event) => {
+              const task = tasks.find((item) =>
+                item.inputImageIds.includes(imageId) ||
+                item.outputImages.includes(imageId) ||
+                item.maskImageId === imageId,
+              )
+              const remoteUrl = task?.imageUrlsById?.[imageId]
+              if (!remoteUrl) return
+              void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
+            }}
             onDragStart={(e) => e.preventDefault()}
             alt=""
           />

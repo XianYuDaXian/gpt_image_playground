@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
-import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable, reuseConfig, editOutputs, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -61,13 +61,18 @@ export default function DetailModal() {
     ])]
     const initial: Record<string, string> = {}
     for (const id of ids) {
+      const remoteUrl = task.imageUrlsById?.[id]
+      if (remoteUrl) {
+        initial[id] = remoteUrl
+        continue
+      }
       const cached = getCachedImage(id)
       if (cached) initial[id] = cached
     }
     setImageSrcs(initial)
     for (const id of ids) {
       if (initial[id]) continue
-      ensureImageCached(id).then((url) => {
+      ensureTaskImageAvailable(id).then((url) => {
         if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
       })
     }
@@ -269,9 +274,9 @@ export default function DetailModal() {
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={() => setDetailTaskId(null)}
     >
-      <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+      <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -293,7 +298,7 @@ export default function DetailModal() {
               <img
                 ref={mainImageRef}
                 src={currentOutputImageSrc}
-                className="max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
+                className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
                 onLoad={() => {
                   const panel = imagePanelRef.current
                   const image = mainImageRef.current
@@ -302,6 +307,11 @@ export default function DetailModal() {
                   const panelRect = panel.getBoundingClientRect()
                   const imageRect = image.getBoundingClientRect()
                   setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
+
+                  const remoteUrl = task.imageUrlsById?.[currentOutputImageId]
+                  if (remoteUrl && currentOutputImageId) {
+                    void cacheTaskImageForEditing(currentOutputImageId, remoteUrl, image)
+                  }
                 }}
                 onClick={() =>
                   setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
@@ -512,6 +522,11 @@ export default function DetailModal() {
                           <img
                             src={displaySrc}
                             className="w-full h-full object-cover"
+                            onLoad={(event) => {
+                              const remoteUrl = task.imageUrlsById?.[imgId]
+                              if (!remoteUrl) return
+                              void cacheTaskImageForEditing(imgId, remoteUrl, event.currentTarget)
+                            }}
                             alt=""
                           />
                           {isMaskTarget && (

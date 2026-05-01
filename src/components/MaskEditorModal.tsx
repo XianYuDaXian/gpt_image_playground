@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ensureImageCached, useStore } from '../store'
+import { ensureTaskImageAvailable, useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { storeImage } from '../lib/db'
 import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
@@ -20,6 +20,11 @@ import {
 type Tool = 'brush' | 'eraser'
 
 interface CanvasSize {
+  width: number
+  height: number
+}
+
+interface FrameLayout {
   width: number
   height: number
 }
@@ -134,6 +139,7 @@ export default function MaskEditorModal() {
 
   const [sourceDataUrl, setSourceDataUrl] = useState('')
   const [size, setSize] = useState<CanvasSize | null>(null)
+  const [frameLayout, setFrameLayout] = useState<FrameLayout | null>(null)
   const [tool, setTool] = useState<Tool>('brush')
   const [brushSize, setBrushSize] = useState(64)
   const [showBrushControls, setShowBrushControls] = useState(false)
@@ -151,6 +157,7 @@ export default function MaskEditorModal() {
     imageId: string
     src: string
   } | null>(null)
+  const [isLandscapeCompact, setIsLandscapeCompact] = useState(false)
 
   const close = () => {
     if (isSaving) return
@@ -280,6 +287,47 @@ export default function MaskEditorModal() {
     setHistoryState({
       undo: undoStackRef.current.length,
       redo: redoStackRef.current.length,
+    })
+  }
+
+  function updateFrameLayout(nextSize: CanvasSize | null = size) {
+    const stage = stageRef.current
+    if (!stage || !nextSize) {
+      setFrameLayout(null)
+      return
+    }
+
+    const rect = stage.getBoundingClientRect()
+    const styles = window.getComputedStyle(stage)
+    const stageWidth = Math.max(
+      1,
+      Math.floor(
+        rect.width
+        - Number.parseFloat(styles.paddingLeft || '0')
+        - Number.parseFloat(styles.paddingRight || '0'),
+      ),
+    )
+    const stageHeight = Math.max(
+      1,
+      Math.floor(
+        rect.height
+        - Number.parseFloat(styles.paddingTop || '0')
+        - Number.parseFloat(styles.paddingBottom || '0'),
+      ),
+    )
+    const ratio = nextSize.width / nextSize.height
+
+    let width = stageWidth
+    let height = Math.round(width / ratio)
+
+    if (height > stageHeight) {
+      height = stageHeight
+      width = Math.round(height * ratio)
+    }
+
+    setFrameLayout({
+      width: Math.max(1, width),
+      height: Math.max(1, height),
     })
   }
 
@@ -438,6 +486,20 @@ export default function MaskEditorModal() {
   }
 
   useEffect(() => {
+    const updateLayoutMode = () => {
+      setIsLandscapeCompact(window.matchMedia('(max-width: 767px) and (orientation: landscape)').matches)
+    }
+
+    updateLayoutMode()
+    window.addEventListener('resize', updateLayoutMode)
+    window.addEventListener('orientationchange', updateLayoutMode)
+    return () => {
+      window.removeEventListener('resize', updateLayoutMode)
+      window.removeEventListener('orientationchange', updateLayoutMode)
+    }
+  }, [])
+
+  useEffect(() => {
     if (!imageId) {
       activeSessionIdRef.current = 0
       return
@@ -468,6 +530,7 @@ export default function MaskEditorModal() {
       }
       setSourceDataUrl('')
       setSize(null)
+      setFrameLayout(null)
       setIsLoading(false)
       pointerPositionsRef.current.clear()
       pinchGestureRef.current = null
@@ -492,7 +555,7 @@ export default function MaskEditorModal() {
 
     async function loadCanvases() {
       try {
-        const dataUrl = await ensureImageCached(targetImageId)
+        const dataUrl = await ensureTaskImageAvailable(targetImageId)
         if (cancelled) return
         if (!dataUrl) {
           showToast('图片已不存在，无法编辑遮罩', 'error')
@@ -539,6 +602,7 @@ export default function MaskEditorModal() {
         renderPreview()
         setSourceDataUrl(preparedTarget.dataUrl)
         setSize(nextSize)
+        updateFrameLayout(nextSize)
         if (preparedTarget.wasResized) {
           showToast(
             `已为遮罩编辑按官方要求调整图片尺寸：\n${preparedTarget.originalWidth}×${preparedTarget.originalHeight} → ${preparedTarget.width}×${preparedTarget.height}`,
@@ -621,13 +685,14 @@ export default function MaskEditorModal() {
   }, [showBrushControls])
 
   useEffect(() => {
-    const frame = baseFrameRef.current
-    if (!frame || typeof ResizeObserver === 'undefined') return
+    const stage = stageRef.current
+    if (!stage || typeof ResizeObserver === 'undefined') return
 
     const observer = new ResizeObserver(() => {
+      updateFrameLayout()
       commitViewTransform(viewTransformRef.current)
     })
-    observer.observe(frame)
+    observer.observe(stage)
     return () => observer.disconnect()
   }, [size])
 
@@ -868,7 +933,7 @@ export default function MaskEditorModal() {
         aria-hidden={referenceEditorSession ? 'true' : undefined}
       >
       {/* Header */}
-      <div className="flex-none flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950 z-20">
+      <div className="safe-editor-header flex-none flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-950 z-20">
         <div className="flex items-center gap-3">
           <button onClick={close} disabled={isSaving} className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-lg dark:text-gray-400 dark:hover:bg-gray-800 transition" title="取消">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12"/></svg>
@@ -912,7 +977,10 @@ export default function MaskEditorModal() {
       </div>
 
       {/* Workspace */}
-      <div ref={stageRef} className="flex-1 relative flex items-center justify-center overflow-hidden bg-gray-100/50 dark:bg-black/50 p-0 pb-[76px] sm:p-6 sm:pb-[100px]" style={{ containerType: 'size' }}>
+      <div
+        ref={stageRef}
+        className={`${isLandscapeCompact ? 'safe-mask-workspace-side' : 'safe-mask-workspace'} flex-1 relative flex items-center justify-center overflow-hidden bg-gray-100/50 dark:bg-black/50 p-0 sm:p-6 sm:pb-[100px]`}
+      >
         {isLoading && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/50 text-sm text-gray-500 backdrop-blur-sm dark:bg-gray-900/50 dark:text-gray-300">
             正在载入图片...
@@ -920,11 +988,13 @@ export default function MaskEditorModal() {
         )}
         <div
           ref={baseFrameRef}
-          className="relative max-h-full max-w-full sm:rounded-xl shadow-inner sm:ring-1 ring-black/5 touch-none dark:bg-black/50 dark:ring-white/5"
+          className="relative max-h-full max-w-full flex-shrink-0 sm:rounded-xl shadow-inner sm:ring-1 ring-black/5 touch-none dark:bg-black/50 dark:ring-white/5"
           onWheel={handleWheel}
           style={{
-            aspectRatio: size ? `${size.width} / ${size.height}` : '1 / 1',
-            width: size ? `min(100%, 100cqh * ${size.width / size.height})` : '520px',
+            width: frameLayout ? `${frameLayout.width}px` : 'min(100%, 520px)',
+            height: frameLayout ? `${frameLayout.height}px` : 'auto',
+            aspectRatio: frameLayout ? undefined : size ? `${size.width} / ${size.height}` : '1 / 1',
+            maxWidth: '100%',
             maxHeight: '100%',
           }}
         >
@@ -954,10 +1024,16 @@ export default function MaskEditorModal() {
         </div>
 
         {/* Footer Toolbar */}
-        <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 flex items-center justify-center z-20 pointer-events-none w-full px-2 sm:px-4">
-          <div className="flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 bg-white/95 dark:bg-[#0f0f0f]/95 backdrop-blur-md border border-gray-200/80 dark:border-white/5 rounded-2xl sm:rounded-[1.25rem] shadow-2xl pointer-events-auto">
-            <div className="flex items-center gap-1.5 sm:gap-3">
-              <div className="flex items-center bg-gray-100/80 dark:bg-[#232325]/80 p-1 rounded-xl sm:rounded-[14px]">
+        <div
+          className={`${
+            isLandscapeCompact
+              ? 'safe-editor-toolbar-side absolute top-1/2 -translate-y-1/2'
+              : 'safe-editor-toolbar absolute sm:bottom-8 left-1/2 -translate-x-1/2 w-full px-2 sm:px-4'
+          } flex items-center justify-center z-20 pointer-events-none`}
+        >
+          <div className={`${isLandscapeCompact ? 'flex-col gap-2 px-2 py-2 rounded-2xl' : 'flex items-center gap-2 sm:gap-4 px-2 sm:px-3 py-1.5 sm:py-2 rounded-2xl sm:rounded-[1.25rem]'} glass-surface-strong flex border border-gray-200/80 dark:border-white/5 shadow-2xl pointer-events-auto`}>
+            <div className={`${isLandscapeCompact ? 'flex flex-col gap-2' : 'flex items-center gap-1.5 sm:gap-3'}`}>
+              <div className={`${isLandscapeCompact ? 'flex flex-col' : 'flex items-center'} bg-gray-100/80 dark:bg-[#232325]/80 p-1 rounded-xl sm:rounded-[14px]`}>
                 <button
                   className={`p-2 sm:p-2.5 rounded-lg sm:rounded-xl transition-all ${tool === 'brush' ? 'bg-white shadow-sm text-blue-500 dark:bg-[#323338] dark:text-blue-400 dark:shadow-none' : 'text-gray-500 hover:text-gray-700 dark:text-[#8a8a8e] dark:hover:text-gray-200'}`}
                   onClick={() => setTool('brush')}
@@ -997,7 +1073,7 @@ export default function MaskEditorModal() {
               </div>
             </div>
 
-            <div className="flex items-center gap-0.5 sm:gap-2 sm:ml-1">
+            <div className={`${isLandscapeCompact ? 'flex flex-col items-center gap-1' : 'flex items-center gap-0.5 sm:gap-2 sm:ml-1'}`}>
               <button onClick={handleUndo} disabled={!canUndo} className="p-2 sm:p-2.5 text-gray-500 hover:bg-gray-100 rounded-lg sm:rounded-xl disabled:opacity-30 dark:text-[#8a8a8e] dark:hover:bg-white/10 dark:hover:text-gray-200 transition-all" title="撤销">
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 7v6h6" />
@@ -1010,7 +1086,7 @@ export default function MaskEditorModal() {
                   <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7" />
                 </svg>
               </button>
-              <div className="w-px h-4 sm:h-5 bg-gray-300 dark:bg-[#323338] mx-1"></div>
+              <div className={`${isLandscapeCompact ? 'h-px w-8 my-1' : 'w-px h-4 sm:h-5 mx-1'} bg-gray-300 dark:bg-[#323338]`}></div>
               <button onClick={resetViewTransform} disabled={!isReady || isSaving || !isZoomed} className="p-2 sm:p-2.5 text-gray-500 hover:bg-gray-100 rounded-lg sm:rounded-xl disabled:opacity-30 dark:text-[#8a8a8e] dark:hover:bg-white/10 dark:hover:text-gray-200 transition-all" title="重置视图">
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 14h6v6"/>
@@ -1026,17 +1102,21 @@ export default function MaskEditorModal() {
                   <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
                 </svg>
               </button>
-              <div className="w-px h-4 sm:h-5 bg-gray-300 dark:bg-[#323338] mx-1"></div>
+              <div className={`${isLandscapeCompact ? 'h-px w-8 my-1' : 'w-px h-4 sm:h-5 mx-1'} bg-gray-300 dark:bg-[#323338]`}></div>
               <button
                 onClick={handleOpenReferenceEditor}
                 disabled={!isReady || isSaving}
-                className="flex items-center gap-1.5 rounded-lg sm:rounded-xl bg-blue-50 px-3 py-2 text-xs font-medium text-blue-600 transition hover:bg-blue-100 disabled:opacity-30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                className={`flex items-center ${isLandscapeCompact ? 'justify-center px-2 py-2 text-[11px]' : 'gap-1.5 px-3 py-2 text-xs'} rounded-lg sm:rounded-xl bg-blue-50 font-medium text-blue-600 transition hover:bg-blue-100 disabled:opacity-30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20`}
                 title="切换到高级编辑"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                 </svg>
-                高级编辑
+                {isLandscapeCompact ? (
+                  <span className="text-[10px] leading-tight text-center">高级<br />编辑</span>
+                ) : (
+                  '高级编辑'
+                )}
               </button>
             </div>
           </div>
@@ -1069,7 +1149,7 @@ export default function MaskEditorModal() {
             <div className="fixed inset-0 z-[120]">
               <Suspense
                 fallback={
-                  <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/55 backdrop-blur-md text-sm text-white/70">
+                  <div className="glass-overlay fixed inset-0 z-[120] flex items-center justify-center text-sm text-white/70">
                     正在加载高级编辑器...
                   </div>
                 }

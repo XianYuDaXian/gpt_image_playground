@@ -1038,11 +1038,11 @@ export default function ReferenceImageEditorModal({ imageId, src, saveMode, onCl
   const showLocalMaskSettings = settingsPanel === 'mask'
 
   return (
-    <div className="fixed inset-0 z-[75] h-[100dvh] overflow-hidden bg-black/70 backdrop-blur-md">
+    <div className="glass-overlay fixed inset-0 z-[75] h-[100dvh] overflow-hidden">
       <div className="absolute inset-0 bg-[#0b0e12]">
         <div
           ref={canvasViewportRef}
-          className="absolute inset-x-2 top-2 bottom-[292px] overflow-hidden rounded-2xl border border-white/10 bg-[#11161d] shadow-2xl touch-none sm:inset-x-3 sm:top-3 sm:bottom-[320px] md:inset-4 md:right-[392px] md:bottom-4 md:rounded-3xl"
+          className="safe-editor-viewport absolute inset-x-2 overflow-hidden rounded-2xl border border-white/10 bg-[#11161d] shadow-2xl touch-none sm:inset-x-3 md:inset-4 md:right-[392px] md:rounded-3xl"
         >
           {!ready && (
             <div className="absolute inset-0 z-10 flex items-center justify-center text-sm text-white/65">
@@ -1058,7 +1058,7 @@ export default function ReferenceImageEditorModal({ imageId, src, saveMode, onCl
             className="absolute inset-0 block touch-none"
           />
         </div>
-        <aside className="absolute inset-x-2 bottom-2 z-20 max-h-[282px] overflow-y-auto rounded-2xl border border-white/10 bg-[#12161d]/96 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-white shadow-2xl backdrop-blur-xl sm:inset-x-3 sm:bottom-3 sm:max-h-[306px] sm:p-4 md:bottom-4 md:left-auto md:right-4 md:top-4 md:max-h-none md:w-[360px] md:p-5">
+        <aside className="glass-surface-dark safe-editor-panel absolute inset-x-2 z-20 max-h-[282px] overflow-y-auto rounded-2xl border border-white/10 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-white shadow-2xl sm:inset-x-3 sm:max-h-[306px] sm:p-4 md:bottom-4 md:left-auto md:right-4 md:top-4 md:max-h-none md:w-[360px] md:p-5">
           <div className="mb-3 flex items-center justify-between md:mb-5">
               <div>
                 <h3 className="text-base font-semibold md:text-lg">高级编辑</h3>

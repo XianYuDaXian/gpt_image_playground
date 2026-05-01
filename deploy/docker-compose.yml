@@ -1,0 +1,24 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: gpt-image-playground-backend:latest
+    ports:
+      - "${APP_PORT:-8787}:8787"
+    environment:
+      PORT: 8787
+      HOST: 0.0.0.0
+      DATA_DIR: /app/data
+      WEB_DIST_DIR: /app/dist
+      APP_SECRET: "${APP_SECRET}"
+      CORS_ORIGIN: "${CORS_ORIGIN:-*}"
+      UPSTREAM_API_URL: "${UPSTREAM_API_URL:-}"
+      UPSTREAM_API_KEY: "${UPSTREAM_API_KEY:-}"
+      UPSTREAM_MODEL: "${UPSTREAM_MODEL:-gpt-image-2}"
+      UPSTREAM_API_MODE: "${UPSTREAM_API_MODE:-images}"
+      UPSTREAM_TIMEOUT_SECONDS: "${UPSTREAM_TIMEOUT_SECONDS:-300}"
+      UPSTREAM_CODEX_CLI: "${UPSTREAM_CODEX_CLI:-false}"
+    volumes:
+      - ../docker-data:/app/data
+    restart: unless-stopped

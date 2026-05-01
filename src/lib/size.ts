@@ -57,13 +57,21 @@ function normalizeDimensions(width: number, height: number) {
   return { width: normalizedWidth, height: normalizedHeight }
 }
 
+export function normalizeImageDimensions(width: number, height: number) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+
+  const normalized = normalizeDimensions(width, height)
+  return `${normalized.width}x${normalized.height}`
+}
+
 export function normalizeImageSize(size: string) {
   const trimmed = size.trim()
   const match = trimmed.match(SIZE_PATTERN)
   if (!match) return trimmed
 
-  const { width, height } = normalizeDimensions(Number(match[1]), Number(match[2]))
-  return `${width}x${height}`
+  return normalizeImageDimensions(Number(match[1]), Number(match[2])) ?? trimmed
 }
 
 export function parseRatio(ratio: string) {
@@ -178,4 +186,63 @@ export function calculateImageSize(tier: SizeTier, ratio: string) {
     ? roundToMultiple(longSide * ratioHeight / ratioWidth, SIZE_MULTIPLE)
     : longSide
   return normalizeImageSize(`${width}x${height}`)
+}
+
+function calculateBaseImageDimensions(tier: SizeTier, ratio: string) {
+  const parsed = parseRatio(ratio)
+  if (!parsed) return null
+
+  const { width: ratioWidth, height: ratioHeight } = parsed
+  if (ratioWidth === ratioHeight) {
+    const side = tier === '1K' ? 1024 : tier === '2K' ? 2048 : 3840
+    return { width: side, height: side }
+  }
+
+  if (tier === '1K') {
+    const shortSide = 1024
+    return {
+      width: ratioWidth > ratioHeight
+        ? roundToMultiple(shortSide * ratioWidth / ratioHeight, SIZE_MULTIPLE)
+        : shortSide,
+      height: ratioWidth > ratioHeight
+        ? shortSide
+        : roundToMultiple(shortSide * ratioHeight / ratioWidth, SIZE_MULTIPLE),
+    }
+  }
+
+  const longSide = tier === '2K' ? 2048 : 3840
+  return {
+    width: ratioWidth > ratioHeight
+      ? longSide
+      : roundToMultiple(longSide * ratioWidth / ratioHeight, SIZE_MULTIPLE),
+    height: ratioWidth > ratioHeight
+      ? roundToMultiple(longSide * ratioHeight / ratioWidth, SIZE_MULTIPLE)
+      : longSide,
+  }
+}
+
+export function calculateImageScaleBounds(tier: SizeTier, ratio: string) {
+  const base = calculateBaseImageDimensions(tier, ratio)
+  if (!base) return null
+
+  const basePixels = base.width * base.height
+  const minPercent = Math.min(
+    100,
+    Math.max(1, Math.ceil(Math.sqrt(MIN_PIXELS / basePixels) * 100)),
+  )
+
+  return {
+    min: minPercent,
+    max: 100,
+  }
+}
+
+export function calculateImageSizeWithScale(tier: SizeTier, ratio: string, scalePercent: number) {
+  const base = calculateBaseImageDimensions(tier, ratio)
+  if (!base) return null
+
+  const safePercent = Math.max(1, Math.min(100, scalePercent))
+  const scaledWidth = base.width * safePercent / 100
+  const scaledHeight = base.height * safePercent / 100
+  return normalizeImageDimensions(scaledWidth, scaledHeight)
 }

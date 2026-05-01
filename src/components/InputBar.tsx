@@ -46,6 +46,7 @@ export default function InputBar() {
   const prompt = useStore((s) => s.prompt)
   const setPrompt = useStore((s) => s.setPrompt)
   const inputImages = useStore((s) => s.inputImages)
+  const moveInputImage = useStore((s) => s.moveInputImage)
   const removeInputImage = useStore((s) => s.removeInputImage)
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
@@ -133,10 +134,13 @@ export default function InputBar() {
   const [qualityHintVisible, setQualityHintVisible] = useState(false)
   const [mobileCollapsed, setMobileCollapsed] = useState(false)
   const [selectedInputImageId, setSelectedInputImageId] = useState<string | null>(null)
+  const [dragInputImageIndex, setDragInputImageIndex] = useState<number | null>(null)
+  const [dragOverInputImageIndex, setDragOverInputImageIndex] = useState<number | null>(null)
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const handleRef = useRef<HTMLDivElement>(null)
-  const dragTouchRef = useRef({ startY: 0, moved: false })
+  const mobileHandleGestureRef = useRef({ startY: 0, moved: false })
+  const suppressHandleClickRef = useRef(false)
   const compressionHintTimerRef = useRef<number | null>(null)
   const moderationHintTimerRef = useRef<number | null>(null)
   const qualityHintTimerRef = useRef<number | null>(null)
@@ -147,7 +151,8 @@ export default function InputBar() {
   const dragCounter = useRef(0)
   const isMobile = useIsMobile()
 
-  const canSubmit = prompt.trim() && settings.apiKey
+  const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
+  const canSubmit = prompt.trim() && hasConfiguredProvider
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -490,33 +495,46 @@ export default function InputBar() {
     return () => window.removeEventListener('resize', adjustTextareaHeight)
   }, [adjustTextareaHeight])
 
-  // 移动端拖动条手势
-  useEffect(() => {
-    const el = handleRef.current
-    if (!el) return
-    const onTouchStart = (e: TouchEvent) => {
-      dragTouchRef.current = { startY: e.touches[0].clientY, moved: false }
-    }
-    const onTouchMove = (e: TouchEvent) => {
-      const dy = e.touches[0].clientY - dragTouchRef.current.startY
-      if (Math.abs(dy) > 10) dragTouchRef.current.moved = true
-      if (dy > 30) setMobileCollapsed(true)
-      if (dy < -30) setMobileCollapsed(false)
-    }
-    const onTouchEnd = () => {
-      if (!dragTouchRef.current.moved) {
-        setMobileCollapsed((v) => !v)
-      }
-    }
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchmove', onTouchMove, { passive: true })
-    el.addEventListener('touchend', onTouchEnd)
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart)
-      el.removeEventListener('touchmove', onTouchMove)
-      el.removeEventListener('touchend', onTouchEnd)
-    }
+  const toggleMobileCollapsed = useCallback(() => {
+    setMobileCollapsed((value) => !value)
   }, [])
+
+  const handleMobileTogglePointerDown = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (!isMobile || event.pointerType === 'mouse') return
+    mobileHandleGestureRef.current = {
+      startY: event.clientY,
+      moved: false,
+    }
+    suppressHandleClickRef.current = false
+  }, [isMobile])
+
+  const handleMobileTogglePointerMove = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (!isMobile || event.pointerType === 'mouse') return
+    const dy = event.clientY - mobileHandleGestureRef.current.startY
+    if (Math.abs(dy) > 10) {
+      mobileHandleGestureRef.current.moved = true
+      suppressHandleClickRef.current = true
+    }
+    if (dy > 24) setMobileCollapsed(true)
+    if (dy < -24) setMobileCollapsed(false)
+  }, [isMobile])
+
+  const handleMobileTogglePointerUp = useCallback((_event: React.PointerEvent<HTMLElement>) => {
+    if (!isMobile) return
+    if (!mobileHandleGestureRef.current.moved) {
+      toggleMobileCollapsed()
+      suppressHandleClickRef.current = true
+    }
+  }, [isMobile, toggleMobileCollapsed])
+
+  const handleMobileToggleClick = useCallback(() => {
+    if (!isMobile) return
+    if (suppressHandleClickRef.current) {
+      suppressHandleClickRef.current = false
+      return
+    }
+    toggleMobileCollapsed()
+  }, [isMobile, toggleMobileCollapsed])
 
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
@@ -539,12 +557,53 @@ export default function InputBar() {
       setSelectedInputImageId(null)
     }
   }
+
+  const resetInputImageDragState = useCallback(() => {
+    setDragInputImageIndex(null)
+    setDragOverInputImageIndex(null)
+  }, [])
+
+  const handleInputImageDragStart = (event: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (isMobile) {
+      event.preventDefault()
+      return
+    }
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', inputImages[index]?.id ?? '')
+    setDragInputImageIndex(index)
+    setDragOverInputImageIndex(index)
+  }
+
+  const handleInputImageDragOver = (event: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (dragInputImageIndex == null) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (dragOverInputImageIndex !== index) {
+      setDragOverInputImageIndex(index)
+    }
+  }
+
+  const handleInputImageDrop = (event: React.DragEvent<HTMLDivElement>, index: number) => {
+    if (dragInputImageIndex == null) return
+    event.preventDefault()
+    if (dragInputImageIndex !== index) {
+      moveInputImage(dragInputImageIndex, index)
+    }
+    resetInputImageDragState()
+  }
+
+  const handleInputImageDragEnd = () => {
+    resetInputImageDragState()
+  }
+
   const renderImageThumb = (img: (typeof inputImages)[number]) => {
     const originalIndex = inputImages.findIndex((i) => i.id === img.id)
     const isMaskTarget = maskDraft?.targetImageId === img.id
     const canEdit = !maskTargetImage || isMaskTarget
     const displaySrc = isMaskTarget && maskPreviewUrl ? maskPreviewUrl : img.dataUrl
     const selected = selectedInputImageId === img.id
+    const isDropTarget = dragInputImageIndex != null && dragOverInputImageIndex === originalIndex
+    const isDraggingThumb = dragInputImageIndex === originalIndex
     const deleteButtonClass = isMobile
       ? selected
         ? 'h-7 w-7 opacity-100'
@@ -552,7 +611,15 @@ export default function InputBar() {
       : 'h-[22px] w-[22px] opacity-0 group-hover:opacity-100'
 
     return (
-      <div key={img.id} className="relative group inline-block">
+      <div
+        key={img.id}
+        draggable={!isMobile}
+        className={`relative group inline-block transition-transform ${isDraggingThumb ? 'scale-95 opacity-60' : ''}`}
+        onDragStart={(event) => handleInputImageDragStart(event, originalIndex)}
+        onDragOver={(event) => handleInputImageDragOver(event, originalIndex)}
+        onDrop={(event) => handleInputImageDrop(event, originalIndex)}
+        onDragEnd={handleInputImageDragEnd}
+      >
         <button
           type="button"
           className={`relative block h-[52px] w-[52px] overflow-hidden rounded-xl border p-0 shadow-sm transition-all ${
@@ -561,7 +628,7 @@ export default function InputBar() {
               : isMaskTarget
                 ? 'border-blue-500 border-2'
                 : 'border-gray-200 dark:border-white/[0.08]'
-          }`}
+          } ${isDropTarget ? 'ring-2 ring-blue-400/55 border-blue-400' : ''}`}
           onClick={() => handleInputImageClick(img.id)}
           aria-pressed={selected}
           aria-label={selected ? '取消选择参考图' : '选择参考图'}
@@ -569,6 +636,7 @@ export default function InputBar() {
           <img
             src={displaySrc}
             className="w-full h-full object-cover hover:opacity-90 transition-opacity"
+            draggable={false}
             alt=""
           />
           {isMaskTarget && (
@@ -822,7 +890,7 @@ export default function InputBar() {
         />
       )}
 
-      <div data-input-bar className="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
+      <div data-input-bar className="safe-bottom-floating sm:safe-bottom-floating-sm fixed left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
         {selectedTaskIds.length > 0 && (
           <div className="flex justify-center mb-3">
             <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">
@@ -881,14 +949,22 @@ export default function InputBar() {
             </div>
           </div>
         )}
-        <div ref={cardRef} className="bg-white/70 dark:bg-gray-900/70 backdrop-blur-2xl border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
+        <div ref={cardRef} className="safe-input-card border border-white/50 dark:border-white/[0.08] shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] rounded-2xl sm:rounded-3xl p-3 sm:p-4 ring-1 ring-black/5 dark:ring-white/10">
           {/* 移动端拖动条 */}
           <div
             ref={handleRef}
-            className="sm:hidden flex justify-center pt-0.5 pb-2 -mt-1 cursor-pointer touch-none"
-            onClick={() => setMobileCollapsed((v) => !v)}
+            className="sm:hidden flex justify-center pt-1 pb-2 -mt-1 cursor-pointer touch-none select-none"
+            onClick={handleMobileToggleClick}
+            onPointerDown={handleMobileTogglePointerDown}
+            onPointerMove={handleMobileTogglePointerMove}
+            onPointerUp={handleMobileTogglePointerUp}
+            onPointerCancel={() => {
+              suppressHandleClickRef.current = false
+            }}
+            role="button"
+            aria-label={mobileCollapsed ? '展开配置区域' : '收起配置区域'}
           >
-            <div className={`w-10 h-1 rounded-full bg-gray-300 dark:bg-white/[0.06] transition-transform duration-200 ${mobileCollapsed ? 'scale-x-75' : ''}`} />
+            <div className={`w-10 h-1 rounded-full bg-gray-300 dark:bg-white/[0.10] transition-transform duration-250 ${mobileCollapsed ? 'scale-x-75' : 'scale-x-100'}`} />
           </div>
 
           {/* 输入图片行（移动端可折叠） */}
@@ -954,16 +1030,16 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+                  <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => settings.apiKey ? submitTask() : setShowSettings(true)}
-                    disabled={settings.apiKey ? !canSubmit : false}
+                    onClick={() => hasConfiguredProvider ? submitTask() : setShowSettings(true)}
+                    disabled={hasConfiguredProvider ? !canSubmit : false}
                     className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
-                      !settings.apiKey
+                      !hasConfiguredProvider
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
-                    title={settings.apiKey ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置 API'}
+                    title={hasConfiguredProvider ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -1008,12 +1084,12 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!settings.apiKey && submitHover} text="尚未完成 API 配置，请在右上角设置中进行" />
+                  <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => settings.apiKey ? submitTask() : setShowSettings(true)}
-                    disabled={settings.apiKey ? !canSubmit : false}
+                    onClick={() => hasConfiguredProvider ? submitTask() : setShowSettings(true)}
+                    disabled={hasConfiguredProvider ? !canSubmit : false}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
-                      !settings.apiKey
+                      !hasConfiguredProvider
                         ? 'bg-gray-300 dark:bg-white/[0.06] text-white cursor-pointer'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}

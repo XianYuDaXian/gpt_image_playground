@@ -3,8 +3,17 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import './index.css'
 import { installMobileViewportGuards } from './lib/viewport'
+import { applyThemeMode } from './lib/theme'
 
 installMobileViewportGuards()
+
+try {
+  const saved = localStorage.getItem('gpt-image-playground')
+  const parsed = saved ? JSON.parse(saved) as { state?: { themeMode?: 'system' | 'light' | 'dark' } } : null
+  applyThemeMode(parsed?.state?.themeMode ?? 'system')
+} catch {
+  applyThemeMode('system')
+}
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
