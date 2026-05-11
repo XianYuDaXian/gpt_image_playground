@@ -10,7 +10,10 @@ import type {
 } from './types'
 import { DEFAULT_SETTINGS, DEFAULT_PARAMS } from './types'
 import {
+  CURRENT_THUMBNAIL_VERSION,
+  createAndStoreImageThumbnail,
   getImage,
+  getStoredFreshImageThumbnail,
   getAllImages,
   deleteImage,
   clearImages,
@@ -27,24 +30,46 @@ import { normalizeImageSize } from './lib/size'
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
 
 const imageCache = new Map<string, string>()
+const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()
+const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
+const thumbnailBackfillIds = new Set<string>()
+const thumbnailBackfillRunningIds = new Set<string>()
 const taskEventSources = new Map<string, EventSource>()
 let taskListEventSource: EventSource | null = null
 let taskStreamInitialized = false
 let taskRefreshLifecycleInitialized = false
+let thumbnailBackfillScheduled = false
+const MAX_IMAGE_CACHE_ENTRIES = 8
+const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
 function sortTasksForDisplay(tasks: TaskRecord[]) {
   return [...tasks].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 export function getCachedImage(id: string): string | undefined {
-  return imageCache.get(id)
+  const dataUrl = imageCache.get(id)
+  if (dataUrl) {
+    imageCache.delete(id)
+    imageCache.set(id, dataUrl)
+  }
+  return dataUrl
+}
+
+function cacheImage(id: string, dataUrl: string) {
+  imageCache.delete(id)
+  imageCache.set(id, dataUrl)
+  while (imageCache.size > MAX_IMAGE_CACHE_ENTRIES) {
+    const oldestKey = imageCache.keys().next().value
+    if (oldestKey == null) break
+    imageCache.delete(oldestKey)
+  }
 }
 
 export async function ensureImageCached(id: string): Promise<string | undefined> {
   if (imageCache.has(id)) return imageCache.get(id)
   const rec = await getImage(id)
   if (rec) {
-    imageCache.set(id, rec.dataUrl)
+    cacheImage(id, rec.dataUrl)
     return rec.dataUrl
   }
   return undefined
@@ -52,7 +77,114 @@ export async function ensureImageCached(id: string): Promise<string | undefined>
 
 export function primeImageCache(images: Array<{ id: string; dataUrl: string }>) {
   for (const img of images) {
-    imageCache.set(img.id, img.dataUrl)
+    cacheImage(img.id, img.dataUrl)
+  }
+}
+
+function cacheThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }) {
+  if (thumbnail.thumbnailVersion !== CURRENT_THUMBNAIL_VERSION) return
+  thumbnailCache.delete(id)
+  thumbnailCache.set(id, thumbnail)
+  while (thumbnailCache.size > MAX_THUMBNAIL_CACHE_ENTRIES) {
+    const oldestKey = thumbnailCache.keys().next().value
+    if (oldestKey == null) break
+    thumbnailCache.delete(oldestKey)
+  }
+}
+
+function getCachedThumbnail(id: string) {
+  const thumbnail = thumbnailCache.get(id)
+  if (thumbnail?.thumbnailVersion === CURRENT_THUMBNAIL_VERSION) {
+    thumbnailCache.delete(id)
+    thumbnailCache.set(id, thumbnail)
+    return thumbnail
+  }
+  if (thumbnail) thumbnailCache.delete(id)
+  return undefined
+}
+
+export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
+  const cached = getCachedThumbnail(id)
+  if (cached) return cached
+
+  const rec = await getStoredFreshImageThumbnail(id)
+  if (!rec?.thumbnailDataUrl) {
+    scheduleThumbnailBackfill(id)
+    return undefined
+  }
+
+  const thumbnail = {
+    dataUrl: rec.thumbnailDataUrl,
+    width: rec.width,
+    height: rec.height,
+    thumbnailVersion: rec.thumbnailVersion,
+  }
+  cacheThumbnail(id, thumbnail)
+  return thumbnail
+}
+
+export function subscribeImageThumbnail(id: string, callback: (thumbnail: { dataUrl: string; width?: number; height?: number }) => void) {
+  let subscribers = thumbnailSubscribers.get(id)
+  if (!subscribers) {
+    subscribers = new Set()
+    thumbnailSubscribers.set(id, subscribers)
+  }
+  subscribers.add(callback)
+  return () => {
+    subscribers?.delete(callback)
+    if (subscribers?.size === 0) thumbnailSubscribers.delete(id)
+  }
+}
+
+function notifyImageThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number }) {
+  thumbnailSubscribers.get(id)?.forEach((callback) => callback(thumbnail))
+}
+
+function scheduleThumbnailBackfill(id: string) {
+  if (getCachedThumbnail(id) || thumbnailBackfillRunningIds.has(id)) return
+  thumbnailBackfillIds.add(id)
+  if (thumbnailBackfillScheduled) return
+  thumbnailBackfillScheduled = true
+
+  const run = () => {
+    thumbnailBackfillScheduled = false
+    void processNextThumbnailBackfill()
+  }
+
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(run, { timeout: 1500 })
+  } else {
+    setTimeout(run, 250)
+  }
+}
+
+async function processNextThumbnailBackfill() {
+  const id = thumbnailBackfillIds.values().next().value
+  if (!id) return
+  thumbnailBackfillIds.delete(id)
+  thumbnailBackfillRunningIds.add(id)
+
+  try {
+    const dataUrl = await ensureImageCached(id)
+    if (!dataUrl) return
+    const thumbnail = await createAndStoreImageThumbnail(id, dataUrl)
+    cacheThumbnail(id, {
+      dataUrl: thumbnail.thumbnailDataUrl,
+      width: thumbnail.width,
+      height: thumbnail.height,
+      thumbnailVersion: thumbnail.thumbnailVersion,
+    })
+    notifyImageThumbnail(id, {
+      dataUrl: thumbnail.thumbnailDataUrl,
+      width: thumbnail.width,
+      height: thumbnail.height,
+    })
+  } catch {
+    /* 缩略图生成失败时保留占位，不影响主流程 */
+  } finally {
+    thumbnailBackfillRunningIds.delete(id)
+    const nextId = thumbnailBackfillIds.values().next().value
+    if (nextId) scheduleThumbnailBackfill(nextId)
   }
 }
 
@@ -368,7 +500,7 @@ export async function initStore() {
 
   const images = await getAllImages()
   for (const img of images) {
-    imageCache.set(img.id, img.dataUrl)
+    cacheImage(img.id, img.dataUrl)
   }
 
   setupTaskStreams()
@@ -411,7 +543,7 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
         return
       }
       maskImageId = await storeImage(maskDraft.maskDataUrl, 'mask')
-      imageCache.set(maskImageId, maskDraft.maskDataUrl)
+      cacheImage(maskImageId, maskDraft.maskDataUrl)
       maskTargetImageId = maskDraft.targetImageId
     } catch (err) {
       if (!inputImages.some((img) => img.id === maskDraft.targetImageId)) {
@@ -655,20 +787,20 @@ export async function addImageFromFile(file: File): Promise<void> {
   if (!file.type.startsWith('image/')) return
   const dataUrl = await fileToDataUrl(file)
   const id = await storeImage(dataUrl)
-  imageCache.set(id, dataUrl)
+  cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }
 
 export async function replaceInputImageWithDataUrl(currentId: string, dataUrl: string): Promise<string> {
   const id = await storeImage(dataUrl)
-  imageCache.set(id, dataUrl)
+  cacheImage(id, dataUrl)
   useStore.getState().replaceInputImage(currentId, { id, dataUrl })
   return id
 }
 
 export async function addInputImageWithDataUrl(dataUrl: string): Promise<string> {
   const id = await storeImage(dataUrl)
-  imageCache.set(id, dataUrl)
+  cacheImage(id, dataUrl)
   const state = useStore.getState()
   if (!state.inputImages.some((image) => image.id === id)) {
     state.addInputImage({ id, dataUrl })
@@ -683,7 +815,7 @@ export async function addImageFromUrl(src: string): Promise<void> {
   if (!blob.type.startsWith('image/')) throw new Error('不是有效的图片')
   const dataUrl = await blobToDataUrl(blob)
   const id = await storeImage(dataUrl)
-  imageCache.set(id, dataUrl)
+  cacheImage(id, dataUrl)
   useStore.getState().addInputImage({ id, dataUrl })
 }
 
@@ -741,7 +873,7 @@ export async function cacheTaskImageForEditing(
     dataUrl = await blobToDataUrl(blob)
   }
 
-  imageCache.set(imageId, dataUrl)
+  cacheImage(imageId, dataUrl)
   await putImage({
     id: imageId,
     dataUrl,
@@ -749,6 +881,7 @@ export async function cacheTaskImageForEditing(
     updatedAt: Date.now(),
     source: 'generated',
   })
+  scheduleThumbnailBackfill(imageId)
   return dataUrl
 }
 

@@ -1,9 +1,15 @@
-import type { TaskRecord, StoredImage } from '../types'
+import type { TaskRecord, StoredImage, StoredImageThumbnail } from '../types'
 
 const DB_NAME = 'gpt-image-playground'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
+const STORE_THUMBNAILS = 'thumbnails'
+const THUMBNAIL_MAX_SIZE = 720
+const THUMBNAIL_QUALITY = 0.9
+const THUMBNAIL_VERSION = 1
+
+export const CURRENT_THUMBNAIL_VERSION = THUMBNAIL_VERSION
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -15,6 +21,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_IMAGES)) {
         db.createObjectStore(STORE_IMAGES, { keyPath: 'id' })
+      }
+      if (!db.objectStoreNames.contains(STORE_THUMBNAILS)) {
+        db.createObjectStore(STORE_THUMBNAILS, { keyPath: 'id' })
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -63,6 +72,19 @@ export function getImage(id: string): Promise<StoredImage | undefined> {
   return dbTransaction(STORE_IMAGES, 'readonly', (s) => s.get(id))
 }
 
+export function getStoredImageThumbnail(id: string): Promise<StoredImageThumbnail | undefined> {
+  return dbTransaction(STORE_THUMBNAILS, 'readonly', (s) => s.get(id))
+}
+
+export async function getStoredFreshImageThumbnail(id: string): Promise<StoredImageThumbnail | undefined> {
+  const thumbnail = await getStoredImageThumbnail(id)
+  return thumbnail?.thumbnailVersion === THUMBNAIL_VERSION ? thumbnail : undefined
+}
+
+export function putImageThumbnail(thumbnail: StoredImageThumbnail): Promise<IDBValidKey> {
+  return dbTransaction(STORE_THUMBNAILS, 'readwrite', (s) => s.put(thumbnail))
+}
+
 export function getAllImages(): Promise<StoredImage[]> {
   return dbTransaction(STORE_IMAGES, 'readonly', (s) => s.getAll())
 }
@@ -72,11 +94,29 @@ export function putImage(image: StoredImage): Promise<IDBValidKey> {
 }
 
 export function deleteImage(id: string): Promise<undefined> {
-  return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.delete(id))
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
+        tx.objectStore(STORE_IMAGES).delete(id)
+        tx.objectStore(STORE_THUMBNAILS).delete(id)
+        tx.oncomplete = () => resolve(undefined)
+        tx.onerror = () => reject(tx.error)
+      }),
+  )
 }
 
 export function clearImages(): Promise<undefined> {
-  return dbTransaction(STORE_IMAGES, 'readwrite', (s) => s.clear())
+  return openDB().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
+        tx.objectStore(STORE_IMAGES).clear()
+        tx.objectStore(STORE_THUMBNAILS).clear()
+        tx.oncomplete = () => resolve(undefined)
+        tx.onerror = () => reject(tx.error)
+      }),
+  )
 }
 
 // ===== Image hashing & dedup =====
@@ -117,7 +157,95 @@ export async function storeImage(dataUrl: string, source: NonNullable<StoredImag
   const existing = await getImage(id)
   if (!existing) {
     const now = Date.now()
-    await putImage({ id, dataUrl, createdAt: now, updatedAt: now, source })
+    const thumbnail = await safeCreateImageThumbnail(dataUrl)
+    await putImage({
+      id,
+      dataUrl,
+      createdAt: now,
+      updatedAt: now,
+      source,
+      width: thumbnail.width,
+      height: thumbnail.height,
+    })
+    if (thumbnail.thumbnailDataUrl) {
+      await putImageThumbnail({
+        id,
+        thumbnailDataUrl: thumbnail.thumbnailDataUrl,
+        width: thumbnail.width,
+        height: thumbnail.height,
+        thumbnailVersion: THUMBNAIL_VERSION,
+      })
+    }
+  } else if ((await getStoredImageThumbnail(id))?.thumbnailVersion !== THUMBNAIL_VERSION) {
+    const thumbnail = await safeCreateImageThumbnail(existing.dataUrl)
+    if (thumbnail.width && thumbnail.height && (existing.width !== thumbnail.width || existing.height !== thumbnail.height)) {
+      await putImage({ ...existing, width: thumbnail.width, height: thumbnail.height, updatedAt: Date.now() })
+    }
+    if (thumbnail.thumbnailDataUrl) {
+      await putImageThumbnail({
+        id,
+        thumbnailDataUrl: thumbnail.thumbnailDataUrl,
+        width: thumbnail.width,
+        height: thumbnail.height,
+        thumbnailVersion: THUMBNAIL_VERSION,
+      })
+    }
   }
   return id
+}
+
+function loadImage(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('图片加载失败'))
+    image.src = dataUrl
+  })
+}
+
+async function createImageThumbnail(dataUrl: string): Promise<Omit<StoredImageThumbnail, 'id'>> {
+  const image = await loadImage(dataUrl)
+  const width = image.naturalWidth
+  const height = image.naturalHeight
+  if (width <= 0 || height <= 0) throw new Error('图片尺寸无效')
+
+  const scale = Math.min(1, THUMBNAIL_MAX_SIZE / Math.max(width, height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(width * scale))
+  canvas.height = Math.max(1, Math.round(height * scale))
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('当前浏览器不支持 Canvas')
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height)
+
+  return {
+    thumbnailDataUrl: canvas.toDataURL('image/webp', THUMBNAIL_QUALITY),
+    width,
+    height,
+    thumbnailVersion: THUMBNAIL_VERSION,
+  }
+}
+
+export async function createAndStoreImageThumbnail(id: string, dataUrl: string) {
+  const thumbnail = await createImageThumbnail(dataUrl)
+  const record: StoredImageThumbnail = {
+    id,
+    thumbnailDataUrl: thumbnail.thumbnailDataUrl,
+    width: thumbnail.width,
+    height: thumbnail.height,
+    thumbnailVersion: THUMBNAIL_VERSION,
+  }
+  await putImageThumbnail(record)
+  const image = await getImage(id)
+  if (image && thumbnail.width && thumbnail.height) {
+    await putImage({ ...image, width: thumbnail.width, height: thumbnail.height, updatedAt: Date.now() })
+  }
+  return record
+}
+
+async function safeCreateImageThumbnail(dataUrl: string): Promise<Partial<Omit<StoredImageThumbnail, 'id'>>> {
+  try {
+    return await createImageThumbnail(dataUrl)
+  } catch {
+    return {}
+  }
 }

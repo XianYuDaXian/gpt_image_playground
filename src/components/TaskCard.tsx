@@ -1,6 +1,13 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
-import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable, updateTaskInStore } from '../store'
+import {
+  useStore,
+  cacheTaskImageForEditing,
+  ensureImageThumbnailCached,
+  ensureTaskImageAvailable,
+  subscribeImageThumbnail,
+  updateTaskInStore,
+} from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
 
@@ -160,25 +167,46 @@ export default function TaskCard({
 
   // 加载缩略图
   useEffect(() => {
+    let cancelled = false
+    let unsubscribe: (() => void) | undefined
+
     setCoverRatio('')
     setCoverSize('')
     setThumbSrc('')
 
-    if (task.outputImages?.[0]) {
-      const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
-      if (remoteUrl) {
-        setThumbSrc(remoteUrl)
-        return
-      }
+    const imageId = task.outputImages?.[0]
+    if (imageId) {
+      unsubscribe = subscribeImageThumbnail(imageId, (thumbnail) => {
+        if (cancelled) return
+        setThumbSrc(thumbnail.dataUrl)
+        if (thumbnail.width && thumbnail.height) {
+          setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
+          setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
+        }
+      })
 
-      const cached = getCachedImage(task.outputImages[0])
-      if (cached) {
-        setThumbSrc(cached)
+      ensureImageThumbnailCached(imageId).then((thumbnail) => {
+        if (cancelled || !thumbnail) return
+        setThumbSrc(thumbnail.dataUrl)
+        if (thumbnail.width && thumbnail.height) {
+          setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
+          setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
+        }
+      })
+
+      const remoteUrl = task.imageUrlsById?.[imageId]
+      if (remoteUrl) {
+        setThumbSrc((prev) => prev || remoteUrl)
       } else {
-        ensureTaskImageAvailable(task.outputImages[0]).then((url) => {
-          if (url) setThumbSrc(url)
+        ensureTaskImageAvailable(imageId).then((url) => {
+          if (!cancelled && url) setThumbSrc((prev) => prev || url)
         })
       }
+    }
+
+    return () => {
+      cancelled = true
+      unsubscribe?.()
     }
   }, [task.outputImages, task.imageUrlsById])
 
@@ -408,14 +436,20 @@ export default function TaskCard({
 
         {/* 右侧信息区域 */}
         <div className="flex-1 p-3 flex flex-col min-w-0">
-          <div className="flex-1 min-h-0 mb-2">
+          <div className="flex-1 min-h-0 mb-2 overflow-hidden">
             <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
               {task.prompt || '(无提示词)'}
             </p>
           </div>
           <div className="mt-auto flex flex-col gap-1.5">
             {/* 参数：横向滚动 */}
-            <div className="flex overflow-x-auto hide-scrollbar gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2">
+            <div
+              className="flex overflow-x-auto tiny-scrollbar gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2 pb-1.5 pt-0.5"
+              onTouchStart={(e) => e.stopPropagation()}
+              onTouchMove={(e) => e.stopPropagation()}
+              onTouchEnd={(e) => e.stopPropagation()}
+              onTouchCancel={(e) => e.stopPropagation()}
+            >
               <ParamValue task={task} paramKey="quality" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
               <ParamValue task={task} paramKey="size" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
               <ParamValue task={task} paramKey="output_format" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />

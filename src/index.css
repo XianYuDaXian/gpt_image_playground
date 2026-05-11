@@ -88,6 +88,39 @@ input[type="number"] {
   display: none;
 }
 
+.tiny-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(156, 163, 175, 0.55) transparent;
+}
+.dark .tiny-scrollbar {
+  scrollbar-color: rgba(113, 113, 122, 0.55) transparent;
+}
+.tiny-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.tiny-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tiny-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(156, 163, 175, 0.55);
+  border-radius: 9999px;
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+.tiny-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(156, 163, 175, 0.85);
+}
+.dark .tiny-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(113, 113, 122, 0.55);
+}
+.dark .tiny-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(113, 113, 122, 0.85);
+}
+.tiny-scrollbar::-webkit-scrollbar-button {
+  display: none;
+}
+
 .mask-edge-r {
   -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
   mask-image: linear-gradient(to right, black 85%, transparent 100%);

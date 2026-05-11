@@ -112,5 +112,18 @@ export interface StoredImage {
   updatedAt?: number
   /** 图片来源：用户上传 / API 生成 / 遮罩 */
   source?: 'upload' | 'generated' | 'mask'
+  /** 原图宽度 */
+  width?: number
+  /** 原图高度 */
+  height?: number
+}
+
+export interface StoredImageThumbnail {
+  id: string
+  /** 列表缩略图，用于避免历史卡片解码完整大图 */
+  thumbnailDataUrl: string
+  width?: number
+  height?: number
+  thumbnailVersion?: number
 }
 
