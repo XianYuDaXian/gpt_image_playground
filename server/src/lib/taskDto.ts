@@ -48,6 +48,8 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[])
     finishedAt,
     elapsed: finishedAt != null ? finishedAt - createdAt : null,
     updatedAt: toMs(task.updatedAt) ?? createdAt,
+    isFavorite: Boolean(task.isFavorite),
+    isArchived: Boolean(task.isArchived),
   }
 }
 

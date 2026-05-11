@@ -7,6 +7,7 @@ export default function TaskGrid() {
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const filterArchived = useStore((s) => s.filterArchived)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -34,6 +35,7 @@ export default function TaskGrid() {
     
     return sorted.filter((t) => {
       if (filterFavorite && !t.isFavorite) return false
+      if (filterArchived ? !t.isArchived : t.isArchived) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -42,7 +44,7 @@ export default function TaskGrid() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -166,7 +168,7 @@ export default function TaskGrid() {
   if (!filteredTasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite ? (
+        {searchQuery || filterFavorite || filterArchived ? (
           <p className="text-sm">没有找到匹配的记录</p>
         ) : (
           <>

@@ -15,6 +15,13 @@ const taskParamsSchema = z.object({
   n: z.number().int().positive().max(16).default(1),
 })
 
+const taskFlagsSchema = z.object({
+  isFavorite: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
+}).refine((value) => value.isFavorite !== undefined || value.isArchived !== undefined, {
+  message: '至少需要更新一个任务状态',
+})
+
 function formatSseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
@@ -148,6 +155,25 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       task,
       events: app.db.listTaskEvents(params.taskId),
     }
+  })
+
+  app.patch('/api/tasks/:taskId', async (request, reply) => {
+    const params = z.object({ taskId: z.string().uuid() }).parse(request.params)
+    const body = taskFlagsSchema.parse(request.body)
+    const task = app.db.updateTaskFlags({
+      id: params.taskId,
+      isFavorite: body.isFavorite,
+      isArchived: body.isArchived,
+    })
+
+    if (!task) {
+      reply.code(404)
+      return { message: '任务不存在' }
+    }
+
+    const serializedTask = serializeTaskRecord(task, app.db.listTaskImages(task.id))
+    app.taskEvents.emitTaskChanged(task.id)
+    return { task: serializedTask }
   })
 
   app.get('/api/tasks/events', async (request, reply) => {

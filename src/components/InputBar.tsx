@@ -62,6 +62,7 @@ export default function InputBar() {
   const tasks = useStore((s) => s.tasks)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
+  const filterArchived = useStore((s) => s.filterArchived)
   const searchQuery = useStore((s) => s.searchQuery)
 
   const filteredTasks = useMemo(() => {
@@ -70,6 +71,7 @@ export default function InputBar() {
     
     return sorted.filter((t) => {
       if (filterFavorite && !t.isFavorite) return false
+      if (filterArchived ? !t.isArchived : t.isArchived) return false
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
@@ -78,7 +80,7 @@ export default function InputBar() {
       const paramStr = JSON.stringify(t.params).toLowerCase()
       return prompt.includes(q) || paramStr.includes(q)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite])
+  }, [tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
 
   const isIOS = useMemo(() => {
     const ua = navigator.userAgent || ''
@@ -107,6 +109,25 @@ export default function InputBar() {
       action: () => {
         selectedTaskIds.forEach((id) => {
           updateTaskInStore(id, { isFavorite: newFavoriteState })
+        })
+        clearSelection()
+      },
+    })
+  }, [tasks, selectedTaskIds, clearSelection, setConfirmDialog])
+
+  const handleToggleArchived = useCallback(() => {
+    const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
+    const allArchived = selectedTasks.length > 0 && selectedTasks.every((t) => t.isArchived)
+    const newArchivedState = !allArchived
+    setConfirmDialog({
+      title: newArchivedState ? '批量归档' : '批量取消归档',
+      message: newArchivedState
+        ? `确定要归档选中的 ${selectedTaskIds.length} 条记录吗？归档后默认列表不再显示。`
+        : `确定要取消归档选中的 ${selectedTaskIds.length} 条记录吗？`,
+      confirmText: newArchivedState ? '确认归档' : '确认取消',
+      action: () => {
+        selectedTaskIds.forEach((id) => {
+          updateTaskInStore(id, { isArchived: newArchivedState })
         })
         clearSelection()
       },
@@ -182,6 +203,7 @@ export default function InputBar() {
   const prevHeightRef = useRef(42)
 
   const [isDragging, setIsDragging] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
   const [compressionHintVisible, setCompressionHintVisible] = useState(false)
@@ -207,7 +229,21 @@ export default function InputBar() {
   const isMobile = useIsMobile()
 
   const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
-  const canSubmit = prompt.trim() && hasConfiguredProvider
+  const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
+
+  const handleSubmit = useCallback(async () => {
+    if (!hasConfiguredProvider) {
+      setShowSettings(true)
+      return
+    }
+    if (!canSubmit) return
+    setIsSubmitting(true)
+    try {
+      await submitTask()
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [canSubmit, hasConfiguredProvider, setShowSettings])
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -429,7 +465,7 @@ export default function InputBar() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
       e.preventDefault()
-      submitTask()
+      void handleSubmit()
     }
   }
 
@@ -1000,6 +1036,18 @@ export default function InputBar() {
               </button>
               <div className="w-px h-5 bg-white/20 mx-1"></div>
               <button
+                onClick={handleToggleArchived}
+                className="p-2 text-slate-300 hover:text-white transition-colors"
+                title="归档/取消归档"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <rect x="4" y="4" width="16" height="5" rx="1" />
+                  <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
+                  <path d="M10 13h4" />
+                </svg>
+              </button>
+              <div className="w-px h-5 bg-white/20 mx-1"></div>
+              <button
                 onClick={handleBatchDownload}
                 className="p-2 text-emerald-400 hover:text-emerald-300 transition-colors"
                 title={isIOS ? 'iOS 暂不支持批量下载' : '批量下载'}
@@ -1104,7 +1152,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => hasConfiguredProvider ? submitTask() : setShowSettings(true)}
+                    onClick={handleSubmit}
                     disabled={hasConfiguredProvider ? !canSubmit : false}
                     className={`p-2.5 rounded-xl transition-all shadow-sm hover:shadow ${
                       !hasConfiguredProvider
@@ -1113,9 +1161,16 @@ export default function InputBar() {
                     }`}
                     title={hasConfiguredProvider ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
+                    {isSubmitting ? (
+                      <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                    )}
                   </button>
                 </div>
               </div>
@@ -1158,7 +1213,7 @@ export default function InputBar() {
                 >
                   <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
-                    onClick={() => hasConfiguredProvider ? submitTask() : setShowSettings(true)}
+                    onClick={handleSubmit}
                     disabled={hasConfiguredProvider ? !canSubmit : false}
                     className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm ${
                       !hasConfiguredProvider
@@ -1166,10 +1221,17 @@ export default function InputBar() {
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 dark:disabled:bg-white/[0.04] disabled:opacity-50 disabled:cursor-not-allowed'
                     }`}
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                    {maskDraft ? '遮罩编辑' : '生成图像'}
+                    {isSubmitting ? (
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                    )}
+                    {isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}
                   </button>
                 </div>
               </div>

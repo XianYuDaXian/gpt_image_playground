@@ -21,7 +21,7 @@ import {
   putImage,
 } from './lib/db'
 import { fetchBackendRuntimeSettings } from './lib/backendSettings'
-import { createBackendTask, deleteBackendTask, fetchBackendTasks } from './lib/backendTasks'
+import { createBackendTask, deleteBackendTask, fetchBackendTasks, updateBackendTaskFlags } from './lib/backendTasks'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { normalizeImageSize } from './lib/size'
@@ -44,6 +44,10 @@ const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
 function sortTasksForDisplay(tasks: TaskRecord[]) {
   return [...tasks].sort((a, b) => b.createdAt - a.createdAt)
+}
+
+function mergeLocalTaskFlags(serverTasks: TaskRecord[]) {
+  return serverTasks
 }
 
 export function getCachedImage(id: string): string | undefined {
@@ -230,6 +234,8 @@ interface AppState {
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
+  filterArchived: boolean
+  setFilterArchived: (f: boolean) => void
 
   // 多选
   selectedTaskIds: string[]
@@ -279,6 +285,16 @@ export const useStore = create<AppState>()(
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
+          responseFormatB64Json:
+            s.responseFormatB64Json ?? st.settings.responseFormatB64Json ?? DEFAULT_SETTINGS.responseFormatB64Json,
+          clearInputAfterSubmit:
+            s.clearInputAfterSubmit ?? st.settings.clearInputAfterSubmit ?? DEFAULT_SETTINGS.clearInputAfterSubmit,
+          persistInputOnRestart:
+            s.persistInputOnRestart ?? st.settings.persistInputOnRestart ?? DEFAULT_SETTINGS.persistInputOnRestart,
+          reuseTaskApiProfileTemporarily:
+            s.reuseTaskApiProfileTemporarily ?? st.settings.reuseTaskApiProfileTemporarily ?? DEFAULT_SETTINGS.reuseTaskApiProfileTemporarily,
+          alwaysShowRetryButton:
+            s.alwaysShowRetryButton ?? st.settings.alwaysShowRetryButton ?? DEFAULT_SETTINGS.alwaysShowRetryButton,
           apiKeyMasked:
             s.apiKeyMasked === undefined
               ? st.settings.apiKeyMasked ?? DEFAULT_SETTINGS.apiKeyMasked
@@ -378,6 +394,8 @@ export const useStore = create<AppState>()(
       setFilterStatus: (filterStatus) => set({ filterStatus }),
       filterFavorite: false,
       setFilterFavorite: (filterFavorite) => set({ filterFavorite }),
+      filterArchived: false,
+      setFilterArchived: (filterArchived) => set({ filterArchived }),
 
       // Selection
       selectedTaskIds: [],
@@ -427,6 +445,9 @@ export const useStore = create<AppState>()(
         settings: state.settings,
         params: state.params,
         tasks: state.tasks,
+        ...(state.settings.persistInputOnRestart
+          ? { prompt: state.prompt, inputImages: state.inputImages, maskDraft: state.maskDraft }
+          : {}),
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
         themeMode: state.themeMode,
       }),
@@ -490,7 +511,7 @@ export async function initStore() {
 
   try {
     const tasks = await fetchBackendTasks()
-    useStore.getState().setTasks(sortTasksForDisplay(tasks))
+    useStore.getState().setTasks(sortTasksForDisplay(mergeLocalTaskFlags(tasks)))
   } catch (err) {
     useStore.getState().showToast(
       `读取后端任务失败：${err instanceof Error ? err.message : String(err)}`,
@@ -583,7 +604,12 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
     const latestTasks = useStore.getState().tasks
     useStore.getState().setTasks(sortTasksForDisplay([task, ...latestTasks.filter((item) => item.id !== task.id)]))
     useStore.getState().showToast('任务已提交到后端队列', 'success')
-    useStore.getState().clearMaskDraft()
+    if (settings.clearInputAfterSubmit) {
+      useStore.getState().setPrompt('')
+      useStore.getState().clearInputImages()
+    } else {
+      useStore.getState().clearMaskDraft()
+    }
     syncTaskEventSources([task, ...latestTasks.filter((item) => item.id !== task.id)])
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err), 'error')
@@ -591,11 +617,21 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
 }
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
-  const { tasks, setTasks } = useStore.getState()
+  const { tasks, setTasks, showToast } = useStore.getState()
   const updated = tasks.map((t) =>
     t.id === taskId ? { ...t, ...patch, updatedAt: Date.now() } : t,
   )
   setTasks(sortTasksForDisplay(updated))
+
+  if ('isFavorite' in patch || 'isArchived' in patch) {
+    void updateBackendTaskFlags(taskId, {
+      ...('isFavorite' in patch ? { isFavorite: patch.isFavorite } : {}),
+      ...('isArchived' in patch ? { isArchived: patch.isArchived } : {}),
+    }).catch((err) => {
+      showToast(`同步任务状态失败：${err instanceof Error ? err.message : String(err)}`, 'error')
+      void refreshTasksFromServer({ silent: true })
+    })
+  }
 }
 
 /** 复用配置 */
@@ -930,8 +966,9 @@ function removeTaskFromStore(taskId: string) {
 async function refreshTasksFromServer(options: { silent?: boolean } = {}) {
   try {
     const tasksFromServer = await fetchBackendTasks()
-    useStore.getState().setTasks(sortTasksForDisplay(tasksFromServer))
-    syncTaskEventSources(tasksFromServer)
+    const mergedTasks = mergeLocalTaskFlags(tasksFromServer)
+    useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
+    syncTaskEventSources(mergedTasks)
   } catch (err) {
     if (!options.silent) {
       useStore.getState().showToast(
@@ -980,8 +1017,9 @@ function setupGlobalTaskListStream() {
   source.addEventListener('snapshot', (event) => {
     const payload = JSON.parse((event as MessageEvent<string>).data) as { tasks?: TaskRecord[] }
     if (!payload.tasks) return
-    useStore.getState().setTasks(sortTasksForDisplay(payload.tasks))
-    syncTaskEventSources(payload.tasks)
+    const mergedTasks = mergeLocalTaskFlags(payload.tasks)
+    useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
+    syncTaskEventSources(mergedTasks)
   })
   source.addEventListener('task', (event) => {
     const payload = JSON.parse((event as MessageEvent<string>).data) as

@@ -245,6 +245,9 @@ async function callImagesApi(
     formData.append('size', payload.params.size)
     formData.append('output_format', payload.params.output_format)
     formData.append('moderation', payload.params.moderation)
+    if (payload.provider.responseFormatB64Json) {
+      formData.append('response_format', 'b64_json')
+    }
 
     if (!payload.runtime?.codexCli) {
       formData.append('quality', payload.params.quality)
@@ -304,6 +307,7 @@ async function callImagesApi(
           size: payload.params.size,
           output_format: payload.params.output_format,
           moderation: payload.params.moderation,
+          ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
           ...(payload.runtime?.codexCli ? {} : { quality: payload.params.quality }),
           ...(payload.params.output_format !== 'png'
             && payload.params.output_compression != null

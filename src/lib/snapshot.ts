@@ -485,6 +485,8 @@ function normalizeTask(task: Partial<TaskRecord>, fallback: number): TaskRecord 
     createdAt: task.createdAt ?? fallback,
     finishedAt: task.finishedAt ?? null,
     elapsed: task.elapsed ?? null,
+    isFavorite: task.isFavorite ?? false,
+    isArchived: task.isArchived ?? false,
     updatedAt: task.updatedAt ?? task.finishedAt ?? task.createdAt ?? fallback,
   }
 }

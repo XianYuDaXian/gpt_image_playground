@@ -126,6 +126,11 @@ input[type="number"] {
   mask-image: linear-gradient(to right, black 85%, transparent 100%);
 }
 
+.mask-edge-x {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, black 1rem, black calc(100% - 1rem), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, black 1rem, black calc(100% - 1rem), transparent 100%);
+}
+
 @keyframes toast-enter {
   0% { transform: translate(-50%, 16px); opacity: 0; }
   100% { transform: translate(-50%, 0); opacity: 1; }

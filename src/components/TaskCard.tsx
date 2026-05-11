@@ -491,6 +491,23 @@ export default function TaskCard({
                 </svg>
               </button>
               <button
+                onClick={() =>
+                  updateTaskInStore(task.id, { isArchived: !task.isArchived })
+                }
+                className={`p-1.5 rounded-md transition ${
+                  task.isArchived
+                    ? 'text-slate-500 hover:bg-slate-100 dark:hover:bg-white/[0.06]'
+                    : 'text-gray-400 hover:text-slate-500 hover:bg-slate-100 dark:hover:bg-white/[0.06]'
+                }`}
+                title={task.isArchived ? '取消归档' : '归档记录'}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                  <rect x="4" y="4" width="16" height="5" rx="1" />
+                  <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
+                  <path d="M10 13h4" />
+                </svg>
+              </button>
+              <button
                 onClick={onReuse}
                 className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
                 title="复用配置"

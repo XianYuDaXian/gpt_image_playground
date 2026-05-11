@@ -34,6 +34,13 @@ export class TaskEventBus {
     } satisfies TaskListEventRecord)
   }
 
+  emitTaskChanged(taskId: string) {
+    this.emitter.emit(TaskEventBus.TASK_LIST_CHANNEL, {
+      type: 'upsert',
+      taskId,
+    } satisfies TaskListEventRecord)
+  }
+
   subscribe(taskId: string, listener: (event: TaskEventRecord) => void) {
     this.emitter.on(taskId, listener)
     return () => {

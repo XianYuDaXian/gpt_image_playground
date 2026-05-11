@@ -12,6 +12,11 @@ export interface AppSettings {
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
+  responseFormatB64Json: boolean
+  clearInputAfterSubmit: boolean
+  persistInputOnRestart: boolean
+  reuseTaskApiProfileTemporarily: boolean
+  alwaysShowRetryButton: boolean
   updatedAt?: number
 }
 
@@ -28,6 +33,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   timeout: 300,
   apiMode: 'images',
   codexCli: false,
+  responseFormatB64Json: false,
+  clearInputAfterSubmit: false,
+  persistInputOnRestart: true,
+  reuseTaskApiProfileTemporarily: false,
+  alwaysShowRetryButton: false,
 }
 
 // ===== 任务参数 =====
@@ -99,6 +109,8 @@ export interface TaskRecord {
   elapsed: number | null
   /** 是否收藏 */
   isFavorite?: boolean
+  /** 是否归档 */
+  isArchived?: boolean
 }
 
 // ===== IndexedDB 存储的图片 =====

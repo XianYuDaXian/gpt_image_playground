@@ -2,6 +2,8 @@ import { normalizeBaseUrl } from './devProxy'
 import type { AppSettings } from '../types'
 
 export interface BackendRuntimeSettings {
+  id?: string
+  name?: string
   baseUrl: string
   apiKey: string
   apiKeyMasked?: string | null
@@ -10,7 +12,28 @@ export interface BackendRuntimeSettings {
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
+  responseFormatB64Json: boolean
+  clearInputAfterSubmit: boolean
+  persistInputOnRestart: boolean
+  reuseTaskApiProfileTemporarily: boolean
+  alwaysShowRetryButton: boolean
   source?: 'env' | 'database'
+}
+
+export interface BackendProviderProfile {
+  id: string
+  name: string
+  baseUrl: string
+  apiKey?: string
+  apiKeyMasked?: string | null
+  apiKeyConfigured?: boolean
+  model: string
+  apiMode: AppSettings['apiMode']
+  timeoutSeconds: number
+  responseFormatB64Json: boolean
+  isDefault: boolean
+  createdAt?: string
+  updatedAt?: string
 }
 
 async function readResponseJson<T>(response: Response): Promise<T> {
@@ -44,6 +67,11 @@ export async function saveBackendRuntimeSettings(settings: {
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
+  responseFormatB64Json: boolean
+  clearInputAfterSubmit: boolean
+  persistInputOnRestart: boolean
+  reuseTaskApiProfileTemporarily: boolean
+  alwaysShowRetryButton: boolean
 }): Promise<BackendRuntimeSettings> {
   const response = await fetch('/api/runtime-settings', {
     method: 'PUT',
@@ -57,6 +85,67 @@ export async function saveBackendRuntimeSettings(settings: {
   })
 
   return readResponseJson<BackendRuntimeSettings>(response)
+}
+
+export async function saveBackendRuntimePreferences(settings: {
+  codexCli: boolean
+  clearInputAfterSubmit: boolean
+  persistInputOnRestart: boolean
+  reuseTaskApiProfileTemporarily: boolean
+  alwaysShowRetryButton: boolean
+}): Promise<Pick<
+  BackendRuntimeSettings,
+  | 'codexCli'
+  | 'clearInputAfterSubmit'
+  | 'persistInputOnRestart'
+  | 'reuseTaskApiProfileTemporarily'
+  | 'alwaysShowRetryButton'
+>> {
+  const response = await fetch('/api/runtime-preferences', {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(settings),
+  })
+
+  return readResponseJson(response)
+}
+
+export async function fetchBackendProviderProfiles(): Promise<BackendProviderProfile[]> {
+  const response = await fetch('/api/admin/provider-profiles', { cache: 'no-store' })
+  return readResponseJson<BackendProviderProfile[]>(response)
+}
+
+export async function createBackendProviderProfile(profile: Omit<BackendProviderProfile, 'createdAt' | 'updatedAt' | 'apiKeyMasked' | 'apiKeyConfigured'>): Promise<BackendProviderProfile> {
+  const response = await fetch('/api/admin/provider-profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...profile,
+      baseUrl: normalizeBaseUrl(profile.baseUrl),
+    }),
+  })
+  return readResponseJson<BackendProviderProfile>(response)
+}
+
+export async function updateBackendProviderProfile(profile: BackendProviderProfile): Promise<BackendProviderProfile> {
+  const response = await fetch(`/api/admin/provider-profiles/${encodeURIComponent(profile.id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...profile,
+      baseUrl: normalizeBaseUrl(profile.baseUrl),
+    }),
+  })
+  return readResponseJson<BackendProviderProfile>(response)
+}
+
+export async function deleteBackendProviderProfile(profileId: string): Promise<void> {
+  const response = await fetch(`/api/admin/provider-profiles/${encodeURIComponent(profileId)}`, {
+    method: 'DELETE',
+  })
+  await readResponseJson<{ ok: true }>(response)
 }
 
 export async function resetBackendRemoteData(mode: 'tasks' | 'all') {

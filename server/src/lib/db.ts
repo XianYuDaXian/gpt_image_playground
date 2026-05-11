@@ -11,6 +11,7 @@ export interface ProviderProfileRecord {
   model: string
   apiMode: 'images' | 'responses'
   timeoutSeconds: number
+  responseFormatB64Json: number
   isDefault: number
   createdAt: string
   updatedAt: string
@@ -28,6 +29,8 @@ export interface TaskRecord {
   createdAt: string
   updatedAt: string
   finishedAt: string | null
+  isFavorite: number
+  isArchived: number
 }
 
 export interface TaskImageRecord {
@@ -64,6 +67,7 @@ export class AppDatabase {
         model TEXT NOT NULL,
         api_mode TEXT NOT NULL,
         timeout_seconds INTEGER NOT NULL,
+        response_format_b64_json INTEGER NOT NULL DEFAULT 0,
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -90,6 +94,8 @@ export class AppDatabase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         finished_at TEXT,
+        is_favorite INTEGER NOT NULL DEFAULT 0,
+        is_archived INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(provider_profile_id) REFERENCES provider_profiles(id) ON DELETE SET NULL
       );
 
@@ -118,6 +124,20 @@ export class AppDatabase {
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
       );
     `)
+
+    const taskColumns = this.sqlite.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>
+    const taskColumnNames = new Set(taskColumns.map((column) => column.name))
+    if (!taskColumnNames.has('is_favorite')) {
+      this.sqlite.exec('ALTER TABLE tasks ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!taskColumnNames.has('is_archived')) {
+      this.sqlite.exec('ALTER TABLE tasks ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0')
+    }
+    const profileColumns = this.sqlite.prepare('PRAGMA table_info(provider_profiles)').all() as Array<{ name: string }>
+    const profileColumnNames = new Set(profileColumns.map((column) => column.name))
+    if (!profileColumnNames.has('response_format_b64_json')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN response_format_b64_json INTEGER NOT NULL DEFAULT 0')
+    }
   }
 
   listProviderProfiles() {
@@ -131,6 +151,7 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -151,6 +172,7 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -171,6 +193,7 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -189,6 +212,7 @@ export class AppDatabase {
     model: string
     apiMode: 'images' | 'responses'
     timeoutSeconds: number
+    responseFormatB64Json?: boolean
     isDefault: boolean
   }) {
     const now = new Date().toISOString()
@@ -206,6 +230,7 @@ export class AppDatabase {
           model,
           api_mode,
           timeout_seconds,
+          response_format_b64_json,
           is_default,
           created_at,
           updated_at
@@ -218,6 +243,7 @@ export class AppDatabase {
           @model,
           @apiMode,
           @timeoutSeconds,
+          @responseFormatB64Json,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -229,10 +255,12 @@ export class AppDatabase {
           model = excluded.model,
           api_mode = excluded.api_mode,
           timeout_seconds = excluded.timeout_seconds,
+          response_format_b64_json = excluded.response_format_b64_json,
           is_default = excluded.is_default,
           updated_at = excluded.updated_at
       `).run({
         ...input,
+        responseFormatB64Json: input.responseFormatB64Json ? 1 : 0,
         isDefault: input.isDefault ? 1 : 0,
         createdAt: now,
         updatedAt: now,
@@ -241,6 +269,28 @@ export class AppDatabase {
 
     tx()
     return this.getProviderProfile(input.id)
+  }
+
+  deleteProviderProfile(id: string) {
+    const profile = this.getProviderProfile(id)
+    if (!profile) return false
+    const count = this.sqlite.prepare('SELECT COUNT(*) as count FROM provider_profiles').get() as { count: number }
+    if (count.count <= 1) {
+      throw new Error('至少需要保留一个 API 配置')
+    }
+    this.sqlite.prepare('DELETE FROM provider_profiles WHERE id = ?').run(id)
+    if (profile.isDefault) {
+      this.sqlite.prepare(`
+        UPDATE provider_profiles
+        SET is_default = 1, updated_at = ?
+        WHERE id = (
+          SELECT id FROM provider_profiles
+          ORDER BY updated_at DESC
+          LIMIT 1
+        )
+      `).run(new Date().toISOString())
+    }
+    return true
   }
 
   getAppSetting<T>(key: string) {
@@ -308,7 +358,9 @@ export class AppDatabase {
           provider_profile_id as providerProfileId,
           created_at as createdAt,
           updated_at as updatedAt,
-          finished_at as finishedAt
+          finished_at as finishedAt,
+          is_favorite as isFavorite,
+          is_archived as isArchived
         FROM tasks
         ORDER BY created_at DESC
         LIMIT ?
@@ -330,7 +382,9 @@ export class AppDatabase {
           provider_profile_id as providerProfileId,
           created_at as createdAt,
           updated_at as updatedAt,
-          finished_at as finishedAt
+          finished_at as finishedAt,
+          is_favorite as isFavorite,
+          is_archived as isArchived
         FROM tasks
         WHERE id = ?
       `)
@@ -372,6 +426,33 @@ export class AppDatabase {
 
     if (!result.changes) return null
 
+    return this.getTask(input.id)
+  }
+
+  updateTaskFlags(input: {
+    id: string
+    isFavorite?: boolean
+    isArchived?: boolean
+  }) {
+    const now = new Date().toISOString()
+    const current = this.getTask(input.id)
+    if (!current) return null
+
+    const result = this.sqlite.prepare(`
+      UPDATE tasks
+      SET
+        is_favorite = @isFavorite,
+        is_archived = @isArchived,
+        updated_at = @updatedAt
+      WHERE id = @id
+    `).run({
+      id: input.id,
+      isFavorite: input.isFavorite == null ? current.isFavorite : input.isFavorite ? 1 : 0,
+      isArchived: input.isArchived == null ? current.isArchived : input.isArchived ? 1 : 0,
+      updatedAt: now,
+    })
+
+    if (!result.changes) return null
     return this.getTask(input.id)
   }
 
@@ -504,6 +585,8 @@ export class AppDatabase {
       createdAt: string
       updatedAt: string
       finishedAt: string | null
+      isFavorite?: boolean
+      isArchived?: boolean
     }>
     taskImages: Array<{
       id: string
@@ -535,7 +618,9 @@ export class AppDatabase {
           provider_profile_id,
           created_at,
           updated_at,
-          finished_at
+          finished_at,
+          is_favorite,
+          is_archived
         )
         VALUES (
           @id,
@@ -548,7 +633,9 @@ export class AppDatabase {
           @providerProfileId,
           @createdAt,
           @updatedAt,
-          @finishedAt
+          @finishedAt,
+          @isFavorite,
+          @isArchived
         )
       `)
 
@@ -580,7 +667,11 @@ export class AppDatabase {
       `)
 
       for (const task of input.tasks) {
-        insertTask.run(task)
+        insertTask.run({
+          ...task,
+          isFavorite: task.isFavorite ? 1 : 0,
+          isArchived: task.isArchived ? 1 : 0,
+        })
       }
       for (const image of input.taskImages) {
         insertTaskImage.run(image)

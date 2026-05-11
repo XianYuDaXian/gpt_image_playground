@@ -56,6 +56,7 @@ if (appConfig.bootstrapProvider && !app.db.getDefaultProviderProfile()) {
     model: appConfig.bootstrapProvider.model,
     apiMode: appConfig.bootstrapProvider.apiMode,
     timeoutSeconds: appConfig.bootstrapProvider.timeoutSeconds,
+    responseFormatB64Json: false,
     isDefault: true,
   })
   app.db.setAppSetting('runtime', {

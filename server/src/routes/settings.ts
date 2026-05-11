@@ -11,10 +11,11 @@ const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
   baseUrl: z.string().url(),
-  apiKey: z.string().min(1),
+  apiKey: z.string().optional(),
   model: z.string().min(1),
   apiMode: z.enum(['images', 'responses']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
+  responseFormatB64Json: z.boolean().default(false),
   isDefault: z.boolean().default(false),
 })
 
@@ -25,6 +26,19 @@ const runtimeSettingsSchema = z.object({
   apiMode: z.enum(['images', 'responses']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
+  responseFormatB64Json: z.boolean().default(false),
+  clearInputAfterSubmit: z.boolean().default(false),
+  persistInputOnRestart: z.boolean().default(true),
+  reuseTaskApiProfileTemporarily: z.boolean().default(false),
+  alwaysShowRetryButton: z.boolean().default(false),
+})
+
+const runtimePreferencesSchema = runtimeSettingsSchema.pick({
+  codexCli: true,
+  clearInputAfterSubmit: true,
+  persistInputOnRestart: true,
+  reuseTaskApiProfileTemporarily: true,
+  alwaysShowRetryButton: true,
 })
 
 const backupTaskSchema = z.object({
@@ -49,6 +63,8 @@ const backupTaskSchema = z.object({
   createdAt: z.number(),
   finishedAt: z.number().nullable(),
   updatedAt: z.number().optional(),
+  isFavorite: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
 })
 
 const backupImageSchema = z.object({
@@ -85,9 +101,34 @@ const resetRemoteDataSchema = z.object({
   mode: z.enum(['tasks', 'all']),
 })
 
-function getCodexCliSetting(app: Parameters<FastifyPluginAsync>[0]) {
-  const runtime = app.db.getAppSetting<{ codexCli?: boolean }>('runtime')
-  return Boolean(runtime?.codexCli)
+function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
+  const runtime = app.db.getAppSetting<Partial<z.infer<typeof runtimeSettingsSchema>>>('runtime')
+  return {
+    codexCli: Boolean(runtime?.codexCli),
+    clearInputAfterSubmit: Boolean(runtime?.clearInputAfterSubmit),
+    persistInputOnRestart: runtime?.persistInputOnRestart !== false,
+    reuseTaskApiProfileTemporarily: Boolean(runtime?.reuseTaskApiProfileTemporarily),
+    alwaysShowRetryButton: Boolean(runtime?.alwaysShowRetryButton),
+  }
+}
+
+function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
+  const apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
+  return {
+    id: profile.id,
+    name: profile.name,
+    baseUrl: profile.baseUrl,
+    apiKey: includeApiKey ? apiKey : '',
+    apiKeyMasked: maskSecret(apiKey),
+    apiKeyConfigured: true,
+    model: profile.model,
+    apiMode: profile.apiMode,
+    timeoutSeconds: profile.timeoutSeconds,
+    responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+    isDefault: Boolean(profile.isDefault),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  }
 }
 
 function toIsoTimestamp(value: number | null | undefined, fallback: string) {
@@ -179,8 +220,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
+    const preferences = getRuntimePreferences(app)
 
     return {
+      id: profile.id,
+      name: profile.name,
       baseUrl: profile.baseUrl,
       apiKey,
       apiKeyMasked: maskSecret(apiKey),
@@ -188,7 +232,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: profile.model,
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
-      codexCli: getCodexCliSetting(app),
+      codexCli: preferences.codexCli,
+      responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+      clearInputAfterSubmit: preferences.clearInputAfterSubmit,
+      persistInputOnRestart: preferences.persistInputOnRestart,
+      reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
+      alwaysShowRetryButton: preferences.alwaysShowRetryButton,
       source: profile.id === 'env-default' ? 'env' : 'database',
     }
   })
@@ -204,11 +253,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
 
     app.db.setAppSetting('runtime', {
       codexCli: payload.codexCli,
+      clearInputAfterSubmit: payload.clearInputAfterSubmit,
+      persistInputOnRestart: payload.persistInputOnRestart,
+      reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
+      alwaysShowRetryButton: payload.alwaysShowRetryButton,
     })
 
     if (!profile) {
@@ -216,6 +270,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     return {
+      id: profile.id,
+      name: profile.name,
       baseUrl: profile.baseUrl,
       apiKey: payload.apiKey,
       apiKeyMasked: maskSecret(payload.apiKey),
@@ -223,24 +279,24 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: profile.model,
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
+      responseFormatB64Json: Boolean(profile.responseFormatB64Json),
       codexCli: payload.codexCli,
+      clearInputAfterSubmit: payload.clearInputAfterSubmit,
+      persistInputOnRestart: payload.persistInputOnRestart,
+      reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
+      alwaysShowRetryButton: payload.alwaysShowRetryButton,
       source: 'database',
     }
   })
 
+  app.put('/api/runtime-preferences', async (request) => {
+    const payload = runtimePreferencesSchema.parse(request.body)
+    app.db.setAppSetting('runtime', payload)
+    return getRuntimePreferences(app)
+  })
+
   app.get('/api/admin/provider-profiles', async () => {
-    return app.db.listProviderProfiles().map((profile) => ({
-      id: profile.id,
-      name: profile.name,
-      baseUrl: profile.baseUrl,
-      apiKeyMasked: maskSecret(decryptText(profile.apiKeyEncrypted, app.config.appSecret)),
-      model: profile.model,
-      apiMode: profile.apiMode,
-      timeoutSeconds: profile.timeoutSeconds,
-      isDefault: Boolean(profile.isDefault),
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    }))
+    return app.db.listProviderProfiles().map((profile) => serializeProfile(app, profile))
   })
 
   app.get('/api/admin/provider-profiles/default', async (_request, reply) => {
@@ -250,31 +306,28 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: '默认 provider profile 不存在' }
     }
 
-    return {
-      id: profile.id,
-      name: profile.name,
-      baseUrl: profile.baseUrl,
-      apiKeyMasked: maskSecret(decryptText(profile.apiKeyEncrypted, app.config.appSecret)),
-      model: profile.model,
-      apiMode: profile.apiMode,
-      timeoutSeconds: profile.timeoutSeconds,
-      isDefault: true,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-    }
+    return serializeProfile(app, profile)
   })
 
   app.put('/api/admin/provider-profiles/default', async (request) => {
     const payload = providerProfileSchema.parse(request.body)
     const currentDefaultProfile = app.db.getDefaultProviderProfile()
+    const currentProfile = payload.id ? app.db.getProviderProfile(payload.id) : currentDefaultProfile
+    const apiKey = payload.apiKey?.trim()
+    if (!apiKey && !currentProfile) {
+      throw new Error('新建 API 配置需要填写 API Key')
+    }
     const profile = app.db.upsertProviderProfile({
       id: payload.id ?? currentDefaultProfile?.id ?? crypto.randomUUID(),
       name: payload.name,
       baseUrl: payload.baseUrl,
-      apiKeyEncrypted: encryptText(payload.apiKey, app.config.appSecret),
+      apiKeyEncrypted: apiKey
+        ? encryptText(apiKey, app.config.appSecret)
+        : currentProfile?.apiKeyEncrypted ?? '',
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
 
@@ -282,18 +335,62 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       throw new Error('保存默认 provider profile 失败')
     }
 
-    return {
-      id: profile.id,
-      name: profile.name,
-      baseUrl: profile.baseUrl,
-      apiKeyMasked: maskSecret(payload.apiKey),
-      model: profile.model,
-      apiMode: profile.apiMode,
-      timeoutSeconds: profile.timeoutSeconds,
-      isDefault: Boolean(profile.isDefault),
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
+    return serializeProfile(app, profile)
+  })
+
+  app.post('/api/admin/provider-profiles', async (request) => {
+    const payload = providerProfileSchema.parse(request.body)
+    const apiKey = payload.apiKey?.trim()
+    if (!apiKey) throw new Error('新建 API 配置需要填写 API Key')
+    const profile = app.db.upsertProviderProfile({
+      id: payload.id ?? crypto.randomUUID(),
+      name: payload.name,
+      baseUrl: payload.baseUrl,
+      apiKeyEncrypted: encryptText(apiKey, app.config.appSecret),
+      model: payload.model,
+      apiMode: payload.apiMode,
+      timeoutSeconds: payload.timeoutSeconds,
+      responseFormatB64Json: payload.responseFormatB64Json,
+      isDefault: payload.isDefault,
+    })
+    if (!profile) throw new Error('创建 API 配置失败')
+    return serializeProfile(app, profile)
+  })
+
+  app.put('/api/admin/provider-profiles/:profileId', async (request, reply) => {
+    const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
+    const payload = providerProfileSchema.parse(request.body)
+    const currentProfile = app.db.getProviderProfile(params.profileId)
+    if (!currentProfile) {
+      reply.code(404)
+      return { message: 'API 配置不存在' }
     }
+    const apiKey = payload.apiKey?.trim()
+    const profile = app.db.upsertProviderProfile({
+      id: params.profileId,
+      name: payload.name,
+      baseUrl: payload.baseUrl,
+      apiKeyEncrypted: apiKey
+        ? encryptText(apiKey, app.config.appSecret)
+        : currentProfile.apiKeyEncrypted,
+      model: payload.model,
+      apiMode: payload.apiMode,
+      timeoutSeconds: payload.timeoutSeconds,
+      responseFormatB64Json: payload.responseFormatB64Json,
+      isDefault: payload.isDefault,
+    })
+    if (!profile) throw new Error('保存 API 配置失败')
+    return serializeProfile(app, profile)
+  })
+
+  app.delete('/api/admin/provider-profiles/:profileId', async (request, reply) => {
+    const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
+    const deleted = app.db.deleteProviderProfile(params.profileId)
+    if (!deleted) {
+      reply.code(404)
+      return { message: 'API 配置不存在' }
+    }
+    return { ok: true }
   })
 
   app.post('/api/admin/data/import', async (request) => {
@@ -306,11 +403,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.runtimeSettings.model,
       apiMode: payload.runtimeSettings.apiMode,
       timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
+      responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json,
       isDefault: true,
     })
 
     app.db.setAppSetting('runtime', {
       codexCli: payload.runtimeSettings.codexCli,
+      clearInputAfterSubmit: payload.runtimeSettings.clearInputAfterSubmit,
+      persistInputOnRestart: payload.runtimeSettings.persistInputOnRestart,
+      reuseTaskApiProfileTemporarily: payload.runtimeSettings.reuseTaskApiProfileTemporarily,
+      alwaysShowRetryButton: payload.runtimeSettings.alwaysShowRetryButton,
     })
 
     await fs.rm(app.config.mediaDir, { recursive: true, force: true })
@@ -339,6 +441,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       createdAt: toIsoTimestamp(task.createdAt, nowIso),
       updatedAt: toIsoTimestamp(task.updatedAt ?? task.finishedAt ?? task.createdAt, nowIso),
       finishedAt: task.finishedAt ? toIsoTimestamp(task.finishedAt, nowIso) : null,
+      isFavorite: task.isFavorite ?? false,
+      isArchived: task.isArchived ?? false,
     }))
 
     const imageMap = new Map(payload.images.map((image) => [image.id, image] as const))
@@ -388,7 +492,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           model: profile.model,
           apiMode: profile.apiMode,
           timeoutSeconds: profile.timeoutSeconds,
-          codexCli: getCodexCliSetting(app),
+          responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+          ...getRuntimePreferences(app),
         }
       : null
 

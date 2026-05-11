@@ -35,6 +35,19 @@ export async function deleteBackendTask(taskId: string): Promise<void> {
   await readResponseJson<{ ok: true }>(response)
 }
 
+export async function updateBackendTaskFlags(
+  taskId: string,
+  patch: { isFavorite?: boolean; isArchived?: boolean },
+): Promise<TaskRecord> {
+  const response = await fetch(`/api/tasks/${taskId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  const payload = await readResponseJson<{ task: TaskRecord }>(response)
+  return payload.task
+}
+
 export async function createBackendTask(input: {
   prompt: string
   params: TaskParams
