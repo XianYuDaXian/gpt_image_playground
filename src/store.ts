@@ -42,6 +42,18 @@ let thumbnailBackfillScheduled = false
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
+function stripInputImageDataUrls(inputImages: InputImage[]) {
+  return inputImages.map((image) => ({
+    id: image.id,
+    dataUrl: '',
+  }))
+}
+
+function stripMaskDraftDataUrl(maskDraft: MaskDraft | null) {
+  if (!maskDraft) return null
+  return null
+}
+
 function sortTasksForDisplay(tasks: TaskRecord[]) {
   return [...tasks].sort((a, b) => b.createdAt - a.createdAt)
 }
@@ -446,7 +458,11 @@ export const useStore = create<AppState>()(
         params: state.params,
         tasks: state.tasks,
         ...(state.settings.persistInputOnRestart
-          ? { prompt: state.prompt, inputImages: state.inputImages, maskDraft: state.maskDraft }
+          ? {
+              prompt: state.prompt,
+              inputImages: stripInputImageDataUrls(state.inputImages),
+              maskDraft: stripMaskDraftDataUrl(state.maskDraft),
+            }
           : {}),
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
         themeMode: state.themeMode,
@@ -486,6 +502,33 @@ export function showCodexCliPrompt(force = false, reason = '接口返回的提�
   })
 }
 
+async function restorePersistedInputDrafts() {
+  const state = useStore.getState()
+  const restoredInputImages: InputImage[] = []
+  let inputImagesChanged = false
+
+  for (const image of state.inputImages) {
+    if (image.dataUrl) {
+      restoredInputImages.push(image)
+      continue
+    }
+
+    const dataUrl = await ensureImageCached(image.id)
+    if (dataUrl) {
+      restoredInputImages.push({ ...image, dataUrl })
+    }
+    inputImagesChanged = true
+  }
+
+  if (inputImagesChanged) {
+    state.setInputImages(restoredInputImages)
+  }
+
+  if (useStore.getState().maskDraft && !useStore.getState().maskDraft?.maskDataUrl) {
+    useStore.getState().clearMaskDraft()
+  }
+}
+
 /** 初始化：从 IndexedDB 加载任务和图片缓存，清理孤立图片 */
 export async function initStore() {
   try {
@@ -500,6 +543,11 @@ export async function initStore() {
         apiMode: runtimeSettings.apiMode,
         timeout: runtimeSettings.timeoutSeconds,
         codexCli: runtimeSettings.codexCli,
+        responseFormatB64Json: runtimeSettings.responseFormatB64Json,
+        clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
+        persistInputOnRestart: runtimeSettings.persistInputOnRestart,
+        reuseTaskApiProfileTemporarily: runtimeSettings.reuseTaskApiProfileTemporarily,
+        alwaysShowRetryButton: runtimeSettings.alwaysShowRetryButton,
       })
     }
   } catch (err) {
@@ -523,6 +571,8 @@ export async function initStore() {
   for (const img of images) {
     cacheImage(img.id, img.dataUrl)
   }
+
+  await restorePersistedInputDrafts()
 
   setupTaskStreams()
 }
