@@ -550,6 +550,7 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
         >
           <img
             src={src}
+            data-image-id={imageId}
             data-original-src={tasks.find((item) =>
               item.inputImageIds.includes(imageId) ||
               item.outputImages.includes(imageId) ||

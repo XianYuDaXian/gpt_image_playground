@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { useStore, addImageFromUrl } from '../store'
+import { useStore, addImageFromUrl, ensureTaskImageAvailable } from '../store'
 import { copyBlobToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 
 export default function ImageContextMenu() {
-  const [menuInfo, setMenuInfo] = useState<{ src: string; originalSrc: string; x: number; y: number } | null>(null)
+  const [menuInfo, setMenuInfo] = useState<{ src: string; originalSrc: string; imageId: string | null; x: number; y: number } | null>(null)
   const showToast = useStore((s) => s.showToast)
   const inputImages = useStore((s) => s.inputImages)
+  const tasks = useStore((s) => s.tasks)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
@@ -32,6 +33,7 @@ export default function ImageContextMenu() {
         setMenuInfo({
           src: imgTarget.src,
           originalSrc: imgTarget.dataset.originalSrc || imgTarget.src,
+          imageId: imgTarget.dataset.imageId || null,
           x: e.clientX,
           y: e.clientY,
         })
@@ -73,11 +75,27 @@ export default function ImageContextMenu() {
 
   if (!menuInfo) return null
 
+  const resolveOriginalImageSrc = async () => {
+    if (menuInfo.imageId) {
+      const task = tasks.find((item) =>
+        item.inputImageIds.includes(menuInfo.imageId ?? '') ||
+        item.outputImages.includes(menuInfo.imageId ?? '') ||
+        item.maskImageId === menuInfo.imageId
+      )
+      const remoteUrl = task?.imageUrlsById?.[menuInfo.imageId]
+      if (remoteUrl) return remoteUrl
+      const cachedUrl = await ensureTaskImageAvailable(menuInfo.imageId)
+      if (cachedUrl) return cachedUrl
+    }
+    return menuInfo.originalSrc || menuInfo.src
+  }
+
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation()
     setMenuInfo(null)
     try {
-      const res = await fetch(menuInfo.originalSrc)
+      const imageSrc = await resolveOriginalImageSrc()
+      const res = await fetch(imageSrc)
       const blob = await res.blob()
       await copyBlobToClipboard(blob)
       showToast('图片已复制', 'success')
@@ -91,7 +109,8 @@ export default function ImageContextMenu() {
     e.stopPropagation()
     setMenuInfo(null)
     try {
-      const res = await fetch(menuInfo.src)
+      const imageSrc = await resolveOriginalImageSrc()
+      const res = await fetch(imageSrc)
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -118,7 +137,8 @@ export default function ImageContextMenu() {
     }
 
     try {
-      await addImageFromUrl(menuInfo.originalSrc)
+      const imageSrc = await resolveOriginalImageSrc()
+      await addImageFromUrl(imageSrc)
       setDetailTaskId(null)
       setLightboxImageId(null)
       setMaskEditorImageId(null)

@@ -742,6 +742,7 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
       usageCodeId: options.usageCodeId,
     })
     const task = result.task
+    await cacheSubmittedTaskImages(task, orderedInputImages, maskDraft?.maskDataUrl)
     if (result.auth) {
       useStore.getState().setAuthStatus(result.auth)
     }
@@ -1008,6 +1009,37 @@ async function loadTaskImageDataUrl(task: TaskRecord, imageId: string): Promise<
   if (!remoteUrl) return undefined
 
   return cacheTaskImageForEditing(imageId, remoteUrl)
+}
+
+async function cacheSubmittedTaskImages(
+  task: TaskRecord,
+  inputImages: InputImage[],
+  maskDataUrl?: string,
+) {
+  for (let index = 0; index < task.inputImageIds.length; index += 1) {
+    const imageId = task.inputImageIds[index]
+    const inputImage = inputImages[index]
+    if (!imageId || !inputImage?.dataUrl) continue
+    cacheImage(imageId, inputImage.dataUrl)
+    await putImage({
+      id: imageId,
+      dataUrl: inputImage.dataUrl,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      source: 'upload',
+    })
+  }
+
+  if (task.maskImageId && maskDataUrl) {
+    cacheImage(task.maskImageId, maskDataUrl)
+    await putImage({
+      id: task.maskImageId,
+      dataUrl: maskDataUrl,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      source: 'mask',
+    })
+  }
 }
 
 export async function ensureTaskImageAvailable(imageId: string): Promise<string | undefined> {
