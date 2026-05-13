@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { UsageCodeRecord } from './db.js'
+import { decryptText } from './crypto.js'
 
 const SESSION_COOKIE = 'gip_session'
 const SESSION_TTL_DAYS = 30
@@ -10,6 +11,8 @@ export interface AuthContext {
   sessionId: string
   usageCodeId: string | null
   usageCode: UsageCodeRecord | null
+  usageCodeIds: string[]
+  usageCodes: UsageCodeRecord[]
 }
 
 export function hashSecret(value: string, secret: string) {
@@ -82,16 +85,49 @@ export function verifyAdminPassword(app: FastifyInstance, password: string) {
   return crypto.timingSafeEqual(actualBuffer, expectedBuffer)
 }
 
-export function serializeUsageQuota(code: UsageCodeRecord) {
+function getUsageCodeDisplayValue(code: UsageCodeRecord, appSecret: string) {
+  if (!code.codeEncrypted) return '无法恢复'
+  try {
+    return decryptText(code.codeEncrypted, appSecret)
+  } catch {
+    return '无法恢复'
+  }
+}
+
+export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
   const remainingImageCredits = code.imageQuota == null
     ? null
     : Math.max(0, code.imageQuota - code.usedImageCredits)
 
   return {
     id: code.id,
-    name: code.name,
+    name: getUsageCodeDisplayValue(code, appSecret),
     imageQuota: code.imageQuota,
     usedImageCredits: code.usedImageCredits,
+    remainingImageCredits,
+  }
+}
+
+export function serializeUsageCodeList(codes: UsageCodeRecord[], appSecret: string) {
+  return codes.map((code) => serializeUsageQuota(code, appSecret))
+}
+
+function serializeAggregatedUser(codes: UsageCodeRecord[], appSecret: string) {
+  if (codes.length === 0) return null
+  const hasUnlimited = codes.some((code) => code.imageQuota == null)
+  const imageQuota = hasUnlimited
+    ? null
+    : codes.reduce((sum, code) => sum + (code.imageQuota ?? 0), 0)
+  const usedImageCredits = codes.reduce((sum, code) => sum + code.usedImageCredits, 0)
+  const remainingImageCredits = hasUnlimited
+    ? null
+    : Math.max(0, (imageQuota ?? 0) - usedImageCredits)
+
+  return {
+    id: codes[0]?.id ?? '',
+    name: codes.length === 1 && codes[0] ? getUsageCodeDisplayValue(codes[0], appSecret) : `${codes.length} 个使用码`,
+    imageQuota,
+    usedImageCredits,
     remainingImageCredits,
   }
 }
@@ -117,22 +153,27 @@ export async function getAuthContext(app: FastifyInstance, request: FastifyReque
       sessionId: session.id,
       usageCodeId: null,
       usageCode: null,
+      usageCodeIds: [],
+      usageCodes: [],
     }
   }
 
   const distribution = app.db.getDistributionSettings()
-  const usageCode = session.usageCodeId ? app.db.getUsageCode(session.usageCodeId) : null
-  if (!distribution.enabled || !usageCode?.isEnabled) {
+  const usageCodes = app.db.listAuthSessionUsageCodes(session.id).filter((code) => Boolean(code.isEnabled))
+  if (!distribution.enabled || usageCodes.length === 0) {
     app.db.deleteAuthSessionByHash(tokenHash)
     return null
   }
 
   app.db.touchAuthSession(session.id)
+  const primaryCode = usageCodes[0] ?? null
   return {
     role: 'user',
     sessionId: session.id,
-    usageCodeId: usageCode.id,
-    usageCode,
+    usageCodeId: primaryCode?.id ?? null,
+    usageCode: primaryCode,
+    usageCodeIds: usageCodes.map((code) => code.id),
+    usageCodes,
   }
 }
 
@@ -156,7 +197,7 @@ export async function requireAdmin(app: FastifyInstance, request: FastifyRequest
 
 export function canAccessTask(auth: AuthContext, task: { ownerKind: string; ownerUsageCodeId: string | null }) {
   if (auth.role === 'admin') return true
-  return task.ownerKind === 'usage_code' && task.ownerUsageCodeId === auth.usageCodeId
+  return task.ownerKind === 'usage_code' && Boolean(task.ownerUsageCodeId && auth.usageCodeIds.includes(task.ownerUsageCodeId))
 }
 
 export function buildAuthStatus(app: FastifyInstance, auth: AuthContext | null) {
@@ -166,6 +207,7 @@ export function buildAuthStatus(app: FastifyInstance, auth: AuthContext | null) 
     role: auth?.role ?? null,
     distributionEnabled: distribution.enabled,
     adminConfigured: Boolean(app.config.adminPassword),
-    user: auth?.usageCode ? serializeUsageQuota(auth.usageCode) : null,
+    user: auth?.role === 'user' ? serializeAggregatedUser(auth.usageCodes, app.config.appSecret) : null,
+    usageCodes: auth?.role === 'user' ? serializeUsageCodeList(auth.usageCodes, app.config.appSecret) : [],
   }
 }

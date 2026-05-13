@@ -33,12 +33,26 @@ function decryptUsageCode(task: TaskRecord, appSecret?: string) {
   }
 }
 
-export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[], options: { appSecret?: string } = {}) {
+function buildImageSizeMap(images: TaskImageRecord[]) {
+  return images.reduce<Record<string, { width: number | null; height: number | null }>>((acc, image) => {
+    acc[image.id] = {
+      width: image.width,
+      height: image.height,
+    }
+    return acc
+  }, {})
+}
+
+export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[], options: { appSecret?: string; exposeUsageCodeAlias?: boolean } = {}) {
   const inputImages = images.filter((image) => image.kind === 'input')
   const outputImages = images.filter((image) => image.kind === 'output')
   const maskImage = images.find((image) => image.kind === 'mask') ?? null
   const createdAt = toMs(task.createdAt) ?? Date.now()
   const finishedAt = toMs(task.finishedAt)
+  const usageCodePlain = decryptUsageCode(task, options.appSecret)
+  const ownerLabel = task.ownerKind === 'usage_code'
+    ? options.exposeUsageCodeAlias ? task.ownerLabel : usageCodePlain ?? '使用码'
+    : task.ownerLabel
 
   return {
     id: task.id,
@@ -49,6 +63,7 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[],
     maskImageId: maskImage?.id ?? null,
     maskTargetImageId: maskImage ? inputImages[0]?.id ?? null : null,
     imageUrlsById: buildImageUrlMap(images),
+    imageSizesById: buildImageSizeMap(images),
     status: toUiStatus(task.status),
     serverStatus: task.status,
     currentStep: task.currentStep,
@@ -56,12 +71,12 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[],
     error: task.errorMessage,
     ownerUsageCodeId: task.ownerUsageCodeId,
     ownerKind: task.ownerKind,
-    ownerLabel: task.ownerLabel,
+    ownerLabel,
     ownerUsageCode: task.ownerKind === 'usage_code' && task.ownerUsageCodeId
       ? {
           id: task.ownerUsageCodeId,
-          name: task.ownerLabel,
-          code: decryptUsageCode(task, options.appSecret),
+          name: ownerLabel,
+          code: usageCodePlain,
           createdAt: task.ownerUsageCodeCreatedAt,
           lastUsedAt: task.ownerUsageCodeLastUsedAt,
           imageQuota: task.ownerUsageCodeImageQuota,
@@ -83,7 +98,7 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[],
   }
 }
 
-export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string } = {}) {
+export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean } = {}) {
   const task = db.getTask(taskId)
   if (!task) return null
   return serializeTaskRecord(task, db.listTaskImages(taskId), options)

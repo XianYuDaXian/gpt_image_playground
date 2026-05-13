@@ -550,6 +550,11 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
         >
           <img
             src={src}
+            data-original-src={tasks.find((item) =>
+              item.inputImageIds.includes(imageId) ||
+              item.outputImages.includes(imageId) ||
+              item.maskImageId === imageId,
+            )?.imageUrlsById?.[imageId]}
             className="saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
             onLoad={(event) => {
               const task = tasks.find((item) =>

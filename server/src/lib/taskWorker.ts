@@ -152,6 +152,8 @@ export class TaskWorker {
             mimeType: written.mimeType,
             bytes: written.bytes,
             sha256: written.sha256,
+            width: written.width,
+            height: written.height,
           })
           if (!saved) return false
           persistedImages += 1

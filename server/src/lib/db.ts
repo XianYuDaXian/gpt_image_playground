@@ -85,6 +85,10 @@ export interface AuthSessionRecord {
   lastSeenAt: string
 }
 
+export interface AuthSessionUsageCodeRecord extends UsageCodeRecord {
+  sessionUsageCreatedAt: string
+}
+
 export interface DistributionSettings {
   enabled: boolean
   maxConcurrentTasks: number
@@ -200,6 +204,18 @@ export class AppDatabase {
       CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash
       ON auth_sessions(token_hash);
 
+      CREATE TABLE IF NOT EXISTS auth_session_usage_codes (
+        session_id TEXT NOT NULL,
+        usage_code_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(session_id, usage_code_id),
+        FOREIGN KEY(session_id) REFERENCES auth_sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(usage_code_id) REFERENCES usage_codes(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_auth_session_usage_codes_session
+      ON auth_session_usage_codes(session_id);
+
       CREATE TABLE IF NOT EXISTS usage_quota_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         usage_code_id TEXT NOT NULL,
@@ -213,6 +229,13 @@ export class AppDatabase {
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_quota_events_task_type
       ON usage_quota_events(task_id, event_type) WHERE task_id IS NOT NULL;
+    `)
+
+    this.sqlite.exec(`
+      INSERT OR IGNORE INTO auth_session_usage_codes (session_id, usage_code_id, created_at)
+      SELECT id, usage_code_id, created_at
+      FROM auth_sessions
+      WHERE role = 'user' AND usage_code_id IS NOT NULL;
     `)
 
     const taskColumns = this.sqlite.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>
@@ -542,7 +565,20 @@ export class AppDatabase {
     const current = this.getUsageCode(id)
     if (!current) return false
     const tx = this.sqlite.transaction(() => {
-      this.sqlite.prepare('DELETE FROM auth_sessions WHERE usage_code_id = ?').run(id)
+      this.sqlite.prepare(`
+        UPDATE auth_sessions
+        SET usage_code_id = (
+          SELECT usage_code_id
+          FROM auth_session_usage_codes
+          WHERE session_id = auth_sessions.id
+            AND usage_code_id <> ?
+          ORDER BY created_at ASC
+          LIMIT 1
+        )
+        WHERE usage_code_id = ?
+      `).run(id, id)
+      this.sqlite.prepare('DELETE FROM auth_session_usage_codes WHERE usage_code_id = ?').run(id)
+      this.sqlite.prepare("DELETE FROM auth_sessions WHERE role = 'user' AND usage_code_id IS NULL").run()
       this.sqlite.prepare(`
         UPDATE tasks
         SET owner_usage_code_id = NULL,
@@ -602,7 +638,44 @@ export class AppDatabase {
       )
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(input.id, input.tokenHash, input.role, input.usageCodeId, input.expiresAt, now, now)
+    if (input.role === 'user' && input.usageCodeId) {
+      this.addUsageCodeToAuthSession(input.id, input.usageCodeId)
+    }
     return this.getAuthSessionByHash(input.tokenHash)
+  }
+
+  addUsageCodeToAuthSession(sessionId: string, usageCodeId: string) {
+    this.sqlite.prepare(`
+      INSERT OR IGNORE INTO auth_session_usage_codes (
+        session_id,
+        usage_code_id,
+        created_at
+      )
+      VALUES (?, ?, ?)
+    `).run(sessionId, usageCodeId, new Date().toISOString())
+  }
+
+  listAuthSessionUsageCodes(sessionId: string) {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          usage_codes.id,
+          usage_codes.code_hash as codeHash,
+          usage_codes.code_encrypted as codeEncrypted,
+          usage_codes.name,
+          usage_codes.is_enabled as isEnabled,
+          usage_codes.image_quota as imageQuota,
+          usage_codes.used_image_credits as usedImageCredits,
+          usage_codes.created_at as createdAt,
+          usage_codes.updated_at as updatedAt,
+          usage_codes.last_used_at as lastUsedAt,
+          auth_session_usage_codes.created_at as sessionUsageCreatedAt
+        FROM auth_session_usage_codes
+        INNER JOIN usage_codes ON usage_codes.id = auth_session_usage_codes.usage_code_id
+        WHERE auth_session_usage_codes.session_id = ?
+        ORDER BY auth_session_usage_codes.created_at ASC
+      `)
+      .all(sessionId) as AuthSessionUsageCodeRecord[]
   }
 
   getAuthSessionByHash(tokenHash: string) {
@@ -869,6 +942,40 @@ export class AppDatabase {
         LIMIT ?
       `)
       .all(usageCodeId, limit) as TaskRecord[]
+  }
+
+  listTasksForUsageCodes(usageCodeIds: string[], limit = 50) {
+    if (usageCodeIds.length === 0) return []
+    const placeholders = usageCodeIds.map(() => '?').join(', ')
+    return this.sqlite
+      .prepare(`
+        SELECT
+          tasks.id,
+          tasks.prompt,
+          tasks.status,
+          tasks.progress_percent as progressPercent,
+          tasks.current_step as currentStep,
+          tasks.params_json as paramsJson,
+          tasks.error_message as errorMessage,
+          tasks.provider_profile_id as providerProfileId,
+          tasks.owner_usage_code_id as ownerUsageCodeId,
+          tasks.owner_kind as ownerKind,
+          tasks.reserved_image_credits as reservedImageCredits,
+          COALESCE(usage_codes.name, '已删除使用码') as ownerLabel,
+          ${this.taskOwnerStatsSelect()},
+          tasks.created_at as createdAt,
+          tasks.updated_at as updatedAt,
+          tasks.finished_at as finishedAt,
+          tasks.is_favorite as isFavorite,
+          tasks.is_archived as isArchived
+        FROM tasks
+        LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
+        WHERE tasks.owner_kind = 'usage_code'
+          AND tasks.owner_usage_code_id IN (${placeholders})
+        ORDER BY tasks.created_at DESC
+        LIMIT ?
+      `)
+      .all(...usageCodeIds, limit) as TaskRecord[]
   }
 
   getTask(id: string) {

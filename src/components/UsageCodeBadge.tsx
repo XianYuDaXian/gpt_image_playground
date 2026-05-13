@@ -2,15 +2,17 @@ import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { TaskRecord } from '../types'
 import { formatUsageCodeTooltip } from '../lib/usageCodeDisplay'
+import { useStore } from '../store'
 
 export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 0, top: 0 })
+  const authStatus = useStore((state) => state.authStatus)
   const buttonRef = useRef<HTMLButtonElement>(null)
   if (!task.ownerLabel) return null
 
   const codeText = task.ownerUsageCode?.code ?? task.ownerLabel
-  const detail = formatUsageCodeTooltip(task)
+  const detail = formatUsageCodeTooltip(task, { showAlias: authStatus?.role === 'admin' })
   const updatePosition = () => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return false

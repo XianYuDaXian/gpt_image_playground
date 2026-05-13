@@ -47,6 +47,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const taskId = crypto.randomUUID()
     let prompt = ''
     let providerProfileId = defaultProfile.id
+    let selectedUsageCodeId: string | null = null
     let parsedParams = taskParamsSchema.parse({})
     const pendingFiles: Array<{
       fieldname: string
@@ -70,6 +71,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         if (part.fieldname === 'providerProfileId') {
           const value = String(part.value ?? '').trim()
           if (value) providerProfileId = value
+        }
+        if (part.fieldname === 'usageCodeId') {
+          const value = String(part.value ?? '').trim()
+          if (value) selectedUsageCodeId = value
         }
         continue
       }
@@ -95,10 +100,15 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     let reservedImageCredits = 0
     if (auth.role === 'user') {
+      selectedUsageCodeId = selectedUsageCodeId || auth.usageCodeIds[0] || null
+      if (!selectedUsageCodeId || !auth.usageCodeIds.includes(selectedUsageCodeId)) {
+        reply.code(403)
+        return { message: '使用码不可用' }
+      }
       reservedImageCredits = parsedParams.n
       try {
         app.db.reserveUsageCreditsForTask({
-          usageCodeId: auth.usageCodeId ?? '',
+          usageCodeId: selectedUsageCodeId,
           taskId,
           credits: reservedImageCredits,
         })
@@ -113,7 +123,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       prompt,
       paramsJson: JSON.stringify(parsedParams),
       providerProfileId: providerProfile.id,
-      ownerUsageCodeId: auth.role === 'user' ? auth.usageCodeId : null,
+      ownerUsageCodeId: auth.role === 'user' ? selectedUsageCodeId : null,
       ownerKind: auth.role === 'user' ? 'usage_code' : 'admin',
       reservedImageCredits,
     })
@@ -121,7 +131,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     if (!task) {
       if (auth.role === 'user') {
         app.db.refundUsageCreditsForTask({
-          usageCodeId: auth.usageCodeId ?? '',
+          usageCodeId: selectedUsageCodeId ?? '',
           taskId,
           credits: reservedImageCredits,
           reason: 'task_create_failed',
@@ -174,7 +184,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     reply.code(201)
     return {
-      task: loadSerializedTask(app.db, taskId, { appSecret: app.config.appSecret }),
+      task: loadSerializedTask(app.db, taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' }),
       event,
       auth: buildAuthStatus(app, await requireAuth(app, request, reply)),
     }
@@ -184,10 +194,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const auth = await requireAuth(app, request, reply)
     const tasks = auth.role === 'admin'
       ? app.db.listTasks(200)
-      : app.db.listTasksForUsageCode(auth.usageCodeId ?? '', 200)
+      : app.db.listTasksForUsageCodes(auth.usageCodeIds, 200)
     return {
       items: tasks.map((task) =>
-        serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret }),
+        serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' }),
       ),
     }
   })
@@ -200,7 +210,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       reply.code(404)
       return { message: '任务不存在' }
     }
-    const task = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret })
+    const task = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
 
     return {
       task,
@@ -228,7 +238,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return { message: '任务不存在' }
     }
 
-    const serializedTask = serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret })
+    const serializedTask = serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
     app.taskEvents.emitTaskChanged(task.id)
     return { task: serializedTask }
   })
@@ -244,8 +254,8 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const buildTaskList = () => {
       const tasks = auth.role === 'admin'
         ? app.db.listTasks(200)
-        : app.db.listTasksForUsageCode(auth.usageCodeId ?? '', 200)
-      return tasks.map((task) => serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret }))
+        : app.db.listTasksForUsageCodes(auth.usageCodeIds, 200)
+      return tasks.map((task) => serializeTaskRecord(task, app.db.listTaskImages(task.id), { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' }))
     }
 
     reply.raw.write(formatSseEvent('snapshot', { tasks: buildTaskList() }))
@@ -256,7 +266,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const unsubscribe = app.taskEvents.subscribeAll((event: TaskListEventRecord) => {
       if (event.type === 'delete') {
-        if (auth.role === 'user' && event.ownerUsageCodeId !== auth.usageCodeId) return
+        if (auth.role === 'user' && (!event.ownerUsageCodeId || !auth.usageCodeIds.includes(event.ownerUsageCodeId))) return
         reply.raw.write(formatSseEvent('task', event))
         return
       }
@@ -270,7 +280,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         } satisfies TaskListEventRecord))
         return
       }
-      const task = serializeTaskRecord(taskRecord, app.db.listTaskImages(taskRecord.id), { appSecret: app.config.appSecret })
+      const task = serializeTaskRecord(taskRecord, app.db.listTaskImages(taskRecord.id), { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
 
       reply.raw.write(formatSseEvent('task', {
         type: 'upsert',
@@ -322,7 +332,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       reply.code(404)
       return { message: '任务不存在' }
     }
-    const task = serializeTaskRecord(taskRecord, app.db.listTaskImages(taskRecord.id), { appSecret: app.config.appSecret })
+    const task = serializeTaskRecord(taskRecord, app.db.listTaskImages(taskRecord.id), { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
 
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -341,7 +351,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const unsubscribe = app.taskEvents.subscribe(params.taskId, (event) => {
       reply.raw.write(formatSseEvent('progress', event))
-      const latestTask = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret })
+      const latestTask = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
       if (latestTask) {
         reply.raw.write(formatSseEvent('snapshot', { task: latestTask }))
       }

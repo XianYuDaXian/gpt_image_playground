@@ -1,6 +1,6 @@
 import type { TaskRecord } from '../types'
 
-export function formatUsageCodeTooltip(task: TaskRecord) {
+export function formatUsageCodeTooltip(task: TaskRecord, options: { showAlias?: boolean } = {}) {
   const code = task.ownerUsageCode
   if (!code) return task.ownerLabel ?? ''
 
@@ -9,6 +9,7 @@ export function formatUsageCodeTooltip(task: TaskRecord) {
   const remaining = code.remainingImageCredits == null ? '不限' : String(code.remainingImageCredits)
 
   return [
+    ...(options.showAlias ? [`别名：${code.name}`] : []),
     `码值：${code.code ?? '无法恢复'}`,
     `创建日期：${createdAt}`,
     `总已生成图片：${code.outputImageCount}`,

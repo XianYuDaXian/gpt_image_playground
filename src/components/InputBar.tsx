@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, ensureTaskImageAvailable } from '../store'
 import { DEFAULT_PARAMS } from '../types'
 import { normalizeImageSize } from '../lib/size'
+import { matchesTaskSearch } from '../lib/taskSearch'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
@@ -64,6 +65,7 @@ export default function InputBar() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
   const searchQuery = useStore((s) => s.searchQuery)
+  const authStatus = useStore((s) => s.authStatus)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -75,12 +77,9 @@ export default function InputBar() {
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      return prompt.includes(q) || paramStr.includes(q)
+      return matchesTaskSearch(t, q, authStatus?.role)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
+  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
 
   const isIOS = useMemo(() => {
     const ua = navigator.userAgent || ''
@@ -214,6 +213,7 @@ export default function InputBar() {
   const [dragInputImageIndex, setDragInputImageIndex] = useState<number | null>(null)
   const [dragOverInputImageIndex, setDragOverInputImageIndex] = useState<number | null>(null)
   const [showSizePicker, setShowSizePicker] = useState(false)
+  const [showUsageCodePicker, setShowUsageCodePicker] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const handleRef = useRef<HTMLDivElement>(null)
   const mobileHandleGestureRef = useRef({ startY: 0, moved: false })
@@ -230,6 +230,20 @@ export default function InputBar() {
 
   const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
   const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
+  const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
+  const codeHasQuota = useCallback((code: { remainingImageCredits: number | null }) => (
+    code.remainingImageCredits == null || code.remainingImageCredits >= params.n
+  ), [params.n])
+
+  const submitWithUsageCode = useCallback(async (usageCodeId?: string | null) => {
+    setShowUsageCodePicker(false)
+    setIsSubmitting(true)
+    try {
+      await submitTask({ usageCodeId })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }, [])
 
   const handleSubmit = useCallback(async () => {
     if (!hasConfiguredProvider) {
@@ -237,13 +251,57 @@ export default function InputBar() {
       return
     }
     if (!canSubmit) return
-    setIsSubmitting(true)
-    try {
-      await submitTask()
-    } finally {
-      setIsSubmitting(false)
+    if (authStatus?.role === 'user') {
+      if (userUsageCodes.length === 0) {
+        useStore.getState().showToast('当前没有可用使用码', 'error')
+        return
+      }
+      if (userUsageCodes.length > 1) {
+        setShowUsageCodePicker((value) => !value)
+        return
+      }
+      const onlyCode = userUsageCodes[0]
+      if (!onlyCode || !codeHasQuota(onlyCode)) {
+        useStore.getState().showToast('当前使用码额度不足', 'error')
+        return
+      }
+      await submitWithUsageCode(onlyCode.id)
+      return
     }
-  }, [canSubmit, hasConfiguredProvider, setShowSettings])
+    await submitWithUsageCode(null)
+  }, [authStatus?.role, canSubmit, codeHasQuota, hasConfiguredProvider, setShowSettings, submitWithUsageCode, userUsageCodes])
+
+  const renderUsageCodePicker = () => {
+    if (!showUsageCodePicker || authStatus?.role !== 'user' || userUsageCodes.length <= 1) return null
+    return (
+      <div className="absolute bottom-full right-0 z-30 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-2 text-sm shadow-xl dark:border-white/[0.08] dark:bg-gray-900">
+        <div className="px-2 pb-2 text-xs text-gray-500 dark:text-gray-400">选择本次使用码</div>
+        <div className="space-y-1">
+          {userUsageCodes.map((code) => {
+            const enabled = codeHasQuota(code)
+            return (
+              <button
+                key={code.id}
+                type="button"
+                disabled={!enabled || isSubmitting}
+                onClick={() => void submitWithUsageCode(code.id)}
+                className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition ${
+                  enabled
+                    ? 'bg-gray-50 text-gray-800 hover:bg-blue-50 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:bg-blue-500/10'
+                    : 'cursor-not-allowed bg-gray-50 text-gray-400 opacity-60 dark:bg-white/[0.03] dark:text-gray-500'
+                }`}
+              >
+                <span className="min-w-0 truncate">{code.name}</span>
+                <span className="shrink-0 text-xs">
+                  {code.remainingImageCredits == null ? '不限' : `剩余 ${code.remainingImageCredits}`}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
@@ -1150,6 +1208,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
+                  {renderUsageCodePicker()}
                   <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
                     onClick={handleSubmit}
@@ -1211,6 +1270,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
+                  {renderUsageCodePicker()}
                   <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
                   <button
                     onClick={handleSubmit}

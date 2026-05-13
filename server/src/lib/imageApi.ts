@@ -437,11 +437,54 @@ export async function writeOutputImage(outputDir: string, index: number, image: 
   await fs.mkdir(outputDir, { recursive: true })
   await fs.writeFile(absolutePath, image.buffer)
   const sha256 = crypto.createHash('sha256').update(image.buffer).digest('hex')
+  const size = readImageSize(image.buffer, image.mimeType)
 
   return {
     fileName: filename,
     bytes: image.buffer.byteLength,
     mimeType: MIME_MAP[ext] || image.mimeType,
     sha256,
+    width: size?.width ?? null,
+    height: size?.height ?? null,
   }
+}
+
+function readImageSize(buffer: Buffer, mimeType: string) {
+  if (mimeType.includes('png') && buffer.length >= 24 && buffer.toString('ascii', 1, 4) === 'PNG') {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) }
+  }
+
+  if (mimeType.includes('jpeg') || mimeType.includes('jpg')) {
+    let offset = 2
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) break
+      const marker = buffer[offset + 1]
+      const length = buffer.readUInt16BE(offset + 2)
+      if (marker >= 0xc0 && marker <= 0xc3) {
+        return {
+          width: buffer.readUInt16BE(offset + 7),
+          height: buffer.readUInt16BE(offset + 5),
+        }
+      }
+      offset += 2 + length
+    }
+  }
+
+  if (mimeType.includes('webp') && buffer.length >= 30 && buffer.toString('ascii', 0, 4) === 'RIFF') {
+    const chunk = buffer.toString('ascii', 12, 16)
+    if (chunk === 'VP8X' && buffer.length >= 30) {
+      return {
+        width: 1 + buffer.readUIntLE(24, 3),
+        height: 1 + buffer.readUIntLE(27, 3),
+      }
+    }
+    if (chunk === 'VP8 ' && buffer.length >= 30) {
+      return {
+        width: buffer.readUInt16LE(26) & 0x3fff,
+        height: buffer.readUInt16LE(28) & 0x3fff,
+      }
+    }
+  }
+
+  return null
 }

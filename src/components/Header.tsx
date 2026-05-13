@@ -14,9 +14,9 @@ export default function Header() {
 
   return (
     <header className="safe-area-top glass-surface sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.08]">
-      <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between">
-        <div className="flex items-start gap-1">
-          <h1 className="text-lg font-bold tracking-tight">
+      <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-start gap-1">
+          <h1 className="min-w-0 truncate text-lg font-bold tracking-tight">
             <a
               href="https://github.com/XianYuDaXian/gpt_image_playground"
               target="_blank"
@@ -39,13 +39,17 @@ export default function Header() {
             </a>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           {authStatus?.role === 'user' && (
-            <span className="hidden rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/[0.06] dark:text-gray-300 sm:inline-flex">
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="inline-flex max-w-[5.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.12]"
+            >
               {authStatus.user?.remainingImageCredits == null
                 ? '额度不限'
                 : `剩余 ${authStatus.user.remainingImageCredits}`}
-            </span>
+            </button>
           )}
           <button
             onClick={() => setThemeMode(cycleThemeMode(themeMode))}

@@ -307,6 +307,7 @@ export default function DetailModal() {
               <img
                 ref={mainImageRef}
                 src={currentOutputImageSrc}
+                data-original-src={task.imageUrlsById?.[currentOutputImageId]}
                 className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
                 onLoad={() => {
                   const panel = imagePanelRef.current
@@ -553,6 +554,7 @@ export default function DetailModal() {
                         >
                           <img
                             src={displaySrc}
+                            data-original-src={task.imageUrlsById?.[imgId]}
                             className="w-full h-full object-cover"
                             onLoad={(event) => {
                               const remoteUrl = task.imageUrlsById?.[imgId]

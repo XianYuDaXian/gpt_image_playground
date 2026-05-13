@@ -55,12 +55,16 @@ export async function createBackendTask(input: {
   inputImageDataUrls: string[]
   maskDataUrl?: string
   providerProfileId?: string | null
+  usageCodeId?: string | null
 }): Promise<{ task: TaskRecord; auth?: AuthStatus }> {
   const formData = new FormData()
   formData.append('prompt', input.prompt)
   formData.append('params', JSON.stringify(input.params))
   if (input.providerProfileId) {
     formData.append('providerProfileId', input.providerProfileId)
+  }
+  if (input.usageCodeId) {
+    formData.append('usageCodeId', input.usageCodeId)
   }
 
   for (let index = 0; index < input.inputImageDataUrls.length; index++) {

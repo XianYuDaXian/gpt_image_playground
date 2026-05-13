@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
+import { matchesTaskSearch } from '../lib/taskSearch'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -8,6 +9,7 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
+  const authStatus = useStore((s) => s.authStatus)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
@@ -39,12 +41,9 @@ export default function TaskGrid() {
       const matchStatus = filterStatus === 'all' || t.status === filterStatus
       if (!matchStatus) return false
       
-      if (!q) return true
-      const prompt = (t.prompt || '').toLowerCase()
-      const paramStr = JSON.stringify(t.params).toLowerCase()
-      return prompt.includes(q) || paramStr.includes(q)
+      return matchesTaskSearch(t, q, authStatus?.role)
     })
-  }, [tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
+  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({

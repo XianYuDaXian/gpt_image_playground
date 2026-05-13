@@ -559,6 +559,7 @@ export async function initStore() {
       distributionEnabled: false,
       adminConfigured: false,
       user: null,
+      usageCodes: [],
     })
     useStore.getState().showToast(
       `读取登录状态失败：${err instanceof Error ? err.message : String(err)}`,
@@ -660,12 +661,13 @@ export async function logout() {
       distributionEnabled: false,
       adminConfigured: true,
       user: null,
+      usageCodes: [],
     })
   }
 }
 
 /** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean } = {}) {
+export async function submitTask(options: { allowFullMask?: boolean; usageCodeId?: string | null } = {}) {
   const { settings, prompt, inputImages, maskDraft, params, showToast, setConfirmDialog } =
     useStore.getState()
 
@@ -695,7 +697,7 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
           confirmText: '继续提交',
           tone: 'warning',
           action: () => {
-            void submitTask({ allowFullMask: true })
+            void submitTask({ allowFullMask: true, usageCodeId: options.usageCodeId })
           },
         })
         return
@@ -737,6 +739,7 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
       inputImageDataUrls: inputDataUrls,
       maskDataUrl: maskDraft?.maskDataUrl,
       providerProfileId: settings.providerProfileId,
+      usageCodeId: options.usageCodeId,
     })
     const task = result.task
     if (result.auth) {

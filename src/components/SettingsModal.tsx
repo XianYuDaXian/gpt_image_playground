@@ -21,6 +21,7 @@ import {
   type BackendUsageCode,
 } from '../lib/backendSettings'
 import { exportBackendBackup, importBackendBackup } from '../lib/backendBackup'
+import { addSessionUsageCode } from '../lib/backendAuth'
 import { fetchBackendTasks } from '../lib/backendTasks'
 import { useStore, clearAllData, clearLocalTaskCache } from '../store'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
@@ -91,6 +92,8 @@ export default function SettingsModal() {
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
   const authStatus = useStore((s) => s.authStatus)
+  const setAuthStatus = useStore((s) => s.setAuthStatus)
+  const setTasks = useStore((s) => s.setTasks)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [profiles, setProfiles] = useState<BackendProviderProfile[]>([])
@@ -101,6 +104,7 @@ export default function SettingsModal() {
   const [newCodeName, setNewCodeName] = useState('新使用码')
   const [newCodeQuota, setNewCodeQuota] = useState('')
   const [latestPlainCode, setLatestPlainCode] = useState('')
+  const [addCodeValue, setAddCodeValue] = useState('')
   const [activeTab, setActiveTab] = useState<SettingsTab>('habits')
   const [showApiKey, setShowApiKey] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -114,6 +118,7 @@ export default function SettingsModal() {
 
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
+  const userUsageCodes = authStatus?.usageCodes ?? []
 
   const loadSettings = async () => {
     const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes] = await Promise.all([
@@ -291,6 +296,27 @@ export default function SettingsModal() {
     } catch (err) {
       useStore.getState().showToast(
         `保存设置失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleAddSessionUsageCode = async () => {
+    const code = addCodeValue.trim()
+    if (!code) return
+    setIsSaving(true)
+    try {
+      const nextStatus = await addSessionUsageCode(code)
+      setAuthStatus(nextStatus)
+      setAddCodeValue('')
+      const tasks = await fetchBackendTasks()
+      setTasks(tasks)
+      useStore.getState().showToast('使用码已添加', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `添加使用码失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
     } finally {
@@ -555,10 +581,46 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
-              <div className="rounded-xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 text-sm text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300">
-                {authStatus?.user?.remainingImageCredits == null
-                  ? '当前使用码没有图片额度限制。'
-                  : `当前使用码剩余 ${authStatus.user.remainingImageCredits} 张图片额度。`}
+              <div className="space-y-3 rounded-xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 text-sm text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300">
+                <div className="font-medium text-gray-800 dark:text-gray-100">当前使用码</div>
+                <div className="space-y-2">
+                  {userUsageCodes.map((code) => (
+                    <div key={code.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                      <span className="min-w-0 truncate">{code.name}</span>
+                      <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                        {code.remainingImageCredits == null ? '不限额度' : `剩余 ${code.remainingImageCredits}`}
+                      </span>
+                    </div>
+                  ))}
+                  {!userUsageCodes.length && (
+                    <div className="text-xs text-gray-500 dark:text-gray-400">当前没有可用使用码。</div>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    value={addCodeValue}
+                    onChange={(event) => setAddCodeValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void handleAddSessionUsageCode()
+                      }
+                    }}
+                    placeholder="输入新的使用码"
+                    className="min-w-0 flex-1 rounded-lg border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none focus:border-blue-400 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleAddSessionUsageCode()}
+                    disabled={isSaving || !addCodeValue.trim()}
+                    className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    添加
+                  </button>
+                </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  任务列表会显示以上所有使用码对应的图片。
+                </div>
               </div>
             </div>
           )}

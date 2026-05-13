@@ -3,7 +3,7 @@ import { useStore, addImageFromUrl } from '../store'
 import { copyBlobToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 
 export default function ImageContextMenu() {
-  const [menuInfo, setMenuInfo] = useState<{ src: string; x: number; y: number } | null>(null)
+  const [menuInfo, setMenuInfo] = useState<{ src: string; originalSrc: string; x: number; y: number } | null>(null)
   const showToast = useStore((s) => s.showToast)
   const inputImages = useStore((s) => s.inputImages)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
@@ -31,6 +31,7 @@ export default function ImageContextMenu() {
         e.preventDefault()
         setMenuInfo({
           src: imgTarget.src,
+          originalSrc: imgTarget.dataset.originalSrc || imgTarget.src,
           x: e.clientX,
           y: e.clientY,
         })
@@ -76,7 +77,7 @@ export default function ImageContextMenu() {
     e.stopPropagation()
     setMenuInfo(null)
     try {
-      const res = await fetch(menuInfo.src)
+      const res = await fetch(menuInfo.originalSrc)
       const blob = await res.blob()
       await copyBlobToClipboard(blob)
       showToast('图片已复制', 'success')
@@ -117,7 +118,7 @@ export default function ImageContextMenu() {
     }
 
     try {
-      await addImageFromUrl(menuInfo.src)
+      await addImageFromUrl(menuInfo.originalSrc)
       setDetailTaskId(null)
       setLightboxImageId(null)
       setMaskEditorImageId(null)

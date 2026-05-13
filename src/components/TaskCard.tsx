@@ -39,6 +39,8 @@ export default function TaskCard({
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const authStatus = useStore((s) => s.authStatus)
+  const firstOutputImageId = task.outputImages?.[0]
+  const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -181,7 +183,7 @@ export default function TaskCard({
       unsubscribe = subscribeImageThumbnail(imageId, (thumbnail) => {
         if (cancelled) return
         setThumbSrc(thumbnail.dataUrl)
-        if (thumbnail.width && thumbnail.height) {
+        if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
           setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
         }
@@ -190,7 +192,7 @@ export default function TaskCard({
       ensureImageThumbnailCached(imageId).then((thumbnail) => {
         if (cancelled || !thumbnail) return
         setThumbSrc(thumbnail.dataUrl)
-        if (thumbnail.width && thumbnail.height) {
+        if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
           setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
         }
@@ -210,10 +212,20 @@ export default function TaskCard({
       cancelled = true
       unsubscribe?.()
     }
-  }, [task.outputImages, task.imageUrlsById])
+  }, [firstOutputSize?.height, firstOutputSize?.width, task.outputImages, task.imageUrlsById])
 
   useEffect(() => {
-    if (!thumbSrc) return
+    if (firstOutputSize?.width && firstOutputSize.height) {
+      setCoverRatio(formatImageRatio(firstOutputSize.width, firstOutputSize.height))
+      setCoverSize(`${firstOutputSize.width}×${firstOutputSize.height}`)
+    }
+  }, [firstOutputSize?.height, firstOutputSize?.width])
+
+  useEffect(() => {
+    if (firstOutputSize?.width && firstOutputSize.height) return
+    if (!firstOutputImageId) return
+    const remoteUrl = task.imageUrlsById?.[firstOutputImageId]
+    if (!remoteUrl) return
 
     let cancelled = false
     const image = new Image()
@@ -223,8 +235,26 @@ export default function TaskCard({
         setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
       }
     }
+    image.src = remoteUrl
+
+    return () => {
+      cancelled = true
+    }
+  }, [firstOutputImageId, firstOutputSize?.height, firstOutputSize?.width, task.imageUrlsById])
+
+  useEffect(() => {
+    if (!thumbSrc) return
+
+    let cancelled = false
+    const image = new Image()
+    image.onload = () => {
+      if (!cancelled && !firstOutputSize?.width && !firstOutputSize?.height && image.naturalWidth > 0 && image.naturalHeight > 0) {
+        setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
+        setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
+      }
+    }
     image.src = thumbSrc
-    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+    if (!firstOutputSize?.width && !firstOutputSize?.height && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
       setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
       setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
     }
@@ -232,7 +262,7 @@ export default function TaskCard({
     return () => {
       cancelled = true
     }
-  }, [thumbSrc])
+  }, [firstOutputSize?.height, firstOutputSize?.width, thumbSrc])
 
   const duration = (() => {
     let seconds: number
@@ -330,6 +360,7 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
+                data-original-src={task.imageUrlsById?.[task.outputImages[0]]}
                 className="saveable-image w-full h-full object-cover"
                 loading="lazy"
                 onLoad={(event) => {

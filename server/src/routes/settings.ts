@@ -696,7 +696,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         }
       : null
 
-    const tasks = app.db.listTasks(500).map((task) => loadSerializedTask(app.db, task.id, { appSecret: app.config.appSecret })).filter(Boolean)
+    const tasks = app.db.listTasks(500).map((task) => loadSerializedTask(app.db, task.id, { appSecret: app.config.appSecret, exposeUsageCodeAlias: true })).filter(Boolean)
 
     return {
       runtimeSettings: runtime,

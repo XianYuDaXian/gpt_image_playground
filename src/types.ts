@@ -100,6 +100,7 @@ export interface TaskRecord {
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
   imageUrlsById?: Record<string, string>
+  imageSizesById?: Record<string, { width: number | null; height: number | null }>
   status: TaskStatus
   serverStatus?: string
   currentStep?: string
