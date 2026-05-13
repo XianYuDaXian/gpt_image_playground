@@ -18,5 +18,7 @@ services:
         value: /app/dist
       - key: APP_SECRET
         generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: CORS_ORIGIN
         value: "*"

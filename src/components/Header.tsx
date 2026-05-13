@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useStore } from '../store'
+import { logout, useStore } from '../store'
 import { cycleThemeMode, getThemeModeLabel } from '../lib/theme'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import HelpModal from './HelpModal'
@@ -8,6 +8,7 @@ export default function Header() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const themeMode = useStore((s) => s.themeMode)
   const setThemeMode = useStore((s) => s.setThemeMode)
+  const authStatus = useStore((s) => s.authStatus)
   const [showHelp, setShowHelp] = useState(false)
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
 
@@ -39,6 +40,13 @@ export default function Header() {
           ) : null}
         </div>
         <div className="flex items-center gap-1">
+          {authStatus?.role === 'user' && (
+            <span className="hidden rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 dark:bg-white/[0.06] dark:text-gray-300 sm:inline-flex">
+              {authStatus.user?.remainingImageCredits == null
+                ? '额度不限'
+                : `剩余 ${authStatus.user.remainingImageCredits}`}
+            </span>
+          )}
           <button
             onClick={() => setThemeMode(cycleThemeMode(themeMode))}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
@@ -54,8 +62,8 @@ export default function Header() {
                 strokeLinejoin="round"
                 viewBox="0 0 24 24"
               >
-                <path d="M12 3v2.25M12 18.75V21M4.97 4.97l1.59 1.59M17.44 17.44l1.59 1.59M3 12h2.25M18.75 12H21M4.97 19.03l1.59-1.59M17.44 6.56l1.59-1.59" />
-                <circle cx="12" cy="12" r="3.25" />
+                <rect x="3" y="4" width="18" height="12" rx="2" />
+                <path d="M8 20h8M12 16v4" />
               </svg>
             ) : themeMode === 'dark' ? (
               <svg
@@ -126,6 +134,27 @@ export default function Header() {
                 strokeWidth={2}
                 d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
               />
+            </svg>
+          </button>
+          <button
+            onClick={() => {
+              void logout()
+            }}
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+            title="退出登录"
+          >
+            <svg
+              className="w-5 h-5 text-gray-600 dark:text-gray-400"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              viewBox="0 0 24 24"
+            >
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <path d="M16 17l5-5-5-5" />
+              <path d="M21 12H9" />
             </svg>
           </button>
         </div>

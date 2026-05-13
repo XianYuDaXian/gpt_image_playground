@@ -13,6 +13,8 @@ export interface TaskEventRecord {
 export interface TaskListEventRecord {
   type: 'upsert' | 'delete'
   taskId: string
+  ownerUsageCodeId?: string | null
+  ownerKind?: string
 }
 
 export class TaskEventBus {
@@ -27,10 +29,12 @@ export class TaskEventBus {
     } satisfies TaskListEventRecord)
   }
 
-  emitDeleted(taskId: string) {
+  emitDeleted(taskId: string, owner?: { ownerUsageCodeId: string | null; ownerKind: string }) {
     this.emitter.emit(TaskEventBus.TASK_LIST_CHANNEL, {
       type: 'delete',
       taskId,
+      ownerUsageCodeId: owner?.ownerUsageCodeId,
+      ownerKind: owner?.ownerKind,
     } satisfies TaskListEventRecord)
   }
 

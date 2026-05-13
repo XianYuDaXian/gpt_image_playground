@@ -1,4 +1,5 @@
 import type { TaskParams, TaskRecord } from '../types'
+import type { AuthStatus } from './backendAuth'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 
 async function readResponseJson<T>(response: Response): Promise<T> {
@@ -53,10 +54,14 @@ export async function createBackendTask(input: {
   params: TaskParams
   inputImageDataUrls: string[]
   maskDataUrl?: string
-}): Promise<TaskRecord> {
+  providerProfileId?: string | null
+}): Promise<{ task: TaskRecord; auth?: AuthStatus }> {
   const formData = new FormData()
   formData.append('prompt', input.prompt)
   formData.append('params', JSON.stringify(input.params))
+  if (input.providerProfileId) {
+    formData.append('providerProfileId', input.providerProfileId)
+  }
 
   for (let index = 0; index < input.inputImageDataUrls.length; index++) {
     const dataUrl = input.inputImageDataUrls[index]
@@ -76,6 +81,5 @@ export async function createBackendTask(input: {
     method: 'POST',
     body: formData,
   })
-  const payload = await readResponseJson<{ task: TaskRecord }>(response)
-  return payload.task
+  return readResponseJson<{ task: TaskRecord; auth?: AuthStatus }>(response)
 }

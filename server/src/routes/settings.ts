@@ -4,8 +4,15 @@ import path from 'node:path'
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import { strFromU8, unzipSync } from 'fflate'
 import { z } from 'zod'
+import {
+  createPlainUsageCode,
+  hashSecret,
+  requireAdmin,
+  requireAuth,
+} from '../lib/auth.js'
 import { decryptText, encryptText, maskSecret } from '../lib/crypto.js'
 import { loadSerializedTask } from '../lib/taskDto.js'
+import type { ProviderProfileRecord, UsageCodeStatsRecord } from '../lib/db.js'
 
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
@@ -101,6 +108,25 @@ const resetRemoteDataSchema = z.object({
   mode: z.enum(['tasks', 'all']),
 })
 
+const distributionSettingsSchema = z.object({
+  enabled: z.boolean(),
+  maxConcurrentTasks: z.coerce.number().int().positive().max(50).default(2),
+})
+
+const usageCodeCreateSchema = z.object({
+  name: z.string().min(1).optional(),
+  imageQuota: z.number().int().positive().nullable().optional(),
+})
+
+const usageCodePatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  isEnabled: z.boolean().optional(),
+  imageQuota: z.number().int().positive().nullable().optional(),
+}).refine((value) =>
+  value.name !== undefined || value.isEnabled !== undefined || value.imageQuota !== undefined,
+  { message: '至少需要更新一个字段' },
+)
+
 function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
   const runtime = app.db.getAppSetting<Partial<z.infer<typeof runtimeSettingsSchema>>>('runtime')
   return {
@@ -113,14 +139,23 @@ function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
 }
 
 function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
-  const apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
+  let apiKey = ''
+  let apiKeyConfigured = true
+  let apiKeyMasked: string | null = null
+  try {
+    apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
+    apiKeyMasked = maskSecret(apiKey)
+  } catch {
+    apiKeyConfigured = false
+    apiKeyMasked = '无法解密，请重新填写'
+  }
   return {
     id: profile.id,
     name: profile.name,
     baseUrl: profile.baseUrl,
     apiKey: includeApiKey ? apiKey : '',
-    apiKeyMasked: maskSecret(apiKey),
-    apiKeyConfigured: true,
+    apiKeyMasked,
+    apiKeyConfigured,
     model: profile.model,
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
@@ -128,6 +163,44 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
+  }
+}
+
+function serializeProviderOption(profile: ProviderProfileRecord) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    isDefault: Boolean(profile.isDefault),
+  }
+}
+
+function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageCodeStatsRecord) {
+  const remainingImageCredits = code.imageQuota == null
+    ? null
+    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  let codePlain: string | null = null
+  if (code.codeEncrypted) {
+    try {
+      codePlain = decryptText(code.codeEncrypted, app.config.appSecret)
+    } catch {
+      codePlain = null
+    }
+  }
+
+  return {
+    id: code.id,
+    code: codePlain,
+    codeRecoverable: Boolean(codePlain),
+    name: code.name,
+    isEnabled: Boolean(code.isEnabled),
+    imageQuota: code.imageQuota,
+    usedImageCredits: code.usedImageCredits,
+    remainingImageCredits,
+    taskCount: code.taskCount,
+    outputImageCount: code.outputImageCount,
+    createdAt: code.createdAt,
+    updatedAt: code.updatedAt,
+    lastUsedAt: code.lastUsedAt,
   }
 }
 
@@ -211,7 +284,8 @@ async function parseBackupImportPayload(
 }
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
-  app.get('/api/runtime-settings', async (_request, reply) => {
+  app.get('/api/runtime-settings', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
     reply.header('Cache-Control', 'no-store')
     const profile = app.db.getDefaultProviderProfile()
     if (!profile) {
@@ -219,16 +293,46 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: '默认 provider profile 不存在' }
     }
 
-    const apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
     const preferences = getRuntimePreferences(app)
+    if (auth.role === 'user') {
+      return {
+        id: profile.id,
+        name: profile.name,
+        baseUrl: '',
+        apiKey: '',
+        apiKeyMasked: null,
+        apiKeyConfigured: true,
+        model: profile.model,
+        apiMode: profile.apiMode,
+        timeoutSeconds: profile.timeoutSeconds,
+        codexCli: preferences.codexCli,
+        responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+        clearInputAfterSubmit: preferences.clearInputAfterSubmit,
+        persistInputOnRestart: preferences.persistInputOnRestart,
+        reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
+        alwaysShowRetryButton: preferences.alwaysShowRetryButton,
+        source: 'database',
+      }
+    }
+
+    let apiKey = ''
+    let apiKeyConfigured = true
+    let apiKeyMasked: string | null = null
+    try {
+      apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret)
+      apiKeyMasked = maskSecret(apiKey)
+    } catch {
+      apiKeyConfigured = false
+      apiKeyMasked = '无法解密，请重新填写'
+    }
 
     return {
       id: profile.id,
       name: profile.name,
       baseUrl: profile.baseUrl,
       apiKey,
-      apiKeyMasked: maskSecret(apiKey),
-      apiKeyConfigured: true,
+      apiKeyMasked,
+      apiKeyConfigured,
       model: profile.model,
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
@@ -242,7 +346,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  app.put('/api/runtime-settings', async (request) => {
+  app.put('/api/runtime-settings', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = runtimeSettingsSchema.parse(request.body)
     const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const profile = app.db.upsertProviderProfile({
@@ -289,17 +394,27 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  app.put('/api/runtime-preferences', async (request) => {
+  app.put('/api/runtime-preferences', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = runtimePreferencesSchema.parse(request.body)
     app.db.setAppSetting('runtime', payload)
     return getRuntimePreferences(app)
   })
 
-  app.get('/api/admin/provider-profiles', async () => {
+  app.get('/api/provider-options', async (request, reply) => {
+    await requireAuth(app, request, reply)
+    return {
+      items: app.db.listProviderProfiles().map((profile) => serializeProviderOption(profile)),
+    }
+  })
+
+  app.get('/api/admin/provider-profiles', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     return app.db.listProviderProfiles().map((profile) => serializeProfile(app, profile))
   })
 
-  app.get('/api/admin/provider-profiles/default', async (_request, reply) => {
+  app.get('/api/admin/provider-profiles/default', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const profile = app.db.getDefaultProviderProfile()
     if (!profile) {
       reply.code(404)
@@ -309,7 +424,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return serializeProfile(app, profile)
   })
 
-  app.put('/api/admin/provider-profiles/default', async (request) => {
+  app.put('/api/admin/provider-profiles/default', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = providerProfileSchema.parse(request.body)
     const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const currentProfile = payload.id ? app.db.getProviderProfile(payload.id) : currentDefaultProfile
@@ -338,7 +454,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return serializeProfile(app, profile)
   })
 
-  app.post('/api/admin/provider-profiles', async (request) => {
+  app.post('/api/admin/provider-profiles', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = providerProfileSchema.parse(request.body)
     const apiKey = payload.apiKey?.trim()
     if (!apiKey) throw new Error('新建 API 配置需要填写 API Key')
@@ -358,6 +475,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.put('/api/admin/provider-profiles/:profileId', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
     const payload = providerProfileSchema.parse(request.body)
     const currentProfile = app.db.getProviderProfile(params.profileId)
@@ -384,6 +502,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.delete('/api/admin/provider-profiles/:profileId', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
     const deleted = app.db.deleteProviderProfile(params.profileId)
     if (!deleted) {
@@ -393,7 +512,86 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true }
   })
 
-  app.post('/api/admin/data/import', async (request) => {
+  app.get('/api/admin/distribution', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    return app.db.getDistributionSettings()
+  })
+
+  app.put('/api/admin/distribution', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const payload = distributionSettingsSchema.parse(request.body)
+    app.db.setDistributionSettings(payload)
+    app.taskWorker.setMaxConcurrentTasks(payload.maxConcurrentTasks)
+    return app.db.getDistributionSettings()
+  })
+
+  app.get('/api/admin/usage-codes', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    return {
+      items: app.db.listUsageCodesWithStats().map((code) => serializeUsageCode(app, code)),
+    }
+  })
+
+  app.post('/api/admin/usage-codes', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const payload = usageCodeCreateSchema.parse(request.body)
+    const code = createPlainUsageCode()
+    const usageCode = app.db.createUsageCode({
+      id: crypto.randomUUID(),
+      codeHash: hashSecret(code, app.config.appSecret),
+      codeEncrypted: encryptText(code, app.config.appSecret),
+      name: payload.name?.trim() || '未命名使用码',
+      imageQuota: payload.imageQuota ?? null,
+    })
+    if (!usageCode) throw new Error('创建使用码失败')
+
+    const stats = app.db.listUsageCodesWithStats().find((item) => item.id === usageCode.id)
+    return {
+      code,
+      item: stats ? serializeUsageCode(app, stats) : {
+        ...usageCode,
+        code,
+        codeRecoverable: true,
+        isEnabled: Boolean(usageCode.isEnabled),
+        remainingImageCredits: usageCode.imageQuota,
+        taskCount: 0,
+        outputImageCount: 0,
+      },
+    }
+  })
+
+  app.patch('/api/admin/usage-codes/:codeId', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const params = z.object({ codeId: z.string().min(1) }).parse(request.params)
+    const payload = usageCodePatchSchema.parse(request.body)
+    const updated = app.db.updateUsageCode({
+      id: params.codeId,
+      name: payload.name?.trim(),
+      isEnabled: payload.isEnabled,
+      imageQuota: payload.imageQuota,
+    })
+    if (!updated) {
+      reply.code(404)
+      return { message: '使用码不存在' }
+    }
+
+    const stats = app.db.listUsageCodesWithStats().find((item) => item.id === updated.id)
+    return stats ? serializeUsageCode(app, stats) : updated
+  })
+
+  app.delete('/api/admin/usage-codes/:codeId', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const params = z.object({ codeId: z.string().min(1) }).parse(request.params)
+    const deleted = app.db.deleteUsageCode(params.codeId)
+    if (!deleted) {
+      reply.code(404)
+      return { message: '使用码不存在' }
+    }
+    return { ok: true }
+  })
+
+  app.post('/api/admin/data/import', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = await parseBackupImportPayload(request)
     const importedProfile = app.db.upsertProviderProfile({
       id: 'imported-default',
@@ -483,7 +681,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  app.get('/api/admin/data/export', async () => {
+  app.get('/api/admin/data/export', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const profile = app.db.getDefaultProviderProfile()
     const runtime = profile
       ? {
@@ -497,7 +696,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         }
       : null
 
-    const tasks = app.db.listTasks(500).map((task) => loadSerializedTask(app.db, task.id)).filter(Boolean)
+    const tasks = app.db.listTasks(500).map((task) => loadSerializedTask(app.db, task.id, { appSecret: app.config.appSecret })).filter(Boolean)
 
     return {
       runtimeSettings: runtime,
@@ -505,9 +704,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
-  app.post('/api/admin/data/reset', async (request) => {
+  app.post('/api/admin/data/reset', async (request, reply) => {
+    await requireAdmin(app, request, reply)
     const payload = resetRemoteDataSchema.parse(request.body)
-    const existingTaskIds = app.db.listTasks(200).map((task) => task.id)
+    const existingTasks = app.db.listTasks(200).map((task) => ({
+      id: task.id,
+      ownerUsageCodeId: task.ownerUsageCodeId,
+      ownerKind: task.ownerKind,
+    }))
 
     await fs.rm(app.config.mediaDir, { recursive: true, force: true })
     await fs.mkdir(app.config.mediaDir, { recursive: true })
@@ -522,8 +726,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       app.db.clearTaskData()
     }
 
-    for (const taskId of existingTaskIds) {
-      app.taskEvents.emitDeleted(taskId)
+    for (const task of existingTasks) {
+      app.taskEvents.emitDeleted(task.id, {
+        ownerUsageCodeId: task.ownerUsageCodeId,
+        ownerKind: task.ownerKind,
+      })
     }
 
     return {

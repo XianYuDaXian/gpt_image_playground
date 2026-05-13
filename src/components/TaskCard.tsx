@@ -10,6 +10,7 @@ import {
 } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
+import UsageCodeBadge from './UsageCodeBadge'
 
 interface Props {
   task: TaskRecord
@@ -37,6 +38,7 @@ export default function TaskCard({
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
+  const authStatus = useStore((s) => s.authStatus)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -458,6 +460,9 @@ export default function TaskCard({
                 <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">
                   mask
                 </span>
+              )}
+              {task.ownerLabel && (
+                <UsageCodeBadge task={task} />
               )}
               </div>
             {/* 操作按钮 */}

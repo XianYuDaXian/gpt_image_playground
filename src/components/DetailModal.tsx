@@ -5,6 +5,7 @@ import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import UsageCodeBadge from './UsageCodeBadge'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -16,6 +17,7 @@ export default function DetailModal() {
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const showToast = useStore((s) => s.showToast)
   const settings = useStore((s) => s.settings)
+  const authStatus = useStore((s) => s.authStatus)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
 
   const [imageIndex, setImageIndex] = useState(0)
@@ -615,6 +617,8 @@ export default function DetailModal() {
             <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
               <span>创建于 {formatTime(task.createdAt)}</span>
               {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
+              {task.ownerLabel && <span> · 来源 </span>}
+              {task.ownerLabel && <UsageCodeBadge task={task} />}
             </div>
           </div>
 

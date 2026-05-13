@@ -9,6 +9,8 @@ import { AppDatabase } from './lib/db.js'
 import { encryptText } from './lib/crypto.js'
 import { TaskEventBus } from './lib/eventBus.js'
 import { TaskWorker } from './lib/taskWorker.js'
+import { canAccessTask, getAuthContext } from './lib/auth.js'
+import { authRoutes } from './routes/auth.js'
 import { metaRoutes } from './routes/meta.js'
 import { settingsRoutes } from './routes/settings.js'
 import { taskRoutes } from './routes/tasks.js'
@@ -45,7 +47,31 @@ app.decorate('taskWorker', new TaskWorker(app.db, app.taskEvents, {
   appSecret: appConfig.appSecret,
   mediaDir: appConfig.mediaDir,
   outputsDir: appConfig.outputsDir,
+  maxConcurrentTasks: app.db.getDistributionSettings().maxConcurrentTasks,
 }))
+
+app.addHook('preHandler', async (request, reply) => {
+  if (!request.url.startsWith('/media/')) return
+
+  const url = new URL(request.url, 'http://local')
+  const relativePath = decodeURIComponent(url.pathname.replace(/^\/media\/+/, ''))
+  const image = app.db.getTaskImageByFilePath(relativePath)
+  if (!image) {
+    reply.code(404)
+    return reply.send({ message: '图片不存在' })
+  }
+
+  const auth = await getAuthContext(app, request)
+  if (!auth) {
+    reply.code(401)
+    return reply.send({ message: '请先登录' })
+  }
+
+  if (!canAccessTask(auth, image)) {
+    reply.code(403)
+    return reply.send({ message: '无权访问该图片' })
+  }
+})
 
 if (appConfig.bootstrapProvider && !app.db.getDefaultProviderProfile()) {
   app.db.upsertProviderProfile({
@@ -115,6 +141,7 @@ app.get('/health', async () => ({
   now: new Date().toISOString(),
 }))
 
+await app.register(authRoutes)
 await app.register(settingsRoutes)
 await app.register(taskRoutes)
 await app.register(metaRoutes)
@@ -138,7 +165,8 @@ for (const task of app.db.listTasks(200)) {
 
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error)
-  reply.code(400).send({
+  const statusCode = reply.statusCode >= 400 ? reply.statusCode : 400
+  reply.code(statusCode).send({
     message: error instanceof Error ? error.message : '未知错误',
   })
 })

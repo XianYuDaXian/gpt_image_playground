@@ -1,5 +1,6 @@
 import path from 'node:path'
 import type { AppDatabase, TaskImageRecord, TaskRecord } from './db.js'
+import { decryptText } from './crypto.js'
 
 function toUiStatus(status: string) {
   if (status === 'failed' || status === 'canceled') return 'error'
@@ -23,7 +24,16 @@ function buildImageUrlMap(images: TaskImageRecord[]) {
   }, {})
 }
 
-export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[]) {
+function decryptUsageCode(task: TaskRecord, appSecret?: string) {
+  if (!appSecret || !task.ownerUsageCodeCodeEncrypted) return null
+  try {
+    return decryptText(task.ownerUsageCodeCodeEncrypted, appSecret)
+  } catch {
+    return null
+  }
+}
+
+export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[], options: { appSecret?: string } = {}) {
   const inputImages = images.filter((image) => image.kind === 'input')
   const outputImages = images.filter((image) => image.kind === 'output')
   const maskImage = images.find((image) => image.kind === 'mask') ?? null
@@ -44,6 +54,26 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[])
     currentStep: task.currentStep,
     progressPercent: task.progressPercent,
     error: task.errorMessage,
+    ownerUsageCodeId: task.ownerUsageCodeId,
+    ownerKind: task.ownerKind,
+    ownerLabel: task.ownerLabel,
+    ownerUsageCode: task.ownerKind === 'usage_code' && task.ownerUsageCodeId
+      ? {
+          id: task.ownerUsageCodeId,
+          name: task.ownerLabel,
+          code: decryptUsageCode(task, options.appSecret),
+          createdAt: task.ownerUsageCodeCreatedAt,
+          lastUsedAt: task.ownerUsageCodeLastUsedAt,
+          imageQuota: task.ownerUsageCodeImageQuota,
+          usedImageCredits: task.ownerUsageCodeUsedImageCredits ?? 0,
+          remainingImageCredits: task.ownerUsageCodeImageQuota == null
+            ? null
+            : Math.max(0, task.ownerUsageCodeImageQuota - (task.ownerUsageCodeUsedImageCredits ?? 0)),
+          taskCount: task.ownerUsageCodeTaskCount ?? 0,
+          outputImageCount: task.ownerUsageCodeOutputImageCount ?? 0,
+        }
+      : null,
+    reservedImageCredits: task.reservedImageCredits,
     createdAt,
     finishedAt,
     elapsed: finishedAt != null ? finishedAt - createdAt : null,
@@ -53,8 +83,8 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[])
   }
 }
 
-export function loadSerializedTask(db: AppDatabase, taskId: string) {
+export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string } = {}) {
   const task = db.getTask(taskId)
   if (!task) return null
-  return serializeTaskRecord(task, db.listTaskImages(taskId))
+  return serializeTaskRecord(task, db.listTaskImages(taskId), options)
 }

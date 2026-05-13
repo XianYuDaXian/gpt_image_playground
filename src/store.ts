@@ -21,6 +21,7 @@ import {
   putImage,
 } from './lib/db'
 import { fetchBackendRuntimeSettings } from './lib/backendSettings'
+import { fetchAuthStatus, logoutAuth, type AuthStatus } from './lib/backendAuth'
 import { createBackendTask, deleteBackendTask, fetchBackendTasks, updateBackendTaskFlags } from './lib/backendTasks'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
@@ -207,6 +208,12 @@ async function processNextThumbnailBackfill() {
 // ===== Store 类型 =====
 
 interface AppState {
+  // 鉴权
+  authStatus: AuthStatus | null
+  authInitialized: boolean
+  setAuthStatus: (status: AuthStatus | null) => void
+  setAuthInitialized: (value: boolean) => void
+
   // 设置
   settings: AppSettings
   setSettings: (s: Partial<AppSettings>) => void
@@ -286,6 +293,12 @@ interface AppState {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
+      // Auth
+      authStatus: null,
+      authInitialized: false,
+      setAuthStatus: (authStatus) => set({ authStatus }),
+      setAuthInitialized: (authInitialized) => set({ authInitialized }),
+
       // Settings
       settings: { ...DEFAULT_SETTINGS },
       setSettings: (s) => set((st) => ({
@@ -315,6 +328,10 @@ export const useStore = create<AppState>()(
             s.apiKeyConfigured === undefined
               ? st.settings.apiKeyConfigured ?? DEFAULT_SETTINGS.apiKeyConfigured
               : s.apiKeyConfigured,
+          providerProfileId:
+            s.providerProfileId === undefined
+              ? st.settings.providerProfileId ?? DEFAULT_SETTINGS.providerProfileId
+              : s.providerProfileId,
           updatedAt: Date.now(),
         },
       })),
@@ -531,6 +548,34 @@ async function restorePersistedInputDrafts() {
 
 /** 初始化：从 IndexedDB 加载任务和图片缓存，清理孤立图片 */
 export async function initStore() {
+  let authStatus: AuthStatus | null = null
+  try {
+    authStatus = await fetchAuthStatus()
+    useStore.getState().setAuthStatus(authStatus)
+  } catch (err) {
+    useStore.getState().setAuthStatus({
+      authenticated: false,
+      role: null,
+      distributionEnabled: false,
+      adminConfigured: false,
+      user: null,
+    })
+    useStore.getState().showToast(
+      `读取登录状态失败：${err instanceof Error ? err.message : String(err)}`,
+      'error',
+    )
+  } finally {
+    useStore.getState().setAuthInitialized(true)
+  }
+
+  if (!authStatus?.authenticated) {
+    closeAllTaskEventSources()
+    closeTaskListEventSource()
+    taskStreamInitialized = false
+    useStore.getState().setTasks([])
+    return
+  }
+
   try {
     const runtimeSettings = await fetchBackendRuntimeSettings()
     if (runtimeSettings) {
@@ -539,6 +584,7 @@ export async function initStore() {
         apiKey: runtimeSettings.apiKey,
         apiKeyMasked: runtimeSettings.apiKeyMasked ?? null,
         apiKeyConfigured: runtimeSettings.apiKeyConfigured,
+        providerProfileId: runtimeSettings.id ?? null,
         model: runtimeSettings.model,
         apiMode: runtimeSettings.apiMode,
         timeout: runtimeSettings.timeoutSeconds,
@@ -575,6 +621,47 @@ export async function initStore() {
   await restorePersistedInputDrafts()
 
   setupTaskStreams()
+}
+
+export async function refreshAuthStatus(options: { silent?: boolean } = {}) {
+  try {
+    const status = await fetchAuthStatus()
+    useStore.getState().setAuthStatus(status)
+    if (!status.authenticated) {
+      closeAllTaskEventSources()
+      closeTaskListEventSource()
+      taskStreamInitialized = false
+      useStore.getState().setTasks([])
+    }
+  } catch (err) {
+    if (!options.silent) {
+      useStore.getState().showToast(
+        `刷新登录状态失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+}
+
+export async function logout() {
+  await logoutAuth().catch(() => undefined)
+  closeAllTaskEventSources()
+  closeTaskListEventSource()
+  taskStreamInitialized = false
+  useStore.getState().setTasks([])
+  useStore.getState().setDetailTaskId(null)
+  try {
+    const status = await fetchAuthStatus()
+    useStore.getState().setAuthStatus(status)
+  } catch {
+    useStore.getState().setAuthStatus({
+      authenticated: false,
+      role: null,
+      distributionEnabled: false,
+      adminConfigured: true,
+      user: null,
+    })
+  }
 }
 
 /** 提交新任务 */
@@ -644,12 +731,17 @@ export async function submitTask(options: { allowFullMask?: boolean } = {}) {
     for (const img of orderedInputImages) {
       inputDataUrls.push(img.dataUrl)
     }
-    const task = await createBackendTask({
+    const result = await createBackendTask({
       prompt: prompt.trim(),
       params: normalizedParams,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl: maskDraft?.maskDataUrl,
+      providerProfileId: settings.providerProfileId,
     })
+    const task = result.task
+    if (result.auth) {
+      useStore.getState().setAuthStatus(result.auth)
+    }
 
     const latestTasks = useStore.getState().tasks
     useStore.getState().setTasks(sortTasksForDisplay([task, ...latestTasks.filter((item) => item.id !== task.id)]))
@@ -1048,6 +1140,7 @@ function syncTaskEventSources(tasks: TaskRecord[]) {
       upsertTaskFromServer(payload.task)
       if (payload.task.status !== 'running') {
         closeTaskEventSource(payload.task.id)
+        void refreshAuthStatus({ silent: true })
       }
     })
     source.onerror = () => {

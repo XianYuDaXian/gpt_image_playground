@@ -8,6 +8,7 @@ export interface AppSettings {
   apiKey: string
   apiKeyMasked?: string | null
   apiKeyConfigured?: boolean
+  providerProfileId?: string | null
   model: string
   timeout: number
   apiMode: ApiMode
@@ -29,6 +30,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
   apiKeyMasked: null,
   apiKeyConfigured: false,
+  providerProfileId: null,
   model: DEFAULT_IMAGES_MODEL,
   timeout: 300,
   apiMode: 'images',
@@ -103,6 +105,22 @@ export interface TaskRecord {
   currentStep?: string
   progressPercent?: number
   error: string | null
+  ownerUsageCodeId?: string | null
+  ownerKind?: 'admin' | 'usage_code' | 'legacy'
+  ownerLabel?: string
+  ownerUsageCode?: {
+    id: string
+    name: string
+    code: string | null
+    createdAt: string | null
+    lastUsedAt: string | null
+    imageQuota: number | null
+    usedImageCredits: number
+    remainingImageCredits: number | null
+    taskCount: number
+    outputImageCount: number
+  } | null
+  reservedImageCredits?: number
   createdAt: number
   finishedAt: number | null
   /** 总耗时毫秒 */

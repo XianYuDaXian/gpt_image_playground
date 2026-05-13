@@ -8,6 +8,8 @@ import type { TaskEventBus } from './eventBus.js'
 export class TaskWorker {
   private running = new Set<string>()
   private cancelled = new Set<string>()
+  private pending: string[] = []
+  private maxConcurrentTasks: number
 
   constructor(
     private readonly db: AppDatabase,
@@ -16,11 +18,38 @@ export class TaskWorker {
       appSecret: string
       mediaDir: string
       outputsDir: string
+      maxConcurrentTasks: number
     },
-  ) {}
+  ) {
+    this.maxConcurrentTasks = Math.max(1, Math.floor(config.maxConcurrentTasks) || 1)
+  }
 
   enqueue(taskId: string) {
     if (this.running.has(taskId)) return
+    if (this.pending.includes(taskId)) return
+    this.pending.push(taskId)
+    this.drain()
+  }
+
+  setMaxConcurrentTasks(value: number) {
+    this.maxConcurrentTasks = Math.max(1, Math.floor(value) || 1)
+    this.drain()
+  }
+
+  private drain() {
+    while (this.running.size < this.maxConcurrentTasks && this.pending.length > 0) {
+      const taskId = this.pending.shift()
+      if (!taskId || this.running.has(taskId)) continue
+      if (this.cancelled.has(taskId) || !this.db.taskExists(taskId)) {
+        this.cancelled.delete(taskId)
+        continue
+      }
+
+      this.start(taskId)
+    }
+  }
+
+  private start(taskId: string) {
     this.running.add(taskId)
     this.cancelled.delete(taskId)
     void this.process(taskId)
@@ -30,11 +59,13 @@ export class TaskWorker {
       .finally(() => {
         this.running.delete(taskId)
         this.cancelled.delete(taskId)
+        this.drain()
       })
   }
 
   cancel(taskId: string) {
     this.cancelled.add(taskId)
+    this.pending = this.pending.filter((id) => id !== taskId)
   }
 
   private isTaskInactive(taskId: string) {
@@ -43,6 +74,10 @@ export class TaskWorker {
 
   private emit(taskId: string, input: { status: string; step: string; percent: number; message?: string | null }) {
     if (this.isTaskInactive(taskId)) return false
+
+    if (input.status === 'failed') {
+      this.db.refundTaskQuota(taskId, 'task_failed')
+    }
 
     const updatedTask = this.db.updateTaskProgress({
       id: taskId,

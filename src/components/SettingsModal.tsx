@@ -2,13 +2,23 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
   createBackendProviderProfile,
+  createBackendUsageCode,
   deleteBackendProviderProfile,
+  deleteBackendUsageCode,
+  fetchBackendDistribution,
+  fetchBackendProviderOptions,
   fetchBackendProviderProfiles,
   fetchBackendRuntimeSettings,
+  fetchBackendUsageCodes,
   resetBackendRemoteData,
   saveBackendRuntimePreferences,
+  saveBackendDistribution,
   updateBackendProviderProfile,
+  updateBackendUsageCode,
+  type BackendDistributionSettings,
+  type BackendProviderOption,
   type BackendProviderProfile,
+  type BackendUsageCode,
 } from '../lib/backendSettings'
 import { exportBackendBackup, importBackendBackup } from '../lib/backendBackup'
 import { fetchBackendTasks } from '../lib/backendTasks'
@@ -17,7 +27,7 @@ import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type A
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import Select from './Select'
 
-type SettingsTab = 'habits' | 'api' | 'data'
+type SettingsTab = 'habits' | 'api' | 'data' | 'distribution'
 
 function createEmptyProfile(): BackendProviderProfile {
   return {
@@ -80,10 +90,17 @@ export default function SettingsModal() {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const settings = useStore((s) => s.settings)
   const setSettings = useStore((s) => s.setSettings)
+  const authStatus = useStore((s) => s.authStatus)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [draft, setDraft] = useState<AppSettings>(settings)
   const [profiles, setProfiles] = useState<BackendProviderProfile[]>([])
+  const [providerOptions, setProviderOptions] = useState<BackendProviderOption[]>([])
   const [profileDraft, setProfileDraft] = useState<BackendProviderProfile>(createEmptyProfile())
+  const [distribution, setDistribution] = useState<BackendDistributionSettings>({ enabled: false, maxConcurrentTasks: 2 })
+  const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
+  const [newCodeName, setNewCodeName] = useState('新使用码')
+  const [newCodeQuota, setNewCodeQuota] = useState('')
+  const [latestPlainCode, setLatestPlainCode] = useState('')
   const [activeTab, setActiveTab] = useState<SettingsTab>('habits')
   const [showApiKey, setShowApiKey] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -96,11 +113,15 @@ export default function SettingsModal() {
     apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
 
   const selectedProfileId = profileDraft.id || '__new__'
+  const isAdmin = authStatus?.role === 'admin'
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
-      fetchBackendProviderProfiles().catch(() => []),
+      isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
+      fetchBackendProviderOptions().catch(() => []),
+      isAdmin ? fetchBackendDistribution().catch(() => ({ enabled: false, maxConcurrentTasks: 2 })) : Promise.resolve({ enabled: false, maxConcurrentTasks: 2 }),
+      isAdmin ? fetchBackendUsageCodes().catch(() => []) : Promise.resolve([]),
     ])
 
     const nextDraft: AppSettings = {
@@ -112,6 +133,7 @@ export default function SettingsModal() {
             apiKey: runtimeSettings.apiKey,
             apiKeyMasked: runtimeSettings.apiKeyMasked ?? null,
             apiKeyConfigured: runtimeSettings.apiKeyConfigured,
+            providerProfileId: settings.providerProfileId ?? runtimeSettings.id ?? null,
             model: runtimeSettings.model,
             apiMode: runtimeSettings.apiMode,
             timeout: runtimeSettings.timeoutSeconds,
@@ -127,8 +149,27 @@ export default function SettingsModal() {
 
     setDraft(nextDraft)
     setSettings(nextDraft)
-    setProfiles(nextProfiles)
-    const defaultProfile = nextProfiles.find((profile) => profile.isDefault) ?? nextProfiles[0]
+    const visibleProfiles = nextProfiles.length || !runtimeSettings
+      ? nextProfiles
+      : [{
+          id: runtimeSettings.id ?? 'default',
+          name: runtimeSettings.name ?? '默认节点',
+          baseUrl: runtimeSettings.baseUrl,
+          apiKey: '',
+          apiKeyMasked: runtimeSettings.apiKeyMasked ?? null,
+          apiKeyConfigured: runtimeSettings.apiKeyConfigured,
+          model: runtimeSettings.model,
+          apiMode: runtimeSettings.apiMode,
+          timeoutSeconds: runtimeSettings.timeoutSeconds,
+          responseFormatB64Json: runtimeSettings.responseFormatB64Json,
+          isDefault: true,
+        }]
+
+    setProfiles(visibleProfiles)
+    setProviderOptions(nextProviderOptions)
+    setDistribution(nextDistribution)
+    setUsageCodes(nextUsageCodes)
+    const defaultProfile = visibleProfiles.find((profile) => profile.isDefault) ?? visibleProfiles[0]
     if (defaultProfile) {
       setProfileDraft({ ...defaultProfile, apiKey: '' })
     } else {
@@ -138,13 +179,14 @@ export default function SettingsModal() {
 
   useEffect(() => {
     if (!showSettings) return
+    if (!isAdmin) setActiveTab('api')
     void loadSettings().catch((err) => {
       useStore.getState().showToast(
         `读取后端设置失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
     })
-  }, [showSettings])
+  }, [showSettings, isAdmin])
 
   useCloseOnEscape(showSettings, () => setShowSettings(false))
 
@@ -188,6 +230,15 @@ export default function SettingsModal() {
   }
 
   const handleSave = async () => {
+    if (!isAdmin) {
+      setSettings({
+        providerProfileId: draft.providerProfileId ?? providerOptions.find((option) => option.isDefault)?.id ?? null,
+      })
+      setShowSettings(false)
+      useStore.getState().showToast('API 选择已保存', 'success')
+      return
+    }
+
     const normalizedProfile: BackendProviderProfile = {
       ...profileDraft,
       name: profileDraft.name.trim() || '默认节点',
@@ -337,6 +388,92 @@ export default function SettingsModal() {
     }
   }
 
+  const handleToggleDistribution = async (enabled: boolean) => {
+    try {
+      const saved = await saveBackendDistribution({ ...distribution, enabled })
+      setDistribution(saved)
+      useStore.getState().showToast(enabled ? '分发功能已开启' : '分发功能已关闭', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `保存分发设置失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleSaveConcurrency = async () => {
+    try {
+      const saved = await saveBackendDistribution(distribution)
+      setDistribution(saved)
+      useStore.getState().showToast('并发设置已保存', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `保存并发设置失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleCreateUsageCode = async () => {
+    const quota = newCodeQuota.trim() ? Number(newCodeQuota) : null
+    if (quota != null && (!Number.isInteger(quota) || quota <= 0)) {
+      useStore.getState().showToast('图片额度需要是正整数', 'error')
+      return
+    }
+
+    try {
+      const result = await createBackendUsageCode({
+        name: newCodeName.trim() || '未命名使用码',
+        imageQuota: quota,
+      })
+      setLatestPlainCode(result.code)
+      setUsageCodes((prev) => [result.item, ...prev.filter((item) => item.id !== result.item.id)])
+      useStore.getState().showToast('使用码已生成，明文只显示一次', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `生成使用码失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleUpdateUsageCode = async (
+    codeId: string,
+    patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null },
+  ) => {
+    try {
+      const updated = await updateBackendUsageCode(codeId, patch)
+      setUsageCodes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    } catch (err) {
+      useStore.getState().showToast(
+        `更新使用码失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleDeleteUsageCode = (code: BackendUsageCode) => {
+    setConfirmDialog({
+      title: '删除使用码',
+      message: `确定要删除「${code.name}」吗？该使用码会立即失效，历史任务仍保留给管理员查看。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+      action: () => {
+        void deleteBackendUsageCode(code.id)
+          .then(() => {
+            setUsageCodes((prev) => prev.filter((item) => item.id !== code.id))
+            useStore.getState().showToast('使用码已删除', 'success')
+          })
+          .catch((err) => {
+            useStore.getState().showToast(
+              `删除使用码失败：${err instanceof Error ? err.message : String(err)}`,
+              'error',
+            )
+          })
+      },
+    })
+  }
+
   const tabClass = (tab: SettingsTab) =>
     `flex shrink-0 items-center gap-1.5 rounded-2xl px-4 py-2 text-sm font-medium transition ${
       activeTab === tab
@@ -368,9 +505,10 @@ export default function SettingsModal() {
         </div>
 
         <div className="tiny-scrollbar flex gap-2 overflow-x-auto border-b border-gray-100 px-5 py-3 dark:border-white/[0.08]">
-          <button className={tabClass('habits')} onClick={() => setActiveTab('habits')}>习惯配置</button>
+          {isAdmin && <button className={tabClass('habits')} onClick={() => setActiveTab('habits')}>习惯配置</button>}
           <button className={tabClass('api')} onClick={() => setActiveTab('api')}>API 配置</button>
-          <button className={tabClass('data')} onClick={() => setActiveTab('data')}>数据管理</button>
+          {isAdmin && <button className={tabClass('distribution')} onClick={() => setActiveTab('distribution')}>分发管理</button>}
+          {isAdmin && <button className={tabClass('data')} onClick={() => setActiveTab('data')}>数据管理</button>}
         </div>
 
         <div className="tiny-scrollbar flex-1 overflow-y-auto px-5 py-4">
@@ -403,7 +541,29 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {activeTab === 'api' && (
+          {activeTab === 'api' && !isAdmin && (
+            <div className="space-y-4">
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">可用 API</span>
+                <Select
+                  value={draft.providerProfileId ?? providerOptions.find((option) => option.isDefault)?.id ?? ''}
+                  onChange={(value) => updateDraft({ providerProfileId: String(value) })}
+                  options={providerOptions.map((option) => ({
+                    label: `${option.isDefault ? '默认 · ' : ''}${option.name}`,
+                    value: option.id,
+                  }))}
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                />
+              </label>
+              <div className="rounded-xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 text-sm text-gray-600 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300">
+                {authStatus?.user?.remainingImageCredits == null
+                  ? '当前使用码没有图片额度限制。'
+                  : `当前使用码剩余 ${authStatus.user.remainingImageCredits} 张图片额度。`}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'api' && isAdmin && (
             <div className="space-y-4">
               <div className="flex gap-2">
                 <Select
@@ -560,7 +720,160 @@ export default function SettingsModal() {
             </div>
           )}
 
-          {activeTab === 'data' && (
+          {activeTab === 'distribution' && isAdmin && (
+            <div className="space-y-4">
+              <PreferenceRow
+                title="开启分发功能"
+                description="开启后，普通用户可以用使用码登录。关闭后，只有管理员可以使用。"
+                checked={distribution.enabled}
+                onChange={handleToggleDistribution}
+              />
+
+              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-gray-800 dark:text-gray-100">同时执行任务数</span>
+                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">超过该数量的任务会进入队列，按提交顺序执行。</span>
+                  <input
+                    value={distribution.maxConcurrentTasks}
+                    onChange={(event) => setDistribution((prev) => ({
+                      ...prev,
+                      maxConcurrentTasks: Math.max(1, Number(event.target.value) || 1),
+                    }))}
+                    onBlur={handleSaveConcurrency}
+                    type="number"
+                    min={1}
+                    max={50}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem]">
+                  <input
+                    value={newCodeName}
+                    onChange={(event) => setNewCodeName(event.target.value)}
+                    placeholder="使用码名称"
+                    className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                  />
+                  <input
+                    value={newCodeQuota}
+                    onChange={(event) => setNewCodeQuota(event.target.value)}
+                    placeholder="图片额度"
+                    type="number"
+                    min={1}
+                    className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCreateUsageCode}
+                    className="rounded-xl bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                  >
+                    生成
+                  </button>
+                </div>
+                {latestPlainCode && (
+                  <div className="mt-3 rounded-xl bg-white px-3 py-2 text-sm dark:bg-black/20">
+                    <span className="text-gray-500 dark:text-gray-400">新使用码：</span>
+                    <span className="font-mono font-semibold tracking-wide text-gray-900 dark:text-gray-100">{latestPlainCode}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                {usageCodes.map((code) => {
+                  const quotaValue = code.imageQuota == null ? '' : String(code.imageQuota)
+                  return (
+                    <div
+                      key={code.id}
+                      className="rounded-2xl border border-gray-200/70 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <input
+                            value={code.name}
+                            onChange={(event) => {
+                              const name = event.target.value
+                              setUsageCodes((prev) => prev.map((item) => item.id === code.id ? { ...item, name } : item))
+                            }}
+                            onBlur={() => handleUpdateUsageCode(code.id, { name: code.name.trim() || '未命名使用码' })}
+                            className="w-full rounded-lg bg-transparent text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 剩余 {code.remainingImageCredits == null ? '不限' : code.remainingImageCredits}
+                          </p>
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                            创建于：{new Date(code.createdAt).toLocaleString('zh-CN')}
+                          </p>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <span className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800 dark:bg-black/20 dark:text-gray-100">
+                              {code.code ?? '旧使用码无法恢复'}
+                            </span>
+                            {code.code && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void navigator.clipboard.writeText(code.code ?? '')
+                                    .then(() => useStore.getState().showToast('使用码已复制', 'success'))
+                                    .catch(() => useStore.getState().showToast('复制失败', 'error'))
+                                }}
+                                className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                              >
+                                复制
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteUsageCode(code)}
+                              className="rounded-lg bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition hover:bg-red-100 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+                            >
+                              删除
+                            </button>
+                          </div>
+                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                            最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
+                          </p>
+                        </div>
+                        <Switch
+                          checked={code.isEnabled}
+                          onChange={(checked) => handleUpdateUsageCode(code.id, { isEnabled: checked })}
+                        />
+                      </div>
+                      <label className="mt-3 block">
+                        <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">图片额度</span>
+                        <input
+                          value={quotaValue}
+                          onChange={(event) => {
+                            const value = event.target.value
+                            setUsageCodes((prev) => prev.map((item) =>
+                              item.id === code.id
+                                ? { ...item, imageQuota: value.trim() ? Number(value) : null }
+                                : item,
+                            ))
+                          }}
+                          onBlur={() => {
+                            const quota = code.imageQuota == null ? null : Number(code.imageQuota)
+                            void handleUpdateUsageCode(code.id, { imageQuota: quota && quota > 0 ? quota : null })
+                          }}
+                          type="number"
+                          min={1}
+                          placeholder="留空表示不限量"
+                          className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                        />
+                      </label>
+                    </div>
+                  )
+                })}
+                {!usageCodes.length && (
+                  <div className="rounded-2xl border border-dashed border-gray-200 py-8 text-center text-sm text-gray-400 dark:border-white/[0.08]">
+                    暂无使用码
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'data' && isAdmin && (
             <div className="space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <button
@@ -641,7 +954,7 @@ export default function SettingsModal() {
           )}
         </div>
 
-        {activeTab !== 'api' && (
+        {(activeTab === 'habits' || (!isAdmin && activeTab === 'api')) && (
           <div className="grid grid-cols-2 gap-2 border-t border-gray-100 px-5 py-4 dark:border-white/[0.08]">
             <button
               type="button"

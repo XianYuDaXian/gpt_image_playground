@@ -8,6 +8,9 @@
   <img src="asset/高级编辑.png" alt="高级编辑" width="45%" />
   <img src="asset/遮罩编辑.png" alt="遮罩编辑" width="45%" />
 </p>
+<p align="center">
+  <img src="asset/分发功能设置.png" alt="分发功能设置" width="45%" />
+</p>
 
 ## Render一键部署
 
@@ -43,6 +46,8 @@
 - 后端统一实时进度
 - 后端保存运行配置
 - 后端导出 / 导入备份
+- 管理员登录与使用码分发
+- 使用码图片额度统计
 - Docker 单容器部署
 - 移动端与 PWA 适配
 
@@ -101,6 +106,7 @@ docker run -d \
   -e PORT=8787 \
   -e HOST=0.0.0.0 \
   -e APP_SECRET=change-this-secret  \
+  -e ADMIN_PASSWORD=change-this-admin-password \
   -e UPSTREAM_API_URL=https://api.openai.com/v1 \
   -e UPSTREAM_API_KEY=sk-xxxx \
   -e UPSTREAM_MODEL=gpt-5.5 \
@@ -123,6 +129,7 @@ docker run -d \
   --name gpt-image-playground \
   -p 8787:8787 \
   -e APP_SECRET=change-this-secret \
+  -e ADMIN_PASSWORD=change-this-admin-password \
   -v ./docker-data:/app/data \
   ghcr.io/xianyudaxian/gpt_image_playground:latest
 ```
@@ -139,6 +146,7 @@ services:
       PORT: 8787
       HOST: 0.0.0.0
       APP_SECRET: change-this-secret
+      ADMIN_PASSWORD: change-this-admin-password
       UPSTREAM_API_URL: https://api.openai.com/v1
       UPSTREAM_API_KEY: sk-xxxx
       UPSTREAM_MODEL: gpt-5.5
@@ -172,6 +180,7 @@ docker compose up -d --build
 - `PORT`
 - `HOST`
 - `APP_SECRET`
+- `ADMIN_PASSWORD`
 - `UPSTREAM_API_URL`
 - `UPSTREAM_API_KEY`
 - `UPSTREAM_MODEL`
@@ -211,6 +220,20 @@ docker compose up -d --build
 ```bash
 APP_SECRET=9b2f4d8d4d7c4d7fa1e58d7c0e9a4c6b7f2e1d9c5a8b3f6e
 ```
+
+### `ADMIN_PASSWORD` 是什么
+
+`ADMIN_PASSWORD` 是网页登录用的管理员密码。
+
+管理员可以：
+
+- 配置 API
+- 开启或关闭分发功能
+- 生成使用码
+- 设置使用码图片额度
+- 查看所有用户生成的图片
+
+普通用户只能用使用码登录，只能看到该使用码对应的任务和图片。
 
 ### 镜像更新方式
 

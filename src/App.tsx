@@ -13,9 +13,12 @@ import ConfirmDialog from './components/ConfirmDialog'
 import Toast from './components/Toast'
 import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
+import LoginPage from './components/LoginPage'
 
 export default function App() {
   const themeMode = useStore((s) => s.themeMode)
+  const authStatus = useStore((s) => s.authStatus)
+  const authInitialized = useStore((s) => s.authInitialized)
   const hasOverlayOpen = useStore((s) =>
     Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
   )
@@ -64,6 +67,23 @@ export default function App() {
       body.style.overflow = ''
     }
   }, [hasOverlayOpen])
+
+  if (!authInitialized) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
+        正在读取登录状态...
+      </main>
+    )
+  }
+
+  if (!authStatus?.authenticated) {
+    return (
+      <>
+        <LoginPage />
+        <Toast />
+      </>
+    )
+  }
 
   return (
     <>

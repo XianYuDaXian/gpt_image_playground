@@ -12,6 +12,7 @@ services:
       DATA_DIR: /app/data
       WEB_DIST_DIR: /app/dist
       APP_SECRET: "${APP_SECRET}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
       CORS_ORIGIN: "${CORS_ORIGIN:-*}"
       UPSTREAM_API_URL: "${UPSTREAM_API_URL:-}"
       UPSTREAM_API_KEY: "${UPSTREAM_API_KEY:-}"
