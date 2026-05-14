@@ -24,7 +24,8 @@ import { fetchBackendRuntimeSettings } from './lib/backendSettings'
 import { fetchAuthStatus, logoutAuth, type AuthStatus } from './lib/backendAuth'
 import { createBackendTask, deleteBackendTask, fetchBackendTasks, updateBackendTaskFlags } from './lib/backendTasks'
 import { validateMaskMatchesImage } from './lib/canvasImage'
-import { orderInputImagesForMask } from './lib/mask'
+import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
+import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import { normalizeImageSize } from './lib/size'
 
 // ===== Image cache =====
@@ -230,8 +231,8 @@ interface AppState {
   removeInputImage: (idx: number) => void
   moveInputImage: (fromIdx: number, toIdx: number) => void
   clearInputImages: () => void
-  setInputImages: (imgs: InputImage[]) => void
-  replaceInputImage: (currentId: string, nextImage: InputImage) => void
+  setInputImages: (imgs: InputImage[], options?: { equivalentImageIds?: Record<string, string> }) => void
+  replaceInputImage: (currentId: string, nextImage: InputImage, options?: { equivalentImageIds?: Record<string, string> }) => void
   maskDraft: MaskDraft | null
   setMaskDraft: (draft: MaskDraft | null) => void
   clearMaskDraft: () => void
@@ -356,9 +357,11 @@ export const useStore = create<AppState>()(
       removeInputImage: (idx) =>
         set((s) => {
           const removed = s.inputImages[idx]
+          const nextImages = s.inputImages.filter((_, i) => i !== idx)
           const shouldClearMask = removed?.id === s.maskDraft?.targetImageId
           return {
-            inputImages: s.inputImages.filter((_, i) => i !== idx),
+            inputImages: nextImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, nextImages),
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
         }),
@@ -373,37 +376,74 @@ export const useStore = create<AppState>()(
           ) {
             return s
           }
+          if (
+            s.maskDraft &&
+            s.inputImages[0]?.id === s.maskDraft.targetImageId &&
+            fromIdx !== 0 &&
+            toIdx === 0
+          ) {
+            return s
+          }
 
           const nextImages = [...s.inputImages]
           const [moved] = nextImages.splice(fromIdx, 1)
           if (!moved) return s
           nextImages.splice(toIdx, 0, moved)
-          return { inputImages: nextImages }
+          return {
+            inputImages: nextImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, nextImages),
+          }
         }),
       clearInputImages: () =>
         set((s) => {
           for (const img of s.inputImages) imageCache.delete(img.id)
-          return { inputImages: [], maskDraft: null, maskEditorImageId: null }
+          return {
+            inputImages: [],
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, []),
+            maskDraft: null,
+            maskEditorImageId: null,
+          }
         }),
-      setInputImages: (imgs) =>
+      setInputImages: (imgs, options) =>
         set((s) => {
           const shouldClearMask =
             Boolean(s.maskDraft) && !imgs.some((img) => img.id === s.maskDraft?.targetImageId)
           return {
             inputImages: imgs,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, imgs, options?.equivalentImageIds),
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
         }),
-      replaceInputImage: (currentId, nextImage) =>
+      replaceInputImage: (currentId, nextImage, options) =>
         set((s) => {
           const shouldClearMask = s.maskDraft?.targetImageId === currentId
+          const nextImages = s.inputImages.map((img) => (img.id === currentId ? nextImage : img))
           return {
-            inputImages: s.inputImages.map((img) => (img.id === currentId ? nextImage : img)),
+            inputImages: nextImages,
+            prompt: remapImageMentionsForOrder(
+              s.prompt,
+              s.inputImages,
+              nextImages,
+              options?.equivalentImageIds ?? { [currentId]: nextImage.id },
+            ),
             ...(shouldClearMask ? { maskDraft: null, maskEditorImageId: null } : {}),
           }
         }),
       maskDraft: null,
-      setMaskDraft: (maskDraft) => set({ maskDraft }),
+      setMaskDraft: (maskDraft) =>
+        set((s) => {
+          if (!maskDraft) return { maskDraft: null }
+          const target = validateMaskTarget(s.inputImages, maskDraft.targetImageId)
+          if (s.inputImages[0]?.id === target.id) {
+            return { maskDraft }
+          }
+          const nextImages = orderInputImagesForMask(s.inputImages, maskDraft.targetImageId)
+          return {
+            inputImages: nextImages,
+            prompt: remapImageMentionsForOrder(s.prompt, s.inputImages, nextImages),
+            maskDraft,
+          }
+        }),
       clearMaskDraft: () => set({ maskDraft: null }),
       maskEditorImageId: null,
       setMaskEditorImageId: (maskEditorImageId) => set({ maskEditorImageId }),
@@ -734,7 +774,7 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
       inputDataUrls.push(img.dataUrl)
     }
     const result = await createBackendTask({
-      prompt: prompt.trim(),
+      prompt: replaceImageMentionsForApi(prompt.trim(), orderedInputImages.length),
       params: normalizedParams,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl: maskDraft?.maskDataUrl,
@@ -764,15 +804,20 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
 
 export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   const { tasks, setTasks, showToast } = useStore.getState()
+  const normalizedPatch = {
+    ...patch,
+    ...(patch.isFavorite === true ? { isArchived: false } : {}),
+    ...(patch.isArchived === true ? { isFavorite: false } : {}),
+  }
   const updated = tasks.map((t) =>
-    t.id === taskId ? { ...t, ...patch, updatedAt: Date.now() } : t,
+    t.id === taskId ? { ...t, ...normalizedPatch, updatedAt: Date.now() } : t,
   )
   setTasks(sortTasksForDisplay(updated))
 
-  if ('isFavorite' in patch || 'isArchived' in patch) {
+  if ('isFavorite' in normalizedPatch || 'isArchived' in normalizedPatch) {
     void updateBackendTaskFlags(taskId, {
-      ...('isFavorite' in patch ? { isFavorite: patch.isFavorite } : {}),
-      ...('isArchived' in patch ? { isArchived: patch.isArchived } : {}),
+      ...('isFavorite' in normalizedPatch ? { isFavorite: normalizedPatch.isFavorite } : {}),
+      ...('isArchived' in normalizedPatch ? { isArchived: normalizedPatch.isArchived } : {}),
     }).catch((err) => {
       showToast(`同步任务状态失败：${err instanceof Error ? err.message : String(err)}`, 'error')
       void refreshTasksFromServer({ silent: true })
@@ -976,7 +1021,11 @@ export async function addImageFromFile(file: File): Promise<void> {
 export async function replaceInputImageWithDataUrl(currentId: string, dataUrl: string): Promise<string> {
   const id = await storeImage(dataUrl)
   cacheImage(id, dataUrl)
-  useStore.getState().replaceInputImage(currentId, { id, dataUrl })
+  useStore.getState().replaceInputImage(
+    currentId,
+    { id, dataUrl },
+    { equivalentImageIds: { [currentId]: id } },
+  )
   return id
 }
 

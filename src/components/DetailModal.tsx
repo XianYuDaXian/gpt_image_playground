@@ -608,6 +608,20 @@ export default function DetailModal() {
                 <br />
                 <DetailParamValue task={task} paramKey="n" className="font-medium" actualParams={aggregateActualParams} />
               </div>
+              {task.providerProfileName && (
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">API 配置</span>
+                  <br />
+                  <span className="font-medium break-all">{task.providerProfileName}</span>
+                </div>
+              )}
+              {task.providerProfileModel && (
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">模型</span>
+                  <br />
+                  <span className="font-medium break-all">{task.providerProfileModel}</span>
+                </div>
+              )}
               {task.params.output_compression != null && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                   <span className="text-gray-400 dark:text-gray-500">压缩率</span>
@@ -688,7 +702,7 @@ export default function DetailModal() {
               }`}
               title={task.isArchived ? '取消归档' : '归档记录'}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill={task.isArchived ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                 <rect x="4" y="4" width="16" height="5" rx="1" />
                 <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
                 <path d="M10 13h4" />

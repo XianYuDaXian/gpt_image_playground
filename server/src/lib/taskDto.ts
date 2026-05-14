@@ -1,5 +1,5 @@
 import path from 'node:path'
-import type { AppDatabase, TaskImageRecord, TaskRecord } from './db.js'
+import type { AppDatabase, ProviderProfileRecord, TaskImageRecord, TaskRecord } from './db.js'
 import { decryptText } from './crypto.js'
 
 function toUiStatus(status: string) {
@@ -43,7 +43,15 @@ function buildImageSizeMap(images: TaskImageRecord[]) {
   }, {})
 }
 
-export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[], options: { appSecret?: string; exposeUsageCodeAlias?: boolean } = {}) {
+export function serializeTaskRecord(
+  task: TaskRecord,
+  images: TaskImageRecord[],
+  options: {
+    appSecret?: string
+    exposeUsageCodeAlias?: boolean
+    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'model'> | null
+  } = {},
+) {
   const inputImages = images.filter((image) => image.kind === 'input')
   const outputImages = images.filter((image) => image.kind === 'output')
   const maskImage = images.find((image) => image.kind === 'mask') ?? null
@@ -58,6 +66,9 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[],
     id: task.id,
     prompt: task.prompt,
     params: JSON.parse(task.paramsJson),
+    providerProfileId: task.providerProfileId,
+    providerProfileName: options.providerProfile?.name ?? null,
+    providerProfileModel: options.providerProfile?.model ?? null,
     inputImageIds: inputImages.map((image) => image.id),
     outputImages: outputImages.map((image) => image.id),
     maskImageId: maskImage?.id ?? null,
@@ -101,5 +112,6 @@ export function serializeTaskRecord(task: TaskRecord, images: TaskImageRecord[],
 export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean } = {}) {
   const task = db.getTask(taskId)
   if (!task) return null
-  return serializeTaskRecord(task, db.listTaskImages(taskId), options)
+  const providerProfile = task.providerProfileId ? db.getProviderProfile(task.providerProfileId) : null
+  return serializeTaskRecord(task, db.listTaskImages(taskId), { ...options, providerProfile })
 }

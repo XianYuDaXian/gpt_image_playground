@@ -131,6 +131,15 @@ input[type="number"] {
   mask-image: linear-gradient(to right, transparent 0, black 1rem, black calc(100% - 1rem), transparent 100%);
 }
 
+.mention-tag {
+  user-select: all;
+}
+
+.mention-tag.selected {
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.28);
+  background: rgba(59, 130, 246, 0.2);
+}
+
 @keyframes toast-enter {
   0% { transform: translate(-50%, 16px); opacity: 0; }
   100% { transform: translate(-50%, 0); opacity: 1; }
@@ -193,6 +202,22 @@ input[type="number"] {
 }
 .animate-confirm-in {
   animation: confirm-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in-up {
+  animation: fade-in-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* 移动端折叠区域收起/展开 */

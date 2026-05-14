@@ -85,6 +85,9 @@ export interface TaskRecord {
   id: string
   prompt: string
   params: TaskParams
+  providerProfileId?: string | null
+  providerProfileName?: string | null
+  providerProfileModel?: string | null
   /** 最近一次写入时间（ms） */
   updatedAt?: number
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */

@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { ensureTaskImageAvailable, useStore } from '../store'
 import { canvasToBlob, loadImage } from '../lib/canvasImage'
 import { storeImage } from '../lib/db'
+import { assertUsableMaskCoverage, classifyMaskAlpha } from '../lib/mask'
 import { prepareMaskTargetDataUrl, replaceMaskTargetImage } from '../lib/maskPreprocess'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 const ReferenceImageEditorModal = lazy(() => import('./ReferenceImageEditorModal'))
@@ -861,13 +862,16 @@ export default function MaskEditorModal() {
 
   const handleSave = async () => {
     const canvas = maskCanvasRef.current
+    const context = canvas?.getContext('2d', { willReadFrequently: true })
     const savingSessionId = activeSessionIdRef.current
-    if (!canvas || !sourceDataUrl || !imageId || !isReady || isSaving || !savingSessionId) return
+    if (!canvas || !context || !sourceDataUrl || !imageId || !isReady || isSaving || !savingSessionId) return
 
     const token = ++saveTokenRef.current
     const savingImageId = imageId
     try {
       setIsSaving(true)
+      const coverage = classifyMaskAlpha(context.getImageData(0, 0, canvas.width, canvas.height))
+      assertUsableMaskCoverage(coverage)
       const blob = await canvasToBlob(canvas, 'image/png')
       const maskDataUrl = await blobToDataUrl(blob)
       const workingTargetId = await storeImage(sourceDataUrl, 'upload')
@@ -877,20 +881,34 @@ export default function MaskEditorModal() {
         useStore.getState().maskEditorImageId !== savingImageId
       ) return
 
-      const latestStore = useStore.getState()
-      latestStore.setInputImages(
-        replaceMaskTargetImage(latestStore.inputImages, savingImageId, {
-          id: workingTargetId,
-          dataUrl: sourceDataUrl,
-        }),
-      )
-      setMaskDraft({
-        targetImageId: workingTargetId,
-        maskDataUrl,
-        updatedAt: Date.now(),
-      })
-      setMaskEditorImageId(null)
-      showToast('遮罩已保存', 'success')
+      const commitMaskSave = () => {
+        const latestStore = useStore.getState()
+        latestStore.setInputImages(
+          replaceMaskTargetImage(latestStore.inputImages, savingImageId, {
+            id: workingTargetId,
+            dataUrl: sourceDataUrl,
+          }),
+        )
+        setMaskDraft({
+          targetImageId: workingTargetId,
+          maskDataUrl,
+          updatedAt: Date.now(),
+        })
+        setMaskEditorImageId(null)
+        showToast('遮罩已保存', 'success')
+      }
+
+      const currentMaskTargetId = useStore.getState().maskDraft?.targetImageId
+      if (coverage !== 'empty' && currentMaskTargetId && currentMaskTargetId !== savingImageId) {
+        setConfirmDialog({
+          title: '覆盖当前遮罩',
+          message: '遮罩只能存在于一张图片。继续后会用当前图片的遮罩替换原有遮罩。',
+          confirmText: '确认覆盖',
+          action: commitMaskSave,
+        })
+      } else {
+        commitMaskSave()
+      }
     } catch (err) {
       if (
         saveTokenRef.current !== token ||

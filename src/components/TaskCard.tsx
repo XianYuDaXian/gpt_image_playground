@@ -281,6 +281,8 @@ export default function TaskCard({
     ? { ...task.actualParams, n: task.outputImages.length }
     : task.actualParams
   const hasOutputImage = Boolean(task.outputImages?.length)
+  const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
+  const taskModelLabel = task.providerProfileModel ?? null
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const swipeBgClass = showSwipeAction
@@ -493,6 +495,22 @@ export default function TaskCard({
                   mask
                 </span>
               )}
+              {taskSourceLabel && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0"
+                  title={taskSourceLabel}
+                >
+                  {taskSourceLabel}
+                </span>
+              )}
+              {taskModelLabel && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0"
+                  title={taskModelLabel}
+                >
+                  {taskModelLabel}
+                </span>
+              )}
               {task.ownerLabel && (
                 <UsageCodeBadge task={task} />
               )}
@@ -538,7 +556,7 @@ export default function TaskCard({
                 }`}
                 title={task.isArchived ? '取消归档' : '归档记录'}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                <svg className="w-4 h-4" fill={task.isArchived ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                   <rect x="4" y="4" width="16" height="5" rx="1" />
                   <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
                   <path d="M10 13h4" />

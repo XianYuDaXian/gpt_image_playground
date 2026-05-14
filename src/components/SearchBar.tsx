@@ -15,7 +15,11 @@ export default function SearchBar() {
     <div className="mt-6 mb-4 flex gap-3">
       <div className="flex gap-2 flex-shrink-0 z-20">
         <button
-          onClick={() => setFilterFavorite(!filterFavorite)}
+          onClick={() => {
+            const nextValue = !filterFavorite
+            setFilterFavorite(nextValue)
+            if (nextValue) setFilterArchived(false)
+          }}
           className={`p-2.5 rounded-xl border transition-all ${
             filterFavorite
               ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-500'
@@ -28,7 +32,11 @@ export default function SearchBar() {
           </svg>
         </button>
         <button
-          onClick={() => setFilterArchived(!filterArchived)}
+          onClick={() => {
+            const nextValue = !filterArchived
+            setFilterArchived(nextValue)
+            if (nextValue) setFilterFavorite(false)
+          }}
           className={`p-2.5 rounded-xl border transition-all ${
             filterArchived
               ? 'border-slate-400 bg-slate-100 dark:bg-slate-500/10 text-slate-600 dark:text-slate-300'
@@ -36,7 +44,7 @@ export default function SearchBar() {
           }`}
           title={filterArchived ? '返回未归档记录' : '查看归档记录'}
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+          <svg className="w-5 h-5" fill={filterArchived ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
             <rect x="4" y="4" width="16" height="5" rx="1" />
             <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
             <path d="M10 13h4" />
