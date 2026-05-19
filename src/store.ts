@@ -311,6 +311,7 @@ export const useStore = create<AppState>()(
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
+          grokApiCompat: s.grokApiCompat ?? st.settings.grokApiCompat ?? DEFAULT_SETTINGS.grokApiCompat,
           responseFormatB64Json:
             s.responseFormatB64Json ?? st.settings.responseFormatB64Json ?? DEFAULT_SETTINGS.responseFormatB64Json,
           clearInputAfterSubmit:
@@ -630,6 +631,7 @@ export async function initStore() {
         apiMode: runtimeSettings.apiMode,
         timeout: runtimeSettings.timeoutSeconds,
         codexCli: runtimeSettings.codexCli,
+        grokApiCompat: runtimeSettings.grokApiCompat,
         responseFormatB64Json: runtimeSettings.responseFormatB64Json,
         clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
         persistInputOnRestart: runtimeSettings.persistInputOnRestart,

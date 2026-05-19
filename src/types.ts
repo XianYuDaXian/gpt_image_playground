@@ -13,6 +13,7 @@ export interface AppSettings {
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
+  grokApiCompat: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -35,6 +36,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   timeout: 300,
   apiMode: 'images',
   codexCli: false,
+  grokApiCompat: false,
   responseFormatB64Json: false,
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,

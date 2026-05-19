@@ -6,6 +6,7 @@ import { strFromU8, unzipSync } from 'fflate'
 import { z } from 'zod'
 import {
   createPlainUsageCode,
+  getAllowedProviderProfileIds,
   hashSecret,
   requireAdmin,
   requireAuth,
@@ -22,17 +23,23 @@ const providerProfileSchema = z.object({
   model: z.string().min(1),
   apiMode: z.enum(['images', 'responses']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
+  codexCli: z.boolean().default(false),
+  grokApiCompat: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
   isDefault: z.boolean().default(false),
+}).refine((value) => !(value.codexCli && value.grokApiCompat), {
+  message: 'Codex CLI 模式与 Grok API 兼容不能同时启用',
+  path: ['grokApiCompat'],
 })
 
-const runtimeSettingsSchema = z.object({
+const runtimeSettingsSchemaBase = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1),
   model: z.string().min(1),
   apiMode: z.enum(['images', 'responses']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
+  grokApiCompat: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
   clearInputAfterSubmit: z.boolean().default(false),
   persistInputOnRestart: z.boolean().default(true),
@@ -40,12 +47,16 @@ const runtimeSettingsSchema = z.object({
   alwaysShowRetryButton: z.boolean().default(false),
 })
 
-const runtimePreferencesSchema = runtimeSettingsSchema.pick({
-  codexCli: true,
-  clearInputAfterSubmit: true,
-  persistInputOnRestart: true,
-  reuseTaskApiProfileTemporarily: true,
-  alwaysShowRetryButton: true,
+const runtimeSettingsSchema = runtimeSettingsSchemaBase.refine((value) => !(value.codexCli && value.grokApiCompat), {
+  message: 'Codex CLI 模式与 Grok API 兼容不能同时启用',
+  path: ['grokApiCompat'],
+})
+
+const runtimePreferencesSchema = z.object({
+  clearInputAfterSubmit: z.boolean().default(false),
+  persistInputOnRestart: z.boolean().default(true),
+  reuseTaskApiProfileTemporarily: z.boolean().default(false),
+  alwaysShowRetryButton: z.boolean().default(false),
 })
 
 const backupTaskSchema = z.object({
@@ -116,21 +127,25 @@ const distributionSettingsSchema = z.object({
 const usageCodeCreateSchema = z.object({
   name: z.string().min(1).optional(),
   imageQuota: z.number().int().positive().nullable().optional(),
+  allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
 })
 
 const usageCodePatchSchema = z.object({
   name: z.string().min(1).optional(),
   isEnabled: z.boolean().optional(),
   imageQuota: z.number().int().positive().nullable().optional(),
+  allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
 }).refine((value) =>
-  value.name !== undefined || value.isEnabled !== undefined || value.imageQuota !== undefined,
+  value.name !== undefined
+    || value.isEnabled !== undefined
+    || value.imageQuota !== undefined
+    || value.allowedProviderProfileIds !== undefined,
   { message: '至少需要更新一个字段' },
 )
 
 function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
   const runtime = app.db.getAppSetting<Partial<z.infer<typeof runtimeSettingsSchema>>>('runtime')
   return {
-    codexCli: Boolean(runtime?.codexCli),
     clearInputAfterSubmit: Boolean(runtime?.clearInputAfterSubmit),
     persistInputOnRestart: runtime?.persistInputOnRestart !== false,
     reuseTaskApiProfileTemporarily: Boolean(runtime?.reuseTaskApiProfileTemporarily),
@@ -159,6 +174,8 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
     model: profile.model,
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
+    codexCli: Boolean(profile.codexCli),
+    grokApiCompat: Boolean(profile.grokApiCompat),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
@@ -170,6 +187,12 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
   return {
     id: profile.id,
     name: profile.name,
+    apiMode: profile.apiMode,
+    model: profile.model,
+    timeoutSeconds: profile.timeoutSeconds,
+    codexCli: Boolean(profile.codexCli),
+    grokApiCompat: Boolean(profile.grokApiCompat),
+    responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     isDefault: Boolean(profile.isDefault),
   }
 }
@@ -198,6 +221,7 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     remainingImageCredits,
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
+    allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     createdAt: code.createdAt,
     updatedAt: code.updatedAt,
     lastUsedAt: code.lastUsedAt,
@@ -305,7 +329,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         model: profile.model,
         apiMode: profile.apiMode,
         timeoutSeconds: profile.timeoutSeconds,
-        codexCli: preferences.codexCli,
+        codexCli: Boolean(profile.codexCli),
+        grokApiCompat: Boolean(profile.grokApiCompat),
         responseFormatB64Json: Boolean(profile.responseFormatB64Json),
         clearInputAfterSubmit: preferences.clearInputAfterSubmit,
         persistInputOnRestart: preferences.persistInputOnRestart,
@@ -336,7 +361,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: profile.model,
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
-      codexCli: preferences.codexCli,
+      codexCli: Boolean(profile.codexCli),
+      grokApiCompat: Boolean(profile.grokApiCompat),
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
       clearInputAfterSubmit: preferences.clearInputAfterSubmit,
       persistInputOnRestart: preferences.persistInputOnRestart,
@@ -358,12 +384,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      codexCli: payload.codexCli,
+      grokApiCompat: payload.grokApiCompat,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
 
     app.db.setAppSetting('runtime', {
-      codexCli: payload.codexCli,
       clearInputAfterSubmit: payload.clearInputAfterSubmit,
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
@@ -385,7 +412,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
-      codexCli: payload.codexCli,
+      codexCli: Boolean(profile.codexCli),
+      grokApiCompat: Boolean(profile.grokApiCompat),
       clearInputAfterSubmit: payload.clearInputAfterSubmit,
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
@@ -402,9 +430,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.get('/api/provider-options', async (request, reply) => {
-    await requireAuth(app, request, reply)
+    const auth = await requireAuth(app, request, reply)
+    const profiles = app.db.listProviderProfiles()
+    const allowedProviderProfileIds = getAllowedProviderProfileIds(auth)
     return {
-      items: app.db.listProviderProfiles().map((profile) => serializeProviderOption(profile)),
+      items: profiles
+        .filter((profile) => !allowedProviderProfileIds || allowedProviderProfileIds.includes(profile.id))
+        .map((profile) => serializeProviderOption(profile)),
     }
   })
 
@@ -443,6 +475,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      codexCli: payload.codexCli,
+      grokApiCompat: payload.grokApiCompat,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
@@ -467,6 +501,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      codexCli: payload.codexCli,
+      grokApiCompat: payload.grokApiCompat,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: payload.isDefault,
     })
@@ -494,6 +530,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.model,
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
+      codexCli: payload.codexCli,
+      grokApiCompat: payload.grokApiCompat,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: payload.isDefault,
     })
@@ -542,6 +580,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       codeEncrypted: encryptText(code, app.config.appSecret),
       name: payload.name?.trim() || '未命名使用码',
       imageQuota: payload.imageQuota ?? null,
+      allowedProviderProfileIds: payload.allowedProviderProfileIds ?? null,
     })
     if (!usageCode) throw new Error('创建使用码失败')
 
@@ -569,6 +608,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       name: payload.name?.trim(),
       isEnabled: payload.isEnabled,
       imageQuota: payload.imageQuota,
+      allowedProviderProfileIds: payload.allowedProviderProfileIds,
     })
     if (!updated) {
       reply.code(404)
@@ -601,12 +641,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       model: payload.runtimeSettings.model,
       apiMode: payload.runtimeSettings.apiMode,
       timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
+      codexCli: payload.runtimeSettings.codexCli,
+      grokApiCompat: payload.runtimeSettings.grokApiCompat,
       responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json,
       isDefault: true,
     })
 
     app.db.setAppSetting('runtime', {
-      codexCli: payload.runtimeSettings.codexCli,
       clearInputAfterSubmit: payload.runtimeSettings.clearInputAfterSubmit,
       persistInputOnRestart: payload.runtimeSettings.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.runtimeSettings.reuseTaskApiProfileTemporarily,
@@ -691,6 +732,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           model: profile.model,
           apiMode: profile.apiMode,
           timeoutSeconds: profile.timeoutSeconds,
+          codexCli: Boolean(profile.codexCli),
+          grokApiCompat: Boolean(profile.grokApiCompat),
           responseFormatB64Json: Boolean(profile.responseFormatB64Json),
           ...getRuntimePreferences(app),
         }

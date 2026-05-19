@@ -119,7 +119,6 @@ export class TaskWorker {
     }
 
     try {
-      const runtime = this.db.getAppSetting<{ codexCli?: boolean }>('runtime')
       const inputImages = this.db.listTaskImages(taskId).filter((image) => image.kind === 'input')
       const maskImage = this.db.listTaskImages(taskId).find((image) => image.kind === 'mask') ?? null
       const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
@@ -168,7 +167,6 @@ export class TaskWorker {
           prompt: task.prompt,
           params,
           provider,
-          runtime,
           inputImages: inputImages.map((image) => ({
             filePath: path.join(this.config.mediaDir, image.filePath),
             mimeType: image.mimeType,

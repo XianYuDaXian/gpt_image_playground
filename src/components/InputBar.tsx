@@ -14,6 +14,7 @@ import {
 import { normalizeImageSize } from '../lib/size'
 import { matchesTaskSearch } from '../lib/taskSearch'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import { fetchBackendProviderOptions, type BackendProviderOption } from '../lib/backendSettings'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { useHintTooltip } from '../hooks/useHintTooltip'
 import { useKeyboardVisible } from '../hooks/useKeyboardVisible'
@@ -481,6 +482,7 @@ export default function InputBar() {
   const [outputCompressionInput, setOutputCompressionInput] = useState(
     params.output_compression == null ? '' : String(params.output_compression),
   )
+  const [providerOptions, setProviderOptions] = useState<BackendProviderOption[]>([])
   const [nInput, setNInput] = useState(String(params.n))
   const [nInputFocused, setNInputFocused] = useState(false)
   const dragCounter = useRef(0)
@@ -611,6 +613,54 @@ export default function InputBar() {
     document.addEventListener('pointerdown', handleOutsidePointer, true)
     return () => document.removeEventListener('pointerdown', handleOutsidePointer, true)
   }, [isMobile, selectedInputImageId])
+
+  useEffect(() => {
+    void fetchBackendProviderOptions()
+      .then((items) => setProviderOptions(items))
+      .catch(() => setProviderOptions([]))
+  }, [authStatus?.role])
+
+  const applyProviderOption = useCallback((option: BackendProviderOption | null) => {
+    if (!option) return
+    useStore.getState().setSettings({
+      providerProfileId: option.id,
+      apiMode: option.apiMode,
+      model: option.model,
+      timeout: option.timeoutSeconds,
+      codexCli: option.codexCli,
+      grokApiCompat: option.grokApiCompat,
+      responseFormatB64Json: option.responseFormatB64Json,
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!providerOptions.length) return
+    const currentId = settings.providerProfileId
+    const matched = currentId ? providerOptions.find((item) => item.id === currentId) : null
+    const target = matched ?? providerOptions.find((item) => item.isDefault) ?? providerOptions[0] ?? null
+    if (!target) return
+    if (
+      settings.providerProfileId !== target.id
+      || settings.apiMode !== target.apiMode
+      || settings.model !== target.model
+      || settings.timeout !== target.timeoutSeconds
+      || settings.codexCli !== target.codexCli
+      || settings.grokApiCompat !== target.grokApiCompat
+      || settings.responseFormatB64Json !== target.responseFormatB64Json
+    ) {
+      applyProviderOption(target)
+    }
+  }, [
+    applyProviderOption,
+    providerOptions,
+    settings.apiMode,
+    settings.codexCli,
+    settings.grokApiCompat,
+    settings.model,
+    settings.providerProfileId,
+    settings.responseFormatB64Json,
+    settings.timeout,
+  ])
 
   useEffect(() => {
     if (!isMobile) return
@@ -988,6 +1038,27 @@ export default function InputBar() {
 
   const selectClass = 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] hover:bg-white dark:hover:bg-white/[0.06] text-xs transition-all duration-200 shadow-sm'
 
+  const renderProviderSelector = (className: string) => {
+    if (!showProviderSelector) return null
+    const currentId = settings.providerProfileId ?? providerOptions.find((item) => item.isDefault)?.id ?? providerOptions[0]?.id ?? ''
+    return (
+      <div className={className}>
+        <Select
+          value={currentId}
+          onChange={(value) => {
+            const nextOption = providerOptions.find((option) => option.id === String(value)) ?? null
+            applyProviderOption(nextOption)
+          }}
+          options={providerOptions.map((option) => ({
+            label: option.name,
+            value: option.id,
+          }))}
+          className="h-10 rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+        />
+      </div>
+    )
+  }
+
   const handleInputImageClick = (imgId: string) => {
     const imageIndex = inputImages.findIndex((image) => image.id === imgId)
     if (imageIndex < 0) return
@@ -1341,6 +1412,7 @@ export default function InputBar() {
   )
 
   const mobileChipClass = 'inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-full border border-gray-200/60 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-gray-600 shadow-sm transition-all active:scale-95 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-300'
+  const showProviderSelector = providerOptions.length > 1
 
   const renderMobileParamChips = () => (
     <div className="hide-scrollbar flex items-center gap-1.5 overflow-x-auto pb-2">
@@ -1789,36 +1861,39 @@ export default function InputBar() {
                 </button>
               </div>
 
-              <div
-                className="relative"
-                onMouseEnter={() => setSubmitHover(true)}
-                onMouseLeave={() => setSubmitHover(false)}
-              >
-                {renderUsageCodePicker()}
-                <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={hasConfiguredProvider ? !canSubmit : false}
-                  className={`flex h-10 min-w-[112px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
-                    !hasConfiguredProvider
-                      ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
-                      : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'
-                  }`}
-                  title={hasConfiguredProvider ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
+              <div className="flex items-center gap-2">
+                {renderProviderSelector('w-[144px]')}
+                <div
+                  className="relative"
+                  onMouseEnter={() => setSubmitHover(true)}
+                  onMouseLeave={() => setSubmitHover(false)}
                 >
-                  {isSubmitting ? (
-                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  ) : (
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                  )}
-                  <span>{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
-                </button>
+                  {renderUsageCodePicker()}
+                  <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={hasConfiguredProvider ? !canSubmit : false}
+                    className={`flex h-10 min-w-[112px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
+                      !hasConfiguredProvider
+                        ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
+                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'
+                    }`}
+                    title={hasConfiguredProvider ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
+                  >
+                    {isSubmitting ? (
+                      <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                    )}
+                    <span>{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1872,35 +1947,38 @@ export default function InputBar() {
                 </>
               )}
 
-              <div
-                className={`relative ${keyboardVisible ? 'w-full' : 'flex-1'}`}
-                onMouseEnter={() => setSubmitHover(true)}
-                onMouseLeave={() => setSubmitHover(false)}
-              >
-                {renderUsageCodePicker()}
-                <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={hasConfiguredProvider ? !canSubmit : false}
-                  className={`flex h-10 w-full items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
-                    !hasConfiguredProvider
-                      ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
-                      : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'
-                  }`}
+              <div className={`flex items-center gap-2 ${keyboardVisible ? 'w-full' : 'flex-1'}`}>
+                {!keyboardVisible && renderProviderSelector('w-[104px] shrink-0')}
+                <div
+                  className="relative flex-1"
+                  onMouseEnter={() => setSubmitHover(true)}
+                  onMouseLeave={() => setSubmitHover(false)}
                 >
-                  {isSubmitting ? (
-                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                  ) : (
-                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                    </svg>
-                  )}
-                  <span>{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
-                </button>
+                  {renderUsageCodePicker()}
+                  <ButtonTooltip visible={!hasConfiguredProvider && submitHover} text="尚未完成后端 API 配置，请在右上角设置中进行" />
+                  <button
+                    type="button"
+                    onClick={handleSubmit}
+                    disabled={hasConfiguredProvider ? !canSubmit : false}
+                    className={`flex h-10 w-full min-w-[136px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
+                      !hasConfiguredProvider
+                        ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
+                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'
+                    }`}
+                  >
+                    {isSubmitting ? (
+                      <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    ) : (
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                    )}
+                    <span className="whitespace-nowrap">{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>

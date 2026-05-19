@@ -3,7 +3,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { buildAuthStatus, canAccessTask, requireAuth } from '../lib/auth.js'
+import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth } from '../lib/auth.js'
 import { serializeTaskRecord, loadSerializedTask } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
 
@@ -108,6 +108,13 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     if (!providerProfile) {
       reply.code(400)
       return { message: 'API 配置不存在' }
+    }
+    if (auth.role === 'user') {
+      const allowedProviderProfileIds = getAllowedProviderProfileIds(auth)
+      if (allowedProviderProfileIds && !allowedProviderProfileIds.includes(providerProfile.id)) {
+        reply.code(403)
+        return { message: '当前使用码无权调用该 API 配置' }
+      }
     }
 
     let reservedImageCredits = 0

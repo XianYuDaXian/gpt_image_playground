@@ -41,6 +41,8 @@ function createEmptyProfile(): BackendProviderProfile {
     model: DEFAULT_IMAGES_MODEL,
     apiMode: 'images',
     timeoutSeconds: DEFAULT_SETTINGS.timeout,
+    codexCli: false,
+    grokApiCompat: false,
     responseFormatB64Json: false,
     isDefault: false,
   }
@@ -143,6 +145,7 @@ export default function SettingsModal() {
             apiMode: runtimeSettings.apiMode,
             timeout: runtimeSettings.timeoutSeconds,
             codexCli: runtimeSettings.codexCli,
+            grokApiCompat: runtimeSettings.grokApiCompat,
             responseFormatB64Json: runtimeSettings.responseFormatB64Json,
             clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
             persistInputOnRestart: runtimeSettings.persistInputOnRestart,
@@ -166,6 +169,8 @@ export default function SettingsModal() {
           model: runtimeSettings.model,
           apiMode: runtimeSettings.apiMode,
           timeoutSeconds: runtimeSettings.timeoutSeconds,
+          codexCli: runtimeSettings.codexCli,
+          grokApiCompat: runtimeSettings.grokApiCompat,
           responseFormatB64Json: runtimeSettings.responseFormatB64Json,
           isDefault: true,
         }]
@@ -221,6 +226,7 @@ export default function SettingsModal() {
         apiMode: runtimeSettings.apiMode,
         timeout: runtimeSettings.timeoutSeconds,
         codexCli: runtimeSettings.codexCli,
+        grokApiCompat: runtimeSettings.grokApiCompat,
         responseFormatB64Json: runtimeSettings.responseFormatB64Json,
         clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
         persistInputOnRestart: runtimeSettings.persistInputOnRestart,
@@ -236,9 +242,22 @@ export default function SettingsModal() {
 
   const handleSave = async () => {
     if (!isAdmin) {
-      setSettings({
-        providerProfileId: draft.providerProfileId ?? providerOptions.find((option) => option.isDefault)?.id ?? null,
-      })
+      const selectedOption = providerOptions.find((option) => option.id === draft.providerProfileId)
+        ?? providerOptions.find((option) => option.isDefault)
+        ?? null
+      setSettings(selectedOption
+        ? {
+            providerProfileId: selectedOption.id,
+            apiMode: selectedOption.apiMode,
+            model: selectedOption.model,
+            timeout: selectedOption.timeoutSeconds,
+            codexCli: selectedOption.codexCli,
+            grokApiCompat: selectedOption.grokApiCompat,
+            responseFormatB64Json: selectedOption.responseFormatB64Json,
+          }
+        : {
+            providerProfileId: draft.providerProfileId ?? null,
+          })
       setShowSettings(false)
       useStore.getState().showToast('API 选择已保存', 'success')
       return
@@ -263,10 +282,12 @@ export default function SettingsModal() {
     try {
       const savedProfile = normalizedProfile.id
         ? await updateBackendProviderProfile(normalizedProfile)
-        : await createBackendProviderProfile(normalizedProfile)
+        : await createBackendProviderProfile((() => {
+            const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, apiKeyMasked: _apiKeyMasked, apiKeyConfigured: _apiKeyConfigured, ...payload } = normalizedProfile
+            return payload
+          })())
 
       const savedPreferences = await saveBackendRuntimePreferences({
-        codexCli: draft.codexCli,
         clearInputAfterSubmit: draft.clearInputAfterSubmit,
         persistInputOnRestart: draft.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: draft.reuseTaskApiProfileTemporarily,
@@ -278,10 +299,12 @@ export default function SettingsModal() {
         apiKey: '',
         apiKeyMasked: savedProfile.apiKeyMasked ?? null,
         apiKeyConfigured: savedProfile.apiKeyConfigured ?? true,
+        providerProfileId: savedProfile.id,
         model: savedProfile.model,
         apiMode: savedProfile.apiMode,
         timeout: savedProfile.timeoutSeconds,
-        codexCli: savedPreferences.codexCli,
+        codexCli: savedProfile.codexCli,
+        grokApiCompat: savedProfile.grokApiCompat,
         responseFormatB64Json: savedProfile.responseFormatB64Json,
         clearInputAfterSubmit: savedPreferences.clearInputAfterSubmit,
         persistInputOnRestart: savedPreferences.persistInputOnRestart,
@@ -451,6 +474,7 @@ export default function SettingsModal() {
       const result = await createBackendUsageCode({
         name: newCodeName.trim() || '未命名使用码',
         imageQuota: quota,
+        allowedProviderProfileIds: null,
       })
       setLatestPlainCode(result.code)
       setUsageCodes((prev) => [result.item, ...prev.filter((item) => item.id !== result.item.id)])
@@ -465,7 +489,7 @@ export default function SettingsModal() {
 
   const handleUpdateUsageCode = async (
     codeId: string,
-    patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null },
+    patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null; allowedProviderProfileIds?: string[] | null },
   ) => {
     try {
       const updated = await updateBackendUsageCode(codeId, patch)
@@ -749,10 +773,22 @@ export default function SettingsModal() {
 
               <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <PreferenceRow
+                  title="Grok API 兼容"
+                  description="启用后改用 xAI Images 接口的字段。尺寸会拆成独立的比例和分辨率。遮罩编辑不会提交到该接口。"
+                  checked={profileDraft.grokApiCompat}
+                  onChange={(checked) => updateProfileDraft({
+                    grokApiCompat: checked,
+                    ...(checked ? { codexCli: false } : {}),
+                  })}
+                />
+                <PreferenceRow
                   title="Codex CLI 模式"
                   description="禁用该接口不支持的质量参数，并使用兼容的多图提交方式。"
-                  checked={draft.codexCli}
-                  onChange={(checked) => updateDraft({ codexCli: checked })}
+                  checked={profileDraft.codexCli}
+                  onChange={(checked) => updateProfileDraft({
+                    codexCli: checked,
+                    ...(checked ? { grokApiCompat: false } : {}),
+                  })}
                 />
                 <PreferenceRow
                   title="返回 Base64 图片数据"
@@ -923,6 +959,47 @@ export default function SettingsModal() {
                           className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                         />
                       </label>
+                      {profiles.length > 0 && (
+                        <div className="mt-3">
+                          <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: null })}
+                              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                !code.allowedProviderProfileIds?.length
+                                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                              }`}
+                            >
+                              全部可用
+                            </button>
+                            {profiles.map((profile) => {
+                              const selected = code.allowedProviderProfileIds?.includes(profile.id) ?? false
+                              const nextIds = selected
+                                ? (code.allowedProviderProfileIds ?? []).filter((id) => id !== profile.id)
+                                : [...(code.allowedProviderProfileIds ?? []), profile.id]
+                              return (
+                                <button
+                                  key={profile.id}
+                                  type="button"
+                                  onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: nextIds.length ? nextIds : [] })}
+                                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                    selected
+                                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                                  }`}
+                                >
+                                  {profile.name}
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                            不选表示该使用码不可调用任何 API 配置。点“全部可用”可恢复不限制。
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )
                 })}

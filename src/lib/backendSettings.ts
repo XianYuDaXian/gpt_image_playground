@@ -12,6 +12,7 @@ export interface BackendRuntimeSettings {
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
+  grokApiCompat: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -30,6 +31,8 @@ export interface BackendProviderProfile {
   model: string
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
+  codexCli: boolean
+  grokApiCompat: boolean
   responseFormatB64Json: boolean
   isDefault: boolean
   createdAt?: string
@@ -39,6 +42,12 @@ export interface BackendProviderProfile {
 export interface BackendProviderOption {
   id: string
   name: string
+  apiMode: AppSettings['apiMode']
+  model: string
+  timeoutSeconds: number
+  codexCli: boolean
+  grokApiCompat: boolean
+  responseFormatB64Json: boolean
   isDefault: boolean
 }
 
@@ -53,6 +62,7 @@ export interface BackendUsageCode {
   codeRecoverable: boolean
   name: string
   isEnabled: boolean
+  allowedProviderProfileIds: string[] | null
   imageQuota: number | null
   usedImageCredits: number
   remainingImageCredits: number | null
@@ -94,6 +104,7 @@ export async function saveBackendRuntimeSettings(settings: {
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
+  grokApiCompat: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -115,14 +126,12 @@ export async function saveBackendRuntimeSettings(settings: {
 }
 
 export async function saveBackendRuntimePreferences(settings: {
-  codexCli: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
 }): Promise<Pick<
   BackendRuntimeSettings,
-  | 'codexCli'
   | 'clearInputAfterSubmit'
   | 'persistInputOnRestart'
   | 'reuseTaskApiProfileTemporarily'
@@ -150,7 +159,7 @@ export async function fetchBackendProviderOptions(): Promise<BackendProviderOpti
   return payload.items
 }
 
-export async function createBackendProviderProfile(profile: Omit<BackendProviderProfile, 'createdAt' | 'updatedAt' | 'apiKeyMasked' | 'apiKeyConfigured'>): Promise<BackendProviderProfile> {
+export async function createBackendProviderProfile(profile: Omit<BackendProviderProfile, 'id' | 'createdAt' | 'updatedAt' | 'apiKeyMasked' | 'apiKeyConfigured'>): Promise<BackendProviderProfile> {
   const response = await fetch('/api/admin/provider-profiles', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -216,6 +225,7 @@ export async function fetchBackendUsageCodes(): Promise<BackendUsageCode[]> {
 export async function createBackendUsageCode(input: {
   name: string
   imageQuota: number | null
+  allowedProviderProfileIds?: string[] | null
 }): Promise<{ code: string; item: BackendUsageCode }> {
   const response = await fetch('/api/admin/usage-codes', {
     method: 'POST',
@@ -227,7 +237,7 @@ export async function createBackendUsageCode(input: {
 
 export async function updateBackendUsageCode(
   codeId: string,
-  patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null },
+  patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null; allowedProviderProfileIds?: string[] | null },
 ): Promise<BackendUsageCode> {
   const response = await fetch(`/api/admin/usage-codes/${encodeURIComponent(codeId)}`, {
     method: 'PATCH',

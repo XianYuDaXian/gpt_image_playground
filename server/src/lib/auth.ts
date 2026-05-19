@@ -15,6 +15,18 @@ export interface AuthContext {
   usageCodes: UsageCodeRecord[]
 }
 
+export function getAllowedProviderProfileIds(auth: AuthContext) {
+  if (auth.role === 'admin') return null
+  if (auth.usageCodes.some((code) => !code.allowedProviderProfileIds?.length)) return null
+  const ids = new Set<string>()
+  for (const code of auth.usageCodes) {
+    for (const id of code.allowedProviderProfileIds ?? []) {
+      ids.add(id)
+    }
+  }
+  return ids.size ? Array.from(ids) : []
+}
+
 export function hashSecret(value: string, secret: string) {
   return crypto.createHmac('sha256', secret).update(value).digest('hex')
 }

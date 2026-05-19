@@ -12,10 +12,6 @@ const MIME_MAP: Record<string, string> = {
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
-export interface RuntimeSettingsRecord {
-  codexCli?: boolean
-}
-
 export interface TaskImageInput {
   filePath: string
   mimeType: string
@@ -32,7 +28,6 @@ export interface TaskExecutionPayload {
     n: number
   }
   provider: ProviderProfileRecord
-  runtime: RuntimeSettingsRecord | null
   inputImages: TaskImageInput[]
   maskImage?: TaskImageInput | null
 }
@@ -116,7 +111,7 @@ function createResponsesImageTool(payload: TaskExecutionPayload): Record<string,
     output_format: payload.params.output_format,
   }
 
-  if (!payload.runtime?.codexCli) {
+  if (!payload.provider.codexCli) {
     tool.quality = payload.params.quality
   }
 
@@ -164,6 +159,120 @@ function buildPrompt(prompt: string, codexCli: boolean) {
   return codexCli
     ? addPromptRewriteGuard(prompt)
     : prompt
+}
+
+const GROK_ASPECT_RATIOS = [
+  '1:1',
+  '3:4',
+  '4:3',
+  '9:16',
+  '16:9',
+  '2:3',
+  '3:2',
+  '9:19.5',
+  '19.5:9',
+  '9:20',
+  '20:9',
+  '1:2',
+  '2:1',
+] as const
+
+type GrokAspectRatio = (typeof GROK_ASPECT_RATIOS)[number] | 'auto'
+type GrokResolution = '1k' | '2k'
+
+function parseImageSize(size: string) {
+  const match = size.trim().match(/^(\d+)\s*[xX×]\s*(\d+)$/)
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
+function parseAspectRatioValue(value: GrokAspectRatio) {
+  if (value === 'auto') return null
+  const [width, height] = value.split(':').map(Number)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
+function buildGrokResolutionSize(aspectRatio: GrokAspectRatio, resolution: GrokResolution) {
+  const parsed = parseAspectRatioValue(aspectRatio)
+  if (!parsed) return null
+  const { width: ratioWidth, height: ratioHeight } = parsed
+
+  if (ratioWidth === ratioHeight) {
+    const side = resolution === '1k' ? 1024 : 2048
+    return { width: side, height: side }
+  }
+
+  if (resolution === '1k') {
+    const shortSide = 1024
+    return ratioWidth > ratioHeight
+      ? {
+          width: Math.round(shortSide * ratioWidth / ratioHeight),
+          height: shortSide,
+        }
+      : {
+          width: shortSide,
+          height: Math.round(shortSide * ratioHeight / ratioWidth),
+        }
+  }
+
+  const longSide = 2048
+  return ratioWidth > ratioHeight
+    ? {
+        width: longSide,
+        height: Math.round(longSide * ratioHeight / ratioWidth),
+      }
+    : {
+        width: Math.round(longSide * ratioWidth / ratioHeight),
+        height: longSide,
+      }
+}
+
+function mapSizeToGrokParams(size: string): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
+  if (!size.trim() || size.trim() === 'auto') {
+    return { aspectRatio: 'auto' }
+  }
+
+  const parsed = parseImageSize(size)
+  if (!parsed) {
+    return { aspectRatio: 'auto' }
+  }
+
+  const actualRatio = parsed.width / parsed.height
+  const aspectRatio = GROK_ASPECT_RATIOS
+    .map((item) => {
+      const ratio = parseAspectRatioValue(item)
+      const numericRatio = ratio ? ratio.width / ratio.height : 1
+      return {
+        value: item,
+        delta: Math.abs(actualRatio - numericRatio) / numericRatio,
+      }
+    })
+    .sort((a, b) => a.delta - b.delta)[0]?.value ?? 'auto'
+
+  const candidate1k = buildGrokResolutionSize(aspectRatio, '1k')
+  const candidate2k = buildGrokResolutionSize(aspectRatio, '2k')
+  if (!candidate1k || !candidate2k) {
+    return { aspectRatio }
+  }
+
+  const score = (candidate: { width: number; height: number }) => {
+    const widthDelta = Math.abs(candidate.width - parsed.width) / Math.max(parsed.width, 1)
+    const heightDelta = Math.abs(candidate.height - parsed.height) / Math.max(parsed.height, 1)
+    return widthDelta + heightDelta
+  }
+
+  return {
+    aspectRatio,
+    resolution: score(candidate1k) <= score(candidate2k) ? '1k' : '2k',
+  }
 }
 
 async function fetchWithTimeout(
@@ -235,10 +344,64 @@ async function callImagesApi(
   apiKey: string,
   options: ExecuteImageTaskOptions = {},
 ): Promise<GeneratedImageResult[]> {
-  const prompt = buildPrompt(payload.prompt, Boolean(payload.runtime?.codexCli))
+  const prompt = buildPrompt(payload.prompt, Boolean(payload.provider.codexCli))
   const shouldUseConcurrentSingles = payload.params.n > 1
+  const grokSize = mapSizeToGrokParams(payload.params.size)
 
   const runSingleEdit = async () => {
+    if (payload.provider.grokApiCompat) {
+      if (payload.maskImage) {
+        throw new Error('Grok Images API 兼容模式暂不支持遮罩编辑')
+      }
+
+      const inputImageDataUrls = await Promise.all(
+        payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
+      )
+
+      const response = await fetchWithTimeout(
+        buildApiUrl(payload.provider.baseUrl, 'images/edits'),
+        {
+          method: 'POST',
+          headers: {
+            ...buildHeaders(apiKey),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: payload.provider.model,
+            prompt,
+            ...(grokSize.aspectRatio ? { aspect_ratio: grokSize.aspectRatio } : {}),
+            ...(grokSize.resolution ? { resolution: grokSize.resolution } : {}),
+            ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
+            ...(!shouldUseConcurrentSingles && payload.params.n > 1 ? { n: payload.params.n } : {}),
+            ...(inputImageDataUrls.length <= 1
+              ? {
+                  image: {
+                    url: inputImageDataUrls[0],
+                    type: 'image_url',
+                  },
+                }
+              : {
+                  images: inputImageDataUrls.map((dataUrl) => ({
+                    url: dataUrl,
+                    type: 'image_url',
+                  })),
+                }),
+          }),
+        },
+        payload.provider.timeoutSeconds,
+      )
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response))
+      }
+
+      const result = await response.json() as {
+        data?: Array<{ b64_json?: string; url?: string }>
+      }
+
+      return extractImageResults(result.data)
+    }
+
     const formData = new FormData()
     formData.append('model', payload.provider.model)
     formData.append('prompt', prompt)
@@ -249,7 +412,7 @@ async function callImagesApi(
       formData.append('response_format', 'b64_json')
     }
 
-    if (!payload.runtime?.codexCli) {
+    if (!payload.provider.codexCli) {
       formData.append('quality', payload.params.quality)
     }
     if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
@@ -293,6 +456,38 @@ async function callImagesApi(
   }
 
   const runSingleGeneration = async () => {
+    if (payload.provider.grokApiCompat) {
+      const response = await fetchWithTimeout(
+        buildApiUrl(payload.provider.baseUrl, 'images/generations'),
+        {
+          method: 'POST',
+          headers: {
+            ...buildHeaders(apiKey),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: payload.provider.model,
+            prompt,
+            ...(grokSize.aspectRatio ? { aspect_ratio: grokSize.aspectRatio } : {}),
+            ...(grokSize.resolution ? { resolution: grokSize.resolution } : {}),
+            ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
+            ...(!shouldUseConcurrentSingles && payload.params.n > 1 ? { n: payload.params.n } : {}),
+          }),
+        },
+        payload.provider.timeoutSeconds,
+      )
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response))
+      }
+
+      const result = await response.json() as {
+        data?: Array<{ b64_json?: string; url?: string }>
+      }
+
+      return extractImageResults(result.data)
+    }
+
     const response = await fetchWithTimeout(
       buildApiUrl(payload.provider.baseUrl, 'images/generations'),
       {
@@ -308,7 +503,7 @@ async function callImagesApi(
           output_format: payload.params.output_format,
           moderation: payload.params.moderation,
           ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
-          ...(payload.runtime?.codexCli ? {} : { quality: payload.params.quality }),
+          ...(payload.provider.codexCli ? {} : { quality: payload.params.quality }),
           ...(payload.params.output_format !== 'png'
             && payload.params.output_compression != null
             ? { output_compression: payload.params.output_compression }

@@ -11,6 +11,8 @@ export interface ProviderProfileRecord {
   model: string
   apiMode: 'images' | 'responses'
   timeoutSeconds: number
+  codexCli: number
+  grokApiCompat: number
   responseFormatB64Json: number
   isDefault: number
   createdAt: string
@@ -62,6 +64,7 @@ export interface UsageCodeRecord {
   name: string
   codeHash: string
   codeEncrypted: string | null
+  allowedProviderProfileIds: string[] | null
   isEnabled: number
   imageQuota: number | null
   usedImageCredits: number
@@ -94,6 +97,28 @@ export interface DistributionSettings {
   maxConcurrentTasks: number
 }
 
+function parseAllowedProviderProfileIds(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return null
+    const ids = parsed
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+    return ids.length ? Array.from(new Set(ids)) : null
+  } catch {
+    return null
+  }
+}
+
+function stringifyAllowedProviderProfileIds(value: string[] | null | undefined) {
+  if (!value?.length) return null
+  const ids = value
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+  return ids.length ? JSON.stringify(Array.from(new Set(ids))) : null
+}
+
 export interface TaskImageAccessRecord extends TaskImageRecord {
   ownerUsageCodeId: string | null
   ownerKind: 'admin' | 'usage_code' | 'legacy'
@@ -120,6 +145,8 @@ export class AppDatabase {
         model TEXT NOT NULL,
         api_mode TEXT NOT NULL,
         timeout_seconds INTEGER NOT NULL,
+        codex_cli INTEGER NOT NULL DEFAULT 0,
+        grok_api_compat INTEGER NOT NULL DEFAULT 0,
         response_format_b64_json INTEGER NOT NULL DEFAULT 0,
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -182,6 +209,7 @@ export class AppDatabase {
         code_hash TEXT NOT NULL UNIQUE,
         code_encrypted TEXT,
         name TEXT NOT NULL,
+        allowed_provider_profile_ids_json TEXT,
         is_enabled INTEGER NOT NULL DEFAULT 1,
         image_quota INTEGER,
         used_image_credits INTEGER NOT NULL DEFAULT 0,
@@ -257,6 +285,12 @@ export class AppDatabase {
     }
     const profileColumns = this.sqlite.prepare('PRAGMA table_info(provider_profiles)').all() as Array<{ name: string }>
     const profileColumnNames = new Set(profileColumns.map((column) => column.name))
+    if (!profileColumnNames.has('codex_cli')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN codex_cli INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('grok_api_compat')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN grok_api_compat INTEGER NOT NULL DEFAULT 0')
+    }
     if (!profileColumnNames.has('response_format_b64_json')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN response_format_b64_json INTEGER NOT NULL DEFAULT 0')
     }
@@ -264,6 +298,9 @@ export class AppDatabase {
     const usageCodeColumnNames = new Set(usageCodeColumns.map((column) => column.name))
     if (!usageCodeColumnNames.has('code_encrypted')) {
       this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN code_encrypted TEXT')
+    }
+    if (!usageCodeColumnNames.has('allowed_provider_profile_ids_json')) {
+      this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN allowed_provider_profile_ids_json TEXT')
     }
   }
 
@@ -278,6 +315,8 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          codex_cli as codexCli,
+          grok_api_compat as grokApiCompat,
           response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
@@ -299,6 +338,8 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          codex_cli as codexCli,
+          grok_api_compat as grokApiCompat,
           response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
@@ -320,6 +361,8 @@ export class AppDatabase {
           model,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
+          codex_cli as codexCli,
+          grok_api_compat as grokApiCompat,
           response_format_b64_json as responseFormatB64Json,
           is_default as isDefault,
           created_at as createdAt,
@@ -339,6 +382,8 @@ export class AppDatabase {
     model: string
     apiMode: 'images' | 'responses'
     timeoutSeconds: number
+    codexCli?: boolean
+    grokApiCompat?: boolean
     responseFormatB64Json?: boolean
     isDefault: boolean
   }) {
@@ -357,6 +402,8 @@ export class AppDatabase {
           model,
           api_mode,
           timeout_seconds,
+          codex_cli,
+          grok_api_compat,
           response_format_b64_json,
           is_default,
           created_at,
@@ -370,6 +417,8 @@ export class AppDatabase {
           @model,
           @apiMode,
           @timeoutSeconds,
+          @codexCli,
+          @grokApiCompat,
           @responseFormatB64Json,
           @isDefault,
           @createdAt,
@@ -382,11 +431,15 @@ export class AppDatabase {
           model = excluded.model,
           api_mode = excluded.api_mode,
           timeout_seconds = excluded.timeout_seconds,
+          codex_cli = excluded.codex_cli,
+          grok_api_compat = excluded.grok_api_compat,
           response_format_b64_json = excluded.response_format_b64_json,
           is_default = excluded.is_default,
           updated_at = excluded.updated_at
       `).run({
         ...input,
+        codexCli: input.codexCli ? 1 : 0,
+        grokApiCompat: input.grokApiCompat ? 1 : 0,
         responseFormatB64Json: input.responseFormatB64Json ? 1 : 0,
         isDefault: input.isDefault ? 1 : 0,
         createdAt: now,
@@ -465,6 +518,7 @@ export class AppDatabase {
     codeEncrypted: string
     name: string
     imageQuota: number | null
+    allowedProviderProfileIds?: string[] | null
   }) {
     const now = new Date().toISOString()
     this.sqlite.prepare(`
@@ -473,6 +527,7 @@ export class AppDatabase {
         code_hash,
         code_encrypted,
         name,
+        allowed_provider_profile_ids_json,
         is_enabled,
         image_quota,
         used_image_credits,
@@ -480,19 +535,29 @@ export class AppDatabase {
         updated_at,
         last_used_at
       )
-      VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?, NULL)
-    `).run(input.id, input.codeHash, input.codeEncrypted, input.name, input.imageQuota, now, now)
+      VALUES (?, ?, ?, ?, ?, 1, ?, 0, ?, ?, NULL)
+    `).run(
+      input.id,
+      input.codeHash,
+      input.codeEncrypted,
+      input.name,
+      stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
+      input.imageQuota,
+      now,
+      now,
+    )
     return this.getUsageCode(input.id)
   }
 
   getUsageCode(id: string) {
-    return this.sqlite
+    const row = this.sqlite
       .prepare(`
         SELECT
           id,
           code_hash as codeHash,
           code_encrypted as codeEncrypted,
           name,
+          allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           is_enabled as isEnabled,
           image_quota as imageQuota,
           used_image_credits as usedImageCredits,
@@ -502,17 +567,21 @@ export class AppDatabase {
         FROM usage_codes
         WHERE id = ?
       `)
-      .get(id) as UsageCodeRecord | undefined
+      .get(id) as ({ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeRecord, 'allowedProviderProfileIds'>) | undefined
+    return row
+      ? { ...row, allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson) }
+      : undefined
   }
 
   getUsageCodeByHash(codeHash: string) {
-    return this.sqlite
+    const row = this.sqlite
       .prepare(`
         SELECT
           id,
           code_hash as codeHash,
           code_encrypted as codeEncrypted,
           name,
+          allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           is_enabled as isEnabled,
           image_quota as imageQuota,
           used_image_credits as usedImageCredits,
@@ -522,7 +591,10 @@ export class AppDatabase {
         FROM usage_codes
         WHERE code_hash = ?
       `)
-      .get(codeHash) as UsageCodeRecord | undefined
+      .get(codeHash) as ({ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeRecord, 'allowedProviderProfileIds'>) | undefined
+    return row
+      ? { ...row, allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson) }
+      : undefined
   }
 
   markUsageCodeUsed(id: string) {
@@ -539,6 +611,7 @@ export class AppDatabase {
     name?: string
     isEnabled?: boolean
     imageQuota?: number | null
+    allowedProviderProfileIds?: string[] | null
   }) {
     const current = this.getUsageCode(input.id)
     if (!current) return null
@@ -547,12 +620,16 @@ export class AppDatabase {
       UPDATE usage_codes
       SET
         name = ?,
+        allowed_provider_profile_ids_json = ?,
         is_enabled = ?,
         image_quota = ?,
         updated_at = ?
       WHERE id = ?
     `).run(
       input.name ?? current.name,
+      input.allowedProviderProfileIds === undefined
+        ? stringifyAllowedProviderProfileIds(current.allowedProviderProfileIds)
+        : stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
       input.isEnabled == null ? current.isEnabled : input.isEnabled ? 1 : 0,
       input.imageQuota === undefined ? current.imageQuota : input.imageQuota,
       now,
@@ -594,13 +671,14 @@ export class AppDatabase {
   }
 
   listUsageCodesWithStats() {
-    return this.sqlite
+    const rows = this.sqlite
       .prepare(`
         SELECT
           usage_codes.id,
           usage_codes.code_hash as codeHash,
           usage_codes.code_encrypted as codeEncrypted,
           usage_codes.name,
+          usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
           usage_codes.used_image_credits as usedImageCredits,
@@ -615,7 +693,11 @@ export class AppDatabase {
         GROUP BY usage_codes.id
         ORDER BY usage_codes.created_at DESC
       `)
-      .all() as UsageCodeStatsRecord[]
+      .all() as Array<{ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeStatsRecord, 'allowedProviderProfileIds'>>
+    return rows.map((row) => ({
+      ...row,
+      allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+    }))
   }
 
   createAuthSession(input: {
@@ -656,13 +738,14 @@ export class AppDatabase {
   }
 
   listAuthSessionUsageCodes(sessionId: string) {
-    return this.sqlite
+    const rows = this.sqlite
       .prepare(`
         SELECT
           usage_codes.id,
           usage_codes.code_hash as codeHash,
           usage_codes.code_encrypted as codeEncrypted,
           usage_codes.name,
+          usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
           usage_codes.used_image_credits as usedImageCredits,
@@ -675,7 +758,11 @@ export class AppDatabase {
         WHERE auth_session_usage_codes.session_id = ?
         ORDER BY auth_session_usage_codes.created_at ASC
       `)
-      .all(sessionId) as AuthSessionUsageCodeRecord[]
+      .all(sessionId) as Array<{ allowedProviderProfileIdsJson: string | null } & Omit<AuthSessionUsageCodeRecord, 'allowedProviderProfileIds'>>
+    return rows.map((row) => ({
+      ...row,
+      allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+    }))
   }
 
   getAuthSessionByHash(tokenHash: string) {
