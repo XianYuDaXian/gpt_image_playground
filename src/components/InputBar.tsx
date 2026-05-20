@@ -12,7 +12,7 @@ import {
   stripImageMentionMarkers,
 } from '../lib/promptImageMentions'
 import { normalizeImageSize } from '../lib/size'
-import { matchesTaskSearch } from '../lib/taskSearch'
+import { matchesTaskFilters } from '../lib/taskSearch'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { fetchBackendProviderOptions, type BackendProviderOption } from '../lib/backendSettings'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -322,22 +322,24 @@ export default function InputBar() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
+  const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
   const searchQuery = useStore((s) => s.searchQuery)
   const authStatus = useStore((s) => s.authStatus)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
-      if (filterArchived ? !t.isArchived : t.isArchived) return false
-      const matchStatus = filterStatus === 'all' || t.status === filterStatus
-      if (!matchStatus) return false
-      
-      return matchesTaskSearch(t, q, authStatus?.role)
-    })
-  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
+    return sorted.filter((t) =>
+      matchesTaskFilters(t, {
+        filterStatus,
+        filterFavorite,
+        filterArchived,
+        role: authStatus?.role,
+        showUsageCodeTasksForAdmin,
+        query: q,
+      }),
+    )
+  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
 
   const isIOS = useMemo(() => {
     const ua = navigator.userAgent || ''
@@ -493,9 +495,98 @@ export default function InputBar() {
   const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
   const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
   const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
-  const codeHasQuota = useCallback((code: { remainingImageCredits: number | null }) => (
-    code.remainingImageCredits == null || code.remainingImageCredits >= params.n
-  ), [params.n])
+  const activeProviderProfileId = settings.providerProfileId
+    ?? providerOptions.find((option) => option.isDefault)?.id
+    ?? providerOptions[0]?.id
+    ?? null
+  const activeProviderOption = providerOptions.find((option) => option.id === activeProviderProfileId) ?? null
+  const getProviderQuotaSummary = useCallback((providerProfileId: string) => {
+    if (authStatus?.role !== 'user') return null
+    const availableCodes = userUsageCodes.filter((code) => (
+      !code.allowedProviderProfileIds?.length || code.allowedProviderProfileIds.includes(providerProfileId)
+    ))
+    if (availableCodes.length === 0) {
+      return {
+        kind: 'unavailable' as const,
+        text: '当前使用码不可调用该端点',
+      }
+    }
+    const hasSplitQuota = availableCodes.some((code) => code.providerImageQuotas?.[providerProfileId] != null)
+    if (hasSplitQuota) {
+      const hasUnlimited = availableCodes.some((code) => {
+        if (code.providerImageQuotas?.[providerProfileId] != null) {
+          return code.providerRemainingImageCredits?.[providerProfileId] == null
+        }
+        return code.remainingImageCredits == null
+      })
+      const remaining = hasUnlimited
+        ? null
+        : availableCodes.reduce((sum, code) => {
+            if (code.providerImageQuotas?.[providerProfileId] != null) {
+              return sum + (code.providerRemainingImageCredits?.[providerProfileId] ?? 0)
+            }
+            return sum + (code.remainingImageCredits ?? 0)
+          }, 0)
+      return {
+        kind: 'provider' as const,
+        text: remaining == null ? '端点剩余不限' : `端点剩余 ${remaining}`,
+      }
+    }
+    const hasUnlimited = availableCodes.some((code) => code.remainingImageCredits == null)
+    const remaining = hasUnlimited
+      ? null
+      : availableCodes.reduce((sum, code) => sum + (code.remainingImageCredits ?? 0), 0)
+    return {
+      kind: 'total' as const,
+      text: remaining == null ? '总剩余不限' : `总剩余 ${remaining}`,
+    }
+  }, [authStatus?.role, userUsageCodes])
+  const codeHasQuota = useCallback((code: {
+    allowedProviderProfileIds?: string[] | null
+    remainingImageCredits: number | null
+    providerRemainingImageCredits?: Record<string, number> | null
+  }) => {
+    if (
+      activeProviderProfileId
+      && code.allowedProviderProfileIds?.length
+      && !code.allowedProviderProfileIds.includes(activeProviderProfileId)
+    ) {
+      return false
+    }
+    if (code.remainingImageCredits != null && code.remainingImageCredits < params.n) {
+      return false
+    }
+    if (!activeProviderProfileId) {
+      return true
+    }
+    const providerRemainingImageCredits = code.providerRemainingImageCredits?.[activeProviderProfileId]
+    return providerRemainingImageCredits == null || providerRemainingImageCredits >= params.n
+  }, [activeProviderProfileId, params.n])
+
+  const getCodeQuotaErrorMessage = useCallback((code: {
+    allowedProviderProfileIds?: string[] | null
+    remainingImageCredits: number | null
+    providerRemainingImageCredits?: Record<string, number> | null
+  }) => {
+    if (
+      activeProviderProfileId
+      && code.allowedProviderProfileIds?.length
+      && !code.allowedProviderProfileIds.includes(activeProviderProfileId)
+    ) {
+      return `当前使用码无权调用 ${activeProviderOption?.name ?? '当前端点'}`
+    }
+    if (code.remainingImageCredits != null && code.remainingImageCredits < params.n) {
+      return `当前使用码总额度不足，剩余 ${code.remainingImageCredits} 张`
+    }
+    if (!activeProviderProfileId) {
+      return '当前使用码额度不足'
+    }
+    const providerRemainingImageCredits = code.providerRemainingImageCredits?.[activeProviderProfileId]
+    if (providerRemainingImageCredits != null && providerRemainingImageCredits < params.n) {
+      return `${activeProviderOption?.name ?? '当前端点'}额度不足，剩余 ${providerRemainingImageCredits} 张`
+    }
+    return '当前使用码额度不足'
+  }, [activeProviderOption?.name, activeProviderProfileId, params.n])
 
   const submitWithUsageCode = useCallback(async (usageCodeId?: string | null) => {
     setShowUsageCodePicker(false)
@@ -524,14 +615,18 @@ export default function InputBar() {
       }
       const onlyCode = userUsageCodes[0]
       if (!onlyCode || !codeHasQuota(onlyCode)) {
-        useStore.getState().showToast('当前使用码额度不足', 'error')
+        useStore.getState().showToast(getCodeQuotaErrorMessage(onlyCode ?? {
+          remainingImageCredits: null,
+          providerRemainingImageCredits: null,
+          allowedProviderProfileIds: null,
+        }), 'error')
         return
       }
       await submitWithUsageCode(onlyCode.id)
       return
     }
     await submitWithUsageCode(null)
-  }, [authStatus?.role, canSubmit, codeHasQuota, hasConfiguredProvider, setShowSettings, submitWithUsageCode, userUsageCodes])
+  }, [authStatus?.role, canSubmit, codeHasQuota, getCodeQuotaErrorMessage, hasConfiguredProvider, setShowSettings, submitWithUsageCode, userUsageCodes])
 
   const renderUsageCodePicker = () => {
     if (!showUsageCodePicker || authStatus?.role !== 'user' || userUsageCodes.length <= 1) return null
@@ -555,7 +650,13 @@ export default function InputBar() {
               >
                 <span className="min-w-0 truncate">{code.name}</span>
                 <span className="shrink-0 text-xs">
-                  {code.remainingImageCredits == null ? '不限' : `剩余 ${code.remainingImageCredits}`}
+                  {(() => {
+                    const providerRemaining = activeProviderProfileId
+                      ? code.providerRemainingImageCredits?.[activeProviderProfileId]
+                      : null
+                    if (providerRemaining != null) return `端点剩余 ${providerRemaining}`
+                    return code.remainingImageCredits == null ? '不限' : `剩余 ${code.remainingImageCredits}`
+                  })()}
                 </span>
               </button>
             )
@@ -1041,6 +1142,7 @@ export default function InputBar() {
   const renderProviderSelector = (className: string) => {
     if (!showProviderSelector) return null
     const currentId = settings.providerProfileId ?? providerOptions.find((item) => item.isDefault)?.id ?? providerOptions[0]?.id ?? ''
+    const currentQuotaSummary = currentId ? getProviderQuotaSummary(currentId) : null
     return (
       <div className={className}>
         <Select
@@ -1055,6 +1157,11 @@ export default function InputBar() {
           }))}
           className="h-10 rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
         />
+        {currentQuotaSummary && (
+          <div className="mt-1 px-1 text-[11px] text-gray-400 dark:text-gray-500">
+            {currentQuotaSummary.text}
+          </div>
+        )}
       </div>
     )
   }

@@ -130,10 +130,15 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
           usageCodeId: selectedUsageCodeId,
           taskId,
           credits: reservedImageCredits,
+          providerProfileId: providerProfile.id,
         })
       } catch (error) {
         reply.code(403)
-        return { message: error instanceof Error ? error.message : '使用码额度不足' }
+        const baseMessage = error instanceof Error ? error.message : '使用码额度不足'
+        if (baseMessage.includes('当前端点')) {
+          return { message: `${providerProfile.name} 额度不足。${baseMessage}` }
+        }
+        return { message: baseMessage }
       }
     }
 
@@ -154,6 +159,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
           taskId,
           credits: reservedImageCredits,
           reason: 'task_create_failed',
+          providerProfileId: providerProfile.id,
         })
       }
       throw new Error('创建任务失败')

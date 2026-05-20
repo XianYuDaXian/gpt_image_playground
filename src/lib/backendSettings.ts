@@ -66,8 +66,23 @@ export interface BackendUsageCode {
   imageQuota: number | null
   usedImageCredits: number
   remainingImageCredits: number | null
+  providerImageQuotas: Record<string, number> | null
+  providerUsedImageCredits: Record<string, number> | null
+  providerRemainingImageCredits: Record<string, number> | null
   taskCount: number
   outputImageCount: number
+  quotaEvents: Array<{
+    id: number
+    usageCodeId: string
+    taskId: string | null
+    eventType: string
+    credits: number
+    reason: string | null
+    providerProfileId: string | null
+    providerProfileName: string | null
+    createdAt: string
+    label: string
+  }>
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
@@ -226,6 +241,7 @@ export async function createBackendUsageCode(input: {
   name: string
   imageQuota: number | null
   allowedProviderProfileIds?: string[] | null
+  providerImageQuotas?: Record<string, number> | null
 }): Promise<{ code: string; item: BackendUsageCode }> {
   const response = await fetch('/api/admin/usage-codes', {
     method: 'POST',
@@ -237,12 +253,34 @@ export async function createBackendUsageCode(input: {
 
 export async function updateBackendUsageCode(
   codeId: string,
-  patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null; allowedProviderProfileIds?: string[] | null },
+  patch: {
+    name?: string
+    isEnabled?: boolean
+    imageQuota?: number | null
+    allowedProviderProfileIds?: string[] | null
+    providerImageQuotas?: Record<string, number> | null
+  },
 ): Promise<BackendUsageCode> {
   const response = await fetch(`/api/admin/usage-codes/${encodeURIComponent(codeId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(patch),
+  })
+  return readResponseJson<BackendUsageCode>(response)
+}
+
+export async function adjustBackendUsageCodeQuota(
+  codeId: string,
+  payload: {
+    action: 'increase' | 'decrease'
+    credits: number
+    providerProfileId?: string | null
+  },
+): Promise<BackendUsageCode> {
+  const response = await fetch(`/api/admin/usage-codes/${encodeURIComponent(codeId)}/adjust-quota`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   })
   return readResponseJson<BackendUsageCode>(response)
 }

@@ -67,7 +67,10 @@ export interface UsageCodeRecord {
   allowedProviderProfileIds: string[] | null
   isEnabled: number
   imageQuota: number | null
+  providerImageQuotas: Record<string, number> | null
   usedImageCredits: number
+  providerUsedImageCredits: Record<string, number> | null
+  outputImageCount: number
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
@@ -76,6 +79,19 @@ export interface UsageCodeRecord {
 export interface UsageCodeStatsRecord extends UsageCodeRecord {
   taskCount: number
   outputImageCount: number
+  quotaEvents?: UsageQuotaEventRecord[]
+}
+
+export interface UsageQuotaEventRecord {
+  id: number
+  usageCodeId: string
+  taskId: string | null
+  eventType: string
+  credits: number
+  reason: string | null
+  providerProfileId: string | null
+  providerProfileName: string | null
+  createdAt: string
 }
 
 export interface AuthSessionRecord {
@@ -117,6 +133,40 @@ function stringifyAllowedProviderProfileIds(value: string[] | null | undefined) 
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)
   return ids.length ? JSON.stringify(Array.from(new Set(ids))) : null
+}
+
+function parseProviderImageQuotaMap(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const entries = Object.entries(parsed)
+      .map(([key, rawValue]) => {
+        const id = String(key ?? '').trim()
+        const amount = Number(rawValue)
+        if (!id || !Number.isInteger(amount) || amount < 0) return null
+        return [id, amount] as const
+      })
+      .filter((item): item is readonly [string, number] => Boolean(item))
+    if (!entries.length) return null
+    return Object.fromEntries(entries)
+  } catch {
+    return null
+  }
+}
+
+function stringifyProviderImageQuotaMap(value: Record<string, number> | null | undefined) {
+  if (!value) return null
+  const entries = Object.entries(value)
+    .map(([key, rawValue]) => {
+      const id = String(key ?? '').trim()
+      const amount = Number(rawValue)
+      if (!id || !Number.isInteger(amount) || amount < 0) return null
+      return [id, amount] as const
+    })
+    .filter((item): item is readonly [string, number] => Boolean(item))
+  if (!entries.length) return null
+  return JSON.stringify(Object.fromEntries(entries))
 }
 
 export interface TaskImageAccessRecord extends TaskImageRecord {
@@ -212,7 +262,10 @@ export class AppDatabase {
         allowed_provider_profile_ids_json TEXT,
         is_enabled INTEGER NOT NULL DEFAULT 1,
         image_quota INTEGER,
+        provider_image_quotas_json TEXT,
         used_image_credits INTEGER NOT NULL DEFAULT 0,
+        provider_used_image_credits_json TEXT,
+        output_image_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         last_used_at TEXT
@@ -251,8 +304,10 @@ export class AppDatabase {
         event_type TEXT NOT NULL,
         credits INTEGER NOT NULL,
         reason TEXT,
+        provider_profile_id TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY(usage_code_id) REFERENCES usage_codes(id) ON DELETE CASCADE
+        FOREIGN KEY(usage_code_id) REFERENCES usage_codes(id) ON DELETE CASCADE,
+        FOREIGN KEY(provider_profile_id) REFERENCES provider_profiles(id) ON DELETE SET NULL
       );
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_quota_events_task_type
@@ -301,6 +356,29 @@ export class AppDatabase {
     }
     if (!usageCodeColumnNames.has('allowed_provider_profile_ids_json')) {
       this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN allowed_provider_profile_ids_json TEXT')
+    }
+    if (!usageCodeColumnNames.has('provider_image_quotas_json')) {
+      this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN provider_image_quotas_json TEXT')
+    }
+    if (!usageCodeColumnNames.has('provider_used_image_credits_json')) {
+      this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN provider_used_image_credits_json TEXT')
+    }
+    if (!usageCodeColumnNames.has('output_image_count')) {
+      this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN output_image_count INTEGER NOT NULL DEFAULT 0')
+      this.sqlite.exec(`
+        UPDATE usage_codes
+        SET output_image_count = COALESCE((
+          SELECT COUNT(task_images.id)
+          FROM tasks owner_tasks
+          INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'output'
+          WHERE owner_tasks.owner_usage_code_id = usage_codes.id
+        ), 0)
+      `)
+    }
+    const usageQuotaEventColumns = this.sqlite.prepare('PRAGMA table_info(usage_quota_events)').all() as Array<{ name: string }>
+    const usageQuotaEventColumnNames = new Set(usageQuotaEventColumns.map((column) => column.name))
+    if (!usageQuotaEventColumnNames.has('provider_profile_id')) {
+      this.sqlite.exec('ALTER TABLE usage_quota_events ADD COLUMN provider_profile_id TEXT')
     }
   }
 
@@ -519,6 +597,7 @@ export class AppDatabase {
     name: string
     imageQuota: number | null
     allowedProviderProfileIds?: string[] | null
+    providerImageQuotas?: Record<string, number> | null
   }) {
     const now = new Date().toISOString()
     this.sqlite.prepare(`
@@ -530,12 +609,15 @@ export class AppDatabase {
         allowed_provider_profile_ids_json,
         is_enabled,
         image_quota,
+        provider_image_quotas_json,
         used_image_credits,
+        provider_used_image_credits_json,
+        output_image_count,
         created_at,
         updated_at,
         last_used_at
       )
-      VALUES (?, ?, ?, ?, ?, 1, ?, 0, ?, ?, NULL)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, NULL, 0, ?, ?, NULL)
     `).run(
       input.id,
       input.codeHash,
@@ -543,6 +625,7 @@ export class AppDatabase {
       input.name,
       stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
       input.imageQuota,
+      stringifyProviderImageQuotaMap(input.providerImageQuotas),
       now,
       now,
     )
@@ -560,16 +643,28 @@ export class AppDatabase {
           allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           is_enabled as isEnabled,
           image_quota as imageQuota,
+          provider_image_quotas_json as providerImageQuotasJson,
           used_image_credits as usedImageCredits,
+          provider_used_image_credits_json as providerUsedImageCreditsJson,
+          output_image_count as outputImageCount,
           created_at as createdAt,
           updated_at as updatedAt,
           last_used_at as lastUsedAt
         FROM usage_codes
         WHERE id = ?
       `)
-      .get(id) as ({ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeRecord, 'allowedProviderProfileIds'>) | undefined
+      .get(id) as ({
+        allowedProviderProfileIdsJson: string | null
+        providerImageQuotasJson: string | null
+        providerUsedImageCreditsJson: string | null
+      } & Omit<UsageCodeRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits'>) | undefined
     return row
-      ? { ...row, allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson) }
+      ? {
+          ...row,
+          allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+          providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
+          providerUsedImageCredits: parseProviderImageQuotaMap(row.providerUsedImageCreditsJson),
+        }
       : undefined
   }
 
@@ -584,16 +679,28 @@ export class AppDatabase {
           allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           is_enabled as isEnabled,
           image_quota as imageQuota,
+          provider_image_quotas_json as providerImageQuotasJson,
           used_image_credits as usedImageCredits,
+          provider_used_image_credits_json as providerUsedImageCreditsJson,
+          output_image_count as outputImageCount,
           created_at as createdAt,
           updated_at as updatedAt,
           last_used_at as lastUsedAt
         FROM usage_codes
         WHERE code_hash = ?
       `)
-      .get(codeHash) as ({ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeRecord, 'allowedProviderProfileIds'>) | undefined
+      .get(codeHash) as ({
+        allowedProviderProfileIdsJson: string | null
+        providerImageQuotasJson: string | null
+        providerUsedImageCreditsJson: string | null
+      } & Omit<UsageCodeRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits'>) | undefined
     return row
-      ? { ...row, allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson) }
+      ? {
+          ...row,
+          allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+          providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
+          providerUsedImageCredits: parseProviderImageQuotaMap(row.providerUsedImageCreditsJson),
+        }
       : undefined
   }
 
@@ -612,6 +719,7 @@ export class AppDatabase {
     isEnabled?: boolean
     imageQuota?: number | null
     allowedProviderProfileIds?: string[] | null
+    providerImageQuotas?: Record<string, number> | null
   }) {
     const current = this.getUsageCode(input.id)
     if (!current) return null
@@ -623,6 +731,7 @@ export class AppDatabase {
         allowed_provider_profile_ids_json = ?,
         is_enabled = ?,
         image_quota = ?,
+        provider_image_quotas_json = ?,
         updated_at = ?
       WHERE id = ?
     `).run(
@@ -632,6 +741,9 @@ export class AppDatabase {
         : stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
       input.isEnabled == null ? current.isEnabled : input.isEnabled ? 1 : 0,
       input.imageQuota === undefined ? current.imageQuota : input.imageQuota,
+      input.providerImageQuotas === undefined
+        ? stringifyProviderImageQuotaMap(current.providerImageQuotas)
+        : stringifyProviderImageQuotaMap(input.providerImageQuotas),
       now,
       input.id,
     )
@@ -681,23 +793,55 @@ export class AppDatabase {
           usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
+          usage_codes.provider_image_quotas_json as providerImageQuotasJson,
           usage_codes.used_image_credits as usedImageCredits,
+          usage_codes.provider_used_image_credits_json as providerUsedImageCreditsJson,
+          usage_codes.output_image_count as outputImageCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
           COUNT(DISTINCT tasks.id) as taskCount,
-          COUNT(task_images.id) as outputImageCount
+          usage_codes.output_image_count as currentOutputImageCount
         FROM usage_codes
         LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
         LEFT JOIN task_images ON task_images.task_id = tasks.id AND task_images.kind = 'output'
         GROUP BY usage_codes.id
         ORDER BY usage_codes.created_at DESC
       `)
-      .all() as Array<{ allowedProviderProfileIdsJson: string | null } & Omit<UsageCodeStatsRecord, 'allowedProviderProfileIds'>>
+      .all() as Array<{
+        allowedProviderProfileIdsJson: string | null
+        providerImageQuotasJson: string | null
+        providerUsedImageCreditsJson: string | null
+        currentOutputImageCount: number
+      } & Omit<UsageCodeStatsRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits'>>
     return rows.map((row) => ({
       ...row,
       allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+      providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
+      providerUsedImageCredits: parseProviderImageQuotaMap(row.providerUsedImageCreditsJson),
     }))
+  }
+
+  listUsageQuotaEvents(usageCodeId: string, limit = 50) {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          usage_quota_events.id,
+          usage_quota_events.usage_code_id as usageCodeId,
+          usage_quota_events.task_id as taskId,
+          usage_quota_events.event_type as eventType,
+          usage_quota_events.credits,
+          usage_quota_events.reason,
+          usage_quota_events.provider_profile_id as providerProfileId,
+          provider_profiles.name as providerProfileName,
+          usage_quota_events.created_at as createdAt
+        FROM usage_quota_events
+        LEFT JOIN provider_profiles ON provider_profiles.id = usage_quota_events.provider_profile_id
+        WHERE usage_quota_events.usage_code_id = ?
+        ORDER BY usage_quota_events.id DESC
+        LIMIT ?
+      `)
+      .all(usageCodeId, limit) as UsageQuotaEventRecord[]
   }
 
   createAuthSession(input: {
@@ -748,7 +892,10 @@ export class AppDatabase {
           usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
+          usage_codes.provider_image_quotas_json as providerImageQuotasJson,
           usage_codes.used_image_credits as usedImageCredits,
+          usage_codes.provider_used_image_credits_json as providerUsedImageCreditsJson,
+          usage_codes.output_image_count as outputImageCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
@@ -758,10 +905,16 @@ export class AppDatabase {
         WHERE auth_session_usage_codes.session_id = ?
         ORDER BY auth_session_usage_codes.created_at ASC
       `)
-      .all(sessionId) as Array<{ allowedProviderProfileIdsJson: string | null } & Omit<AuthSessionUsageCodeRecord, 'allowedProviderProfileIds'>>
+      .all(sessionId) as Array<{
+        allowedProviderProfileIdsJson: string | null
+        providerImageQuotasJson: string | null
+        providerUsedImageCreditsJson: string | null
+      } & Omit<AuthSessionUsageCodeRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits'>>
     return rows.map((row) => ({
       ...row,
       allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
+      providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
+      providerUsedImageCredits: parseProviderImageQuotaMap(row.providerUsedImageCreditsJson),
     }))
   }
 
@@ -802,6 +955,7 @@ export class AppDatabase {
     usageCodeId: string
     taskId: string
     credits: number
+    providerProfileId: string
   }) {
     const tx = this.sqlite.transaction(() => {
       const code = this.getUsageCode(input.usageCodeId)
@@ -812,15 +966,36 @@ export class AppDatabase {
         ? null
         : code.imageQuota - code.usedImageCredits
       if (remaining != null && remaining < input.credits) {
-        throw new Error(`使用码剩余额度不足，当前剩余 ${Math.max(0, remaining)} 次`)
+        throw new Error(`使用码剩余图片额度不足，当前剩余 ${Math.max(0, remaining)} 张`)
+      }
+      const providerQuota = code.providerImageQuotas?.[input.providerProfileId] ?? null
+      const providerUsedCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
+      const providerRemaining = providerQuota == null
+        ? null
+        : providerQuota - providerUsedCredits
+      if (providerRemaining != null && providerRemaining < input.credits) {
+        throw new Error(`当前端点剩余图片额度不足，当前剩余 ${Math.max(0, providerRemaining)} 张`)
       }
 
       const now = new Date().toISOString()
+      const nextProviderUsedImageCredits = {
+        ...(code.providerUsedImageCredits ?? {}),
+        [input.providerProfileId]: providerUsedCredits + input.credits,
+      }
       this.sqlite.prepare(`
         UPDATE usage_codes
-        SET used_image_credits = used_image_credits + ?, updated_at = ?, last_used_at = ?
+        SET used_image_credits = used_image_credits + ?,
+            provider_used_image_credits_json = ?,
+            updated_at = ?,
+            last_used_at = ?
         WHERE id = ?
-      `).run(input.credits, now, now, input.usageCodeId)
+      `).run(
+        input.credits,
+        stringifyProviderImageQuotaMap(nextProviderUsedImageCredits),
+        now,
+        now,
+        input.usageCodeId,
+      )
       this.sqlite.prepare(`
         INSERT INTO usage_quota_events (
           usage_code_id,
@@ -828,10 +1003,11 @@ export class AppDatabase {
           event_type,
           credits,
           reason,
+          provider_profile_id,
           created_at
         )
-        VALUES (?, ?, 'reserve', ?, 'task_create', ?)
-      `).run(input.usageCodeId, input.taskId, input.credits, now)
+        VALUES (?, ?, 'reserve', ?, 'task_create', ?, ?)
+      `).run(input.usageCodeId, input.taskId, input.credits, input.providerProfileId, now)
 
       const nextCode = this.getUsageCode(input.usageCodeId)
       return nextCode
@@ -840,6 +1016,13 @@ export class AppDatabase {
             remainingImageCredits: nextCode.imageQuota == null
               ? null
               : Math.max(0, nextCode.imageQuota - nextCode.usedImageCredits),
+            providerRemainingImageCredits: nextCode.providerImageQuotas?.[input.providerProfileId] == null
+              ? null
+              : Math.max(
+                  0,
+                  (nextCode.providerImageQuotas?.[input.providerProfileId] ?? 0)
+                  - (nextCode.providerUsedImageCredits?.[input.providerProfileId] ?? 0),
+                ),
           }
         : null
     })
@@ -852,6 +1035,7 @@ export class AppDatabase {
     taskId: string
     credits: number
     reason: string
+    providerProfileId?: string | null
   }) {
     if (input.credits <= 0) return false
     const tx = this.sqlite.transaction(() => {
@@ -866,11 +1050,29 @@ export class AppDatabase {
       if (existing) return false
 
       const now = new Date().toISOString()
+      const code = this.getUsageCode(input.usageCodeId)
+      const nextProviderUsedImageCredits = { ...(code?.providerUsedImageCredits ?? {}) }
+      if (input.providerProfileId && nextProviderUsedImageCredits[input.providerProfileId] != null) {
+        nextProviderUsedImageCredits[input.providerProfileId] = Math.max(
+          0,
+          nextProviderUsedImageCredits[input.providerProfileId] - input.credits,
+        )
+        if (nextProviderUsedImageCredits[input.providerProfileId] === 0) {
+          delete nextProviderUsedImageCredits[input.providerProfileId]
+        }
+      }
       this.sqlite.prepare(`
         UPDATE usage_codes
-        SET used_image_credits = MAX(0, used_image_credits - ?), updated_at = ?
+        SET used_image_credits = MAX(0, used_image_credits - ?),
+            provider_used_image_credits_json = ?,
+            updated_at = ?
         WHERE id = ?
-      `).run(input.credits, now, input.usageCodeId)
+      `).run(
+        input.credits,
+        stringifyProviderImageQuotaMap(nextProviderUsedImageCredits),
+        now,
+        input.usageCodeId,
+      )
       this.sqlite.prepare(`
         INSERT INTO usage_quota_events (
           usage_code_id,
@@ -878,10 +1080,11 @@ export class AppDatabase {
           event_type,
           credits,
           reason,
+          provider_profile_id,
           created_at
         )
-        VALUES (?, ?, 'refund', ?, ?, ?)
-      `).run(input.usageCodeId, input.taskId, input.credits, input.reason, now)
+        VALUES (?, ?, 'refund', ?, ?, ?, ?)
+      `).run(input.usageCodeId, input.taskId, input.credits, input.reason, input.providerProfileId ?? null, now)
       return true
     })
 
@@ -898,7 +1101,105 @@ export class AppDatabase {
       taskId,
       credits: task.reservedImageCredits,
       reason,
+      providerProfileId: task.providerProfileId,
     })
+  }
+
+  recordUsageCodeOutputImages(input: {
+    usageCodeId: string
+    count: number
+  }) {
+    if (input.count <= 0) return false
+    this.sqlite.prepare(`
+      UPDATE usage_codes
+      SET output_image_count = output_image_count + ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(input.count, new Date().toISOString(), input.usageCodeId)
+    return true
+  }
+
+  adjustUsageCodeQuota(input: {
+    usageCodeId: string
+    action: 'increase' | 'decrease'
+    credits: number
+    providerProfileId?: string | null
+  }) {
+    if (input.credits <= 0) {
+      throw new Error('调整额度必须大于 0')
+    }
+    const tx = this.sqlite.transaction(() => {
+      const code = this.getUsageCode(input.usageCodeId)
+      if (!code) {
+        throw new Error('使用码不存在')
+      }
+      const now = new Date().toISOString()
+
+      if (!input.providerProfileId) {
+        if (code.providerImageQuotas && Object.keys(code.providerImageQuotas).length > 0) {
+          throw new Error('当前使用码已按端点分额度，请改为调整端点额度')
+        }
+        if (code.imageQuota == null) {
+          throw new Error('不限量使用码不能直接增减总额度')
+        }
+        const nextQuota = input.action === 'increase'
+          ? code.imageQuota + input.credits
+          : Math.max(code.usedImageCredits, code.imageQuota - input.credits)
+        this.sqlite.prepare(`
+          UPDATE usage_codes
+          SET image_quota = ?, updated_at = ?
+          WHERE id = ?
+        `).run(nextQuota, now, input.usageCodeId)
+      } else {
+        const providerUsedImageCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
+        const nextProviderImageQuotas = { ...(code.providerImageQuotas ?? {}) }
+        const currentProviderQuota = nextProviderImageQuotas[input.providerProfileId] ?? providerUsedImageCredits
+        const nextProviderQuota = input.action === 'increase'
+          ? currentProviderQuota + input.credits
+          : Math.max(providerUsedImageCredits, currentProviderQuota - input.credits)
+        nextProviderImageQuotas[input.providerProfileId] = nextProviderQuota
+        const normalizedProviderImageQuotas = Object.fromEntries(
+          Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota > 0),
+        )
+        const nextImageQuota = Object.values(normalizedProviderImageQuotas).reduce((sum, quota) => sum + quota, 0)
+        this.sqlite.prepare(`
+          UPDATE usage_codes
+          SET image_quota = ?,
+              provider_image_quotas_json = ?,
+              updated_at = ?
+          WHERE id = ?
+        `).run(
+          nextImageQuota,
+          stringifyProviderImageQuotaMap(normalizedProviderImageQuotas),
+          now,
+          input.usageCodeId,
+        )
+      }
+
+      this.sqlite.prepare(`
+        INSERT INTO usage_quota_events (
+          usage_code_id,
+          task_id,
+          event_type,
+          credits,
+          reason,
+          provider_profile_id,
+          created_at
+        )
+        VALUES (?, NULL, ?, ?, ?, ?, ?)
+      `).run(
+        input.usageCodeId,
+        input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
+        input.credits,
+        input.providerProfileId ? 'admin_adjust_provider' : 'admin_adjust_total',
+        input.providerProfileId ?? null,
+        now,
+      )
+
+      return this.getUsageCode(input.usageCodeId)
+    })
+
+    return tx()
   }
 
   createTask(input: {
@@ -985,17 +1286,12 @@ export class AppDatabase {
       usage_codes.last_used_at as ownerUsageCodeLastUsedAt,
       usage_codes.image_quota as ownerUsageCodeImageQuota,
       usage_codes.used_image_credits as ownerUsageCodeUsedImageCredits,
+      usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
       (
         SELECT COUNT(*)
         FROM tasks owner_tasks
         WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
-      ) as ownerUsageCodeTaskCount,
-      (
-        SELECT COUNT(task_images.id)
-        FROM tasks owner_tasks
-        INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'output'
-        WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
-      ) as ownerUsageCodeOutputImageCount
+      ) as ownerUsageCodeTaskCount
     `
   }
 

@@ -19,6 +19,7 @@ interface Props {
   onDelete: () => void
   onClick: (e: React.MouseEvent | React.TouchEvent) => void
   isSelected?: boolean
+  deferImageLoading?: boolean
 }
 
 export default function TaskCard({
@@ -28,6 +29,7 @@ export default function TaskCard({
   onDelete,
   onClick,
   isSelected,
+  deferImageLoading = false,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
@@ -39,8 +41,12 @@ export default function TaskCard({
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const authStatus = useStore((s) => s.authStatus)
+  const loadedTaskImageIds = useStore((s) => s.loadedTaskImageIds)
+  const markTaskImageLoaded = useStore((s) => s.markTaskImageLoaded)
   const firstOutputImageId = task.outputImages?.[0]
   const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
+  const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
+  const shouldLoadImage = Boolean(firstOutputImageId) && (!deferImageLoading || firstOutputImageLoaded)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -179,7 +185,7 @@ export default function TaskCard({
     setThumbSrc('')
 
     const imageId = task.outputImages?.[0]
-    if (imageId) {
+    if (imageId && shouldLoadImage) {
       unsubscribe = subscribeImageThumbnail(imageId, (thumbnail) => {
         if (cancelled) return
         setThumbSrc(thumbnail.dataUrl)
@@ -212,7 +218,7 @@ export default function TaskCard({
       cancelled = true
       unsubscribe?.()
     }
-  }, [firstOutputSize?.height, firstOutputSize?.width, task.outputImages, task.imageUrlsById])
+  }, [firstOutputSize?.height, firstOutputSize?.width, shouldLoadImage, task.outputImages, task.imageUrlsById])
 
   useEffect(() => {
     if (firstOutputSize?.width && firstOutputSize.height) {
@@ -223,7 +229,7 @@ export default function TaskCard({
 
   useEffect(() => {
     if (firstOutputSize?.width && firstOutputSize.height) return
-    if (!firstOutputImageId) return
+    if (!firstOutputImageId || !shouldLoadImage) return
     const remoteUrl = task.imageUrlsById?.[firstOutputImageId]
     if (!remoteUrl) return
 
@@ -240,7 +246,7 @@ export default function TaskCard({
     return () => {
       cancelled = true
     }
-  }, [firstOutputImageId, firstOutputSize?.height, firstOutputSize?.width, task.imageUrlsById])
+  }, [firstOutputImageId, firstOutputSize?.height, firstOutputSize?.width, shouldLoadImage, task.imageUrlsById])
 
   useEffect(() => {
     if (!thumbSrc) return
@@ -285,6 +291,8 @@ export default function TaskCard({
   const taskModelLabel = task.providerProfileModel ?? null
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
+  const showDeferredPlaceholder =
+    task.status === 'done' && hasOutputImage && Boolean(firstOutputImageId) && deferImageLoading && !firstOutputImageLoaded
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -333,8 +341,14 @@ export default function TaskCard({
             e.stopPropagation()
             return
           }
-        onClick(e)
-      }}
+          if (showDeferredPlaceholder && firstOutputImageId) {
+            e.preventDefault()
+            e.stopPropagation()
+            markTaskImageLoaded(firstOutputImageId)
+            return
+          }
+          onClick(e)
+        }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -367,6 +381,9 @@ export default function TaskCard({
                 className="saveable-image w-full h-full object-cover"
                 loading="lazy"
                 onLoad={(event) => {
+                  if (task.outputImages[0]) {
+                    markTaskImageLoaded(task.outputImages[0])
+                  }
                   const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
                   if (!remoteUrl || !task.outputImages[0]) return
                   void cacheTaskImageForEditing(task.outputImages[0], remoteUrl, event.currentTarget)
@@ -379,6 +396,19 @@ export default function TaskCard({
                 </span>
               )}
             </>
+          )}
+          {showDeferredPlaceholder && (
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-gray-100 text-gray-500 transition hover:bg-gray-200 dark:bg-black/20 dark:text-gray-300 dark:hover:bg-black/30"
+              title="点击加载图片"
+            >
+              <svg className="w-9 h-9" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3v11m0 0l-4-4m4 4l4-4M5 17v1a2 2 0 002 2h10a2 2 0 002-2v-1" />
+              </svg>
+              <span className="rounded-full bg-white/85 px-2.5 py-1 text-xs font-medium text-gray-600 shadow-sm dark:bg-white/10 dark:text-gray-200">
+                点击加载
+              </span>
+            </div>
           )}
           {task.status === 'running' && !hasOutputImage && (
             <div className="flex flex-col items-center gap-2">

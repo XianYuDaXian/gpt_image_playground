@@ -226,6 +226,12 @@ export class TaskWorker {
       }
 
       if (this.isTaskInactive(taskId)) return
+      if (task.ownerKind === 'usage_code' && task.ownerUsageCodeId) {
+        this.db.recordUsageCodeOutputImages({
+          usageCodeId: task.ownerUsageCodeId,
+          count: images.length,
+        })
+      }
       this.emit(taskId, { status: 'succeeded', step: 'succeeded', percent: 100, message: `生成完成，共 ${images.length} 张图片` })
     } catch (error) {
       if (this.isTaskInactive(taskId)) return

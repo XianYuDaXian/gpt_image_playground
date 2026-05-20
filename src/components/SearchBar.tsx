@@ -2,6 +2,7 @@ import { useStore } from '../store'
 import Select from './Select'
 
 export default function SearchBar() {
+  const authStatus = useStore((s) => s.authStatus)
   const searchQuery = useStore((s) => s.searchQuery)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
@@ -10,9 +11,11 @@ export default function SearchBar() {
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
   const setFilterArchived = useStore((s) => s.setFilterArchived)
+  const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
+  const setShowUsageCodeTasksForAdmin = useStore((s) => s.setShowUsageCodeTasksForAdmin)
 
   return (
-    <div className="mt-6 mb-4 flex gap-3">
+    <div className="mt-6 mb-4 flex flex-wrap gap-3">
       <div className="flex gap-2 flex-shrink-0 z-20">
         <button
           onClick={() => {
@@ -50,6 +53,19 @@ export default function SearchBar() {
             <path d="M10 13h4" />
           </svg>
         </button>
+        {authStatus?.role === 'admin' && (
+          <button
+            onClick={() => setShowUsageCodeTasksForAdmin(!showUsageCodeTasksForAdmin)}
+            className={`px-3 py-2.5 rounded-xl border transition-all text-sm whitespace-nowrap ${
+              showUsageCodeTasksForAdmin
+                ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-300'
+                : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
+            }`}
+            title={showUsageCodeTasksForAdmin ? '隐藏使用码图片' : '显示使用码图片'}
+          >
+            {showUsageCodeTasksForAdmin ? '已显示使用码图片' : '未显示使用码图片'}
+          </button>
+        )}
         <div className="relative w-28">
           <Select
             value={filterStatus}

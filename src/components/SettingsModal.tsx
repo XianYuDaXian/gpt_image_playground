@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
+  adjustBackendUsageCodeQuota,
   createBackendProviderProfile,
   createBackendUsageCode,
   deleteBackendProviderProfile,
@@ -105,7 +106,12 @@ export default function SettingsModal() {
   const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
   const [newCodeName, setNewCodeName] = useState('新使用码')
   const [newCodeQuota, setNewCodeQuota] = useState('')
+  const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>(null)
+  const [newCodeProviderImageQuotas, setNewCodeProviderImageQuotas] = useState<Record<string, string>>({})
   const [latestPlainCode, setLatestPlainCode] = useState('')
+  const [usageCodeProviderRemainingDrafts, setUsageCodeProviderRemainingDrafts] = useState<Record<string, Record<string, string>>>({})
+  const [usageCodeSearchQuery, setUsageCodeSearchQuery] = useState('')
+  const [expandedUsageCodeIds, setExpandedUsageCodeIds] = useState<string[]>([])
   const [addCodeValue, setAddCodeValue] = useState('')
   const [activeTab, setActiveTab] = useState<SettingsTab>('habits')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -121,6 +127,102 @@ export default function SettingsModal() {
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
   const userUsageCodes = authStatus?.usageCodes ?? []
+  const filteredUsageCodes = useMemo(() => {
+    const query = usageCodeSearchQuery.trim().toLowerCase()
+    if (!query) return usageCodes
+    return usageCodes.filter((code) =>
+      [code.name, code.code ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [usageCodeSearchQuery, usageCodes])
+
+  const normalizeProviderImageQuotaPatch = (value: Record<string, string | number> | null | undefined) => {
+    if (!value) return null
+    const entries = Object.entries(value)
+      .map(([providerProfileId, rawValue]) => {
+        const quota = typeof rawValue === 'number' ? rawValue : Number(rawValue)
+        if (!Number.isInteger(quota) || quota <= 0) return null
+        return [providerProfileId, quota] as const
+      })
+      .filter((item): item is readonly [string, number] => Boolean(item))
+    return entries.length ? Object.fromEntries(entries) : null
+  }
+
+  const getQuotaEditorProfiles = (allowedProviderProfileIds: string[] | null | undefined) => {
+    if (allowedProviderProfileIds?.length) {
+      return profiles.filter((profile) => allowedProviderProfileIds.includes(profile.id))
+    }
+    return profiles
+  }
+
+  const sumProviderImageQuotas = (value: Record<string, string | number> | null | undefined) => {
+    const normalized = normalizeProviderImageQuotaPatch(value)
+    if (!normalized) return 0
+    return Object.values(normalized).reduce((sum, quota) => sum + quota, 0)
+  }
+
+  const sumProviderRemainingImageCredits = (value: Record<string, string | number> | null | undefined) => {
+    const normalized = normalizeProviderImageQuotaPatch(value)
+    if (!normalized) return 0
+    return Object.values(normalized).reduce((sum, quota) => sum + quota, 0)
+  }
+
+  const syncProviderImageQuotasWithTotal = (
+    value: Record<string, string | number> | null | undefined,
+    totalQuota: number | null,
+    providerIds: string[],
+    preferredProviderProfileId?: string | null,
+  ) => {
+    const normalized = normalizeProviderImageQuotaPatch(value)
+    if (!normalized || providerIds.length === 0) {
+      return {
+        providerImageQuotas: normalized,
+        imageQuota: totalQuota,
+      }
+    }
+
+    if (totalQuota == null) {
+      return {
+        providerImageQuotas: normalized,
+        imageQuota: sumProviderImageQuotas(normalized),
+      }
+    }
+
+    const nextProviderImageQuotas = Object.fromEntries(
+      providerIds.map((providerProfileId) => [providerProfileId, normalized[providerProfileId] ?? 0]),
+    )
+    const currentTotal = Object.values(nextProviderImageQuotas).reduce((sum, quota) => sum + quota, 0)
+    let delta = totalQuota - currentTotal
+    const orderedProviderIds = [
+      ...(preferredProviderProfileId && providerIds.includes(preferredProviderProfileId) ? [preferredProviderProfileId] : []),
+      ...providerIds.filter((providerProfileId) => providerProfileId !== preferredProviderProfileId),
+    ]
+
+    if (delta > 0) {
+      const targetProviderProfileId = orderedProviderIds[0]
+      if (targetProviderProfileId) {
+        nextProviderImageQuotas[targetProviderProfileId] += delta
+      }
+    } else if (delta < 0) {
+      let remainingToSubtract = Math.abs(delta)
+      for (const providerProfileId of orderedProviderIds) {
+        if (remainingToSubtract <= 0) break
+        const currentQuota = nextProviderImageQuotas[providerProfileId] ?? 0
+        const subtractAmount = Math.min(currentQuota, remainingToSubtract)
+        nextProviderImageQuotas[providerProfileId] = currentQuota - subtractAmount
+        remainingToSubtract -= subtractAmount
+      }
+    }
+
+    const filteredEntries = Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota > 0)
+    const nextNormalized = filteredEntries.length ? Object.fromEntries(filteredEntries) : null
+    return {
+      providerImageQuotas: nextNormalized,
+      imageQuota: filteredEntries.reduce((sum, [, quota]) => sum + quota, 0),
+    }
+  }
 
   const loadSettings = async () => {
     const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes] = await Promise.all([
@@ -179,6 +281,12 @@ export default function SettingsModal() {
     setProviderOptions(nextProviderOptions)
     setDistribution(nextDistribution)
     setUsageCodes(nextUsageCodes)
+    setExpandedUsageCodeIds((prev) => {
+      const existing = new Set(prev)
+      return nextUsageCodes
+        .filter((code) => existing.has(code.id))
+        .map((code) => code.id)
+    })
     const defaultProfile = visibleProfiles.find((profile) => profile.isDefault) ?? visibleProfiles[0]
     if (defaultProfile) {
       setProfileDraft({ ...defaultProfile, apiKey: '' })
@@ -464,9 +572,23 @@ export default function SettingsModal() {
   }
 
   const handleCreateUsageCode = async () => {
-    const quota = newCodeQuota.trim() ? Number(newCodeQuota) : null
+    const rawQuota = newCodeQuota.trim() ? Number(newCodeQuota) : null
+    const createQuotaEditorProfiles = getQuotaEditorProfiles(newCodeAllowedProviderProfileIds)
+    const createProviderIds = createQuotaEditorProfiles.map((profile) => profile.id)
+    const syncedCreateQuotas = syncProviderImageQuotasWithTotal(
+      newCodeProviderImageQuotas,
+      rawQuota,
+      createProviderIds,
+      createProviderIds[0] ?? null,
+    )
+    const quota = syncedCreateQuotas.imageQuota
     if (quota != null && (!Number.isInteger(quota) || quota <= 0)) {
       useStore.getState().showToast('图片额度需要是正整数', 'error')
+      return
+    }
+    const providerImageQuotas = syncedCreateQuotas.providerImageQuotas
+    if (providerImageQuotas && Object.values(providerImageQuotas).some((item) => !Number.isInteger(item) || item <= 0)) {
+      useStore.getState().showToast('端点图片额度需要是正整数', 'error')
       return
     }
 
@@ -474,10 +596,14 @@ export default function SettingsModal() {
       const result = await createBackendUsageCode({
         name: newCodeName.trim() || '未命名使用码',
         imageQuota: quota,
-        allowedProviderProfileIds: null,
+        allowedProviderProfileIds: newCodeAllowedProviderProfileIds,
+        providerImageQuotas,
       })
       setLatestPlainCode(result.code)
       setUsageCodes((prev) => [result.item, ...prev.filter((item) => item.id !== result.item.id)])
+      setNewCodeAllowedProviderProfileIds(null)
+      setNewCodeProviderImageQuotas({})
+      setNewCodeQuota('')
       useStore.getState().showToast('使用码已生成，明文只显示一次', 'success')
     } catch (err) {
       useStore.getState().showToast(
@@ -489,7 +615,13 @@ export default function SettingsModal() {
 
   const handleUpdateUsageCode = async (
     codeId: string,
-    patch: { name?: string; isEnabled?: boolean; imageQuota?: number | null; allowedProviderProfileIds?: string[] | null },
+    patch: {
+      name?: string
+      isEnabled?: boolean
+      imageQuota?: number | null
+      allowedProviderProfileIds?: string[] | null
+      providerImageQuotas?: Record<string, number> | null
+    },
   ) => {
     try {
       const updated = await updateBackendUsageCode(codeId, patch)
@@ -500,6 +632,87 @@ export default function SettingsModal() {
         'error',
       )
     }
+  }
+
+  const handleAdjustUsageCodeQuota = async (
+    codeId: string,
+    action: 'increase' | 'decrease',
+    credits: number,
+    providerProfileId?: string | null,
+  ) => {
+    try {
+      const updated = await adjustBackendUsageCodeQuota(codeId, {
+        action,
+        credits,
+        providerProfileId: providerProfileId ?? null,
+      })
+      setUsageCodes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+    } catch (err) {
+      useStore.getState().showToast(
+        `调整额度失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleSubmitProviderRemaining = async (
+    code: BackendUsageCode,
+    providerProfileId: string,
+  ) => {
+    const draftValue = usageCodeProviderRemainingDrafts[code.id]?.[providerProfileId]
+    if (draftValue === undefined) return
+
+    const trimmedValue = draftValue.trim()
+    const currentRemaining = code.providerRemainingImageCredits?.[providerProfileId] ?? null
+    const currentDisplayValue = currentRemaining == null ? '' : String(currentRemaining)
+    if (trimmedValue === currentDisplayValue) return
+
+    if (trimmedValue === '') {
+      const nextProviderImageQuotas = { ...(code.providerImageQuotas ?? {}) }
+      delete nextProviderImageQuotas[providerProfileId]
+      await handleUpdateUsageCode(code.id, {
+        providerImageQuotas: Object.keys(nextProviderImageQuotas).length ? nextProviderImageQuotas : null,
+      })
+      setUsageCodeProviderRemainingDrafts((prev) => ({
+        ...prev,
+        [code.id]: {
+          ...(prev[code.id] ?? {}),
+          [providerProfileId]: '',
+        },
+      }))
+      return
+    }
+
+    const nextRemaining = Number(trimmedValue)
+    if (!Number.isInteger(nextRemaining) || nextRemaining < 0) {
+      useStore.getState().showToast('端点剩余额度需要是非负整数', 'error')
+      setUsageCodeProviderRemainingDrafts((prev) => ({
+        ...prev,
+        [code.id]: {
+          ...(prev[code.id] ?? {}),
+          [providerProfileId]: currentDisplayValue,
+        },
+      }))
+      return
+    }
+
+    if (currentRemaining == null) {
+      const nextProviderImageQuotas = {
+        ...(code.providerImageQuotas ?? {}),
+        [providerProfileId]: (code.providerUsedImageCredits?.[providerProfileId] ?? 0) + nextRemaining,
+      }
+      await handleUpdateUsageCode(code.id, { providerImageQuotas: nextProviderImageQuotas })
+      return
+    }
+
+    if (nextRemaining === currentRemaining) return
+
+    await handleAdjustUsageCodeQuota(
+      code.id,
+      nextRemaining > currentRemaining ? 'increase' : 'decrease',
+      Math.abs(nextRemaining - currentRemaining),
+      providerProfileId,
+    )
   }
 
   const handleDeleteUsageCode = (code: BackendUsageCode) => {
@@ -522,6 +735,14 @@ export default function SettingsModal() {
           })
       },
     })
+  }
+
+  const toggleUsageCodeExpanded = (codeId: string) => {
+    setExpandedUsageCodeIds((prev) =>
+      prev.includes(codeId)
+        ? prev.filter((id) => id !== codeId)
+        : [...prev, codeId],
+    )
   }
 
   const tabClass = (tab: SettingsTab) =>
@@ -609,11 +830,30 @@ export default function SettingsModal() {
                 <div className="font-medium text-gray-800 dark:text-gray-100">当前使用码</div>
                 <div className="space-y-2">
                   {userUsageCodes.map((code) => (
-                    <div key={code.id} className="flex items-center justify-between gap-3 rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
-                      <span className="min-w-0 truncate">{code.name}</span>
-                      <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                        {code.remainingImageCredits == null ? '不限额度' : `剩余 ${code.remainingImageCredits}`}
-                      </span>
+                    <div key={code.id} className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate font-medium">{code.name}</span>
+                        <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                          {code.remainingImageCredits == null ? '总剩余不限' : `总剩余 ${code.remainingImageCredits}`}
+                        </span>
+                      </div>
+                      {providerOptions.length > 0 && (
+                        <div className="mt-2 space-y-1">
+                          {providerOptions
+                            .filter((option) => !code.allowedProviderProfileIds?.length || code.allowedProviderProfileIds.includes(option.id))
+                            .map((option) => {
+                              const providerRemaining = code.providerRemainingImageCredits?.[option.id]
+                              return (
+                                <div key={option.id} className="flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
+                                  <span className="min-w-0 truncate">{option.name}</span>
+                                  <span className="shrink-0">
+                                    {providerRemaining == null ? '端点不限' : `端点剩余 ${providerRemaining}`}
+                                  </span>
+                                </div>
+                              )
+                            })}
+                        </div>
+                      )}
                     </div>
                   ))}
                   {!userUsageCodes.length && (
@@ -876,33 +1116,130 @@ export default function SettingsModal() {
                     <span className="font-mono font-semibold tracking-wide text-gray-900 dark:text-gray-100">{latestPlainCode}</span>
                   </div>
                 )}
+                {profiles.length > 0 && (
+                  <div className="mt-3 space-y-3">
+                    <div>
+                      <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setNewCodeAllowedProviderProfileIds(null)}
+                          className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                            !newCodeAllowedProviderProfileIds?.length
+                              ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                          }`}
+                        >
+                          全部可用
+                        </button>
+                        {profiles.map((profile) => {
+                          const selected = newCodeAllowedProviderProfileIds?.includes(profile.id) ?? false
+                          const nextIds = selected
+                            ? (newCodeAllowedProviderProfileIds ?? []).filter((id) => id !== profile.id)
+                            : [...(newCodeAllowedProviderProfileIds ?? []), profile.id]
+                          return (
+                            <button
+                              key={profile.id}
+                              type="button"
+                              onClick={() => setNewCodeAllowedProviderProfileIds(nextIds.length ? nextIds : [])}
+                              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                selected
+                                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                              }`}
+                            >
+                              {profile.name}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">端点图片额度</span>
+                      <div className="space-y-2">
+                        {getQuotaEditorProfiles(newCodeAllowedProviderProfileIds).map((profile) => (
+                          <label key={profile.id} className="flex items-center gap-3">
+                            <span className="w-24 shrink-0 truncate text-xs text-gray-500 dark:text-gray-400">
+                              {profile.name}
+                            </span>
+                            <input
+                              value={newCodeProviderImageQuotas[profile.id] ?? ''}
+                              onChange={(event) => {
+                                const value = event.target.value
+                                const nextProviderImageQuotas = {
+                                  ...newCodeProviderImageQuotas,
+                                  [profile.id]: value,
+                                }
+                                setNewCodeProviderImageQuotas(nextProviderImageQuotas)
+                                const normalized = normalizeProviderImageQuotaPatch(nextProviderImageQuotas)
+                                setNewCodeQuota(normalized ? String(sumProviderImageQuotas(normalized)) : '')
+                              }}
+                              type="number"
+                              min={1}
+                              placeholder="留空表示不限"
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                        留空表示该端点只受总图片额度限制。
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
-                {usageCodes.map((code) => {
-                  const quotaValue = code.imageQuota == null ? '' : String(code.imageQuota)
+                <input
+                  value={usageCodeSearchQuery}
+                  onChange={(event) => setUsageCodeSearchQuery(event.target.value)}
+                  placeholder="搜索使用码或别名"
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                />
+                {filteredUsageCodes.map((code) => {
+                  const quotaEditorProfiles = getQuotaEditorProfiles(code.allowedProviderProfileIds)
+                  const isExpanded = expandedUsageCodeIds.includes(code.id)
                   return (
                     <div
                       key={code.id}
                       className="rounded-2xl border border-gray-200/70 bg-white/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <input
-                            value={code.name}
-                            onChange={(event) => {
-                              const name = event.target.value
-                              setUsageCodes((prev) => prev.map((item) => item.id === code.id ? { ...item, name } : item))
-                            }}
-                            onBlur={() => handleUpdateUsageCode(code.id, { name: code.name.trim() || '未命名使用码' })}
-                            className="w-full rounded-lg bg-transparent text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
-                          />
-                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 剩余 {code.remainingImageCredits == null ? '不限' : code.remainingImageCredits}
-                          </p>
-                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                            创建于：{new Date(code.createdAt).toLocaleString('zh-CN')}
-                          </p>
+                      <div className="flex items-start gap-3">
+                        <button
+                          type="button"
+                          onClick={() => toggleUsageCodeExpanded(code.id)}
+                          className="mt-0.5 rounded-lg p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                          title={isExpanded ? '收起设置' : '展开设置'}
+                        >
+                          <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <input
+                                value={code.name}
+                                onChange={(event) => {
+                                  const name = event.target.value
+                                  setUsageCodes((prev) => prev.map((item) => item.id === code.id ? { ...item, name } : item))
+                                }}
+                                onBlur={() => handleUpdateUsageCode(code.id, { name: code.name.trim() || '未命名使用码' })}
+                                className="w-full rounded-lg bg-transparent pr-2 text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
+                              />
+                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 剩余 {code.remainingImageCredits == null ? '不限' : code.remainingImageCredits}
+                              </p>
+                              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                                最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
+                              </p>
+                            </div>
+                            <Switch
+                              checked={code.isEnabled}
+                              onChange={(checked) => handleUpdateUsageCode(code.id, { isEnabled: checked })}
+                            />
+                          </div>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
                             <span className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800 dark:bg-black/20 dark:text-gray-100">
                               {code.code ?? '旧使用码无法恢复'}
@@ -928,84 +1265,117 @@ export default function SettingsModal() {
                               删除
                             </button>
                           </div>
-                          <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                            最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
-                          </p>
+                          {isExpanded && (
+                            <>
+                              {profiles.length > 0 && (
+                                <div className="mt-3">
+                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
+                                  <div className="flex flex-wrap gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: null })}
+                                      className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                        !code.allowedProviderProfileIds?.length
+                                          ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                                      }`}
+                                    >
+                                      全部可用
+                                    </button>
+                                    {profiles.map((profile) => {
+                                      const selected = code.allowedProviderProfileIds?.includes(profile.id) ?? false
+                                      const nextIds = selected
+                                        ? (code.allowedProviderProfileIds ?? []).filter((id) => id !== profile.id)
+                                        : [...(code.allowedProviderProfileIds ?? []), profile.id]
+                                      return (
+                                        <button
+                                          key={profile.id}
+                                          type="button"
+                                          onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: nextIds.length ? nextIds : [] })}
+                                          className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                                            selected
+                                              ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                                          }`}
+                                        >
+                                          {profile.name}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                  <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                                    不选表示该使用码不可调用任何 API 配置。点“全部可用”可恢复不限制。
+                                  </p>
+                                </div>
+                              )}
+                              {quotaEditorProfiles.length > 0 && (
+                                <div className="mt-3">
+                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">当前端点剩余额度</span>
+                                  <div className="space-y-2">
+                                    {quotaEditorProfiles.map((profile) => {
+                                      const providerQuotaValue = usageCodeProviderRemainingDrafts[code.id]?.[profile.id]
+                                        ?? (code.providerRemainingImageCredits?.[profile.id] == null
+                                          ? ''
+                                          : String(code.providerRemainingImageCredits[profile.id]))
+                                      const providerRemaining = code.providerRemainingImageCredits?.[profile.id]
+                                      return (
+                                        <label key={profile.id} className="block">
+                                          <div className="mb-1 flex items-center justify-between gap-3">
+                                            <span className="truncate text-xs text-gray-500 dark:text-gray-400">{profile.name}</span>
+                                            <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                              {providerRemaining == null ? '不限' : `剩余 ${providerRemaining}`}
+                                            </span>
+                                          </div>
+                                          <input
+                                            value={providerQuotaValue}
+                                            onChange={(event) => setUsageCodeProviderRemainingDrafts((prev) => ({
+                                              ...prev,
+                                              [code.id]: {
+                                                ...(prev[code.id] ?? {}),
+                                                [profile.id]: event.target.value,
+                                              },
+                                            }))}
+                                            onBlur={() => void handleSubmitProviderRemaining(code, profile.id)}
+                                            type="number"
+                                            min={0}
+                                            className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                            placeholder="留空表示不限"
+                                          />
+                                        </label>
+                                      )
+                                    })}
+                                  </div>
+                                  <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                                    这里显示的是当前端点剩余量。调整后会自动同步总剩余。
+                                  </p>
+                                </div>
+                              )}
+                              {code.quotaEvents.length > 0 && (
+                                <div className="mt-4">
+                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">额度记录</span>
+                                  <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200/70 bg-white/40 p-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                                    {code.quotaEvents.map((event) => (
+                                      <div key={event.id} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
+                                        <div className="text-gray-800 dark:text-gray-100">{event.label}</div>
+                                        <div className="mt-1 text-gray-400 dark:text-gray-500">
+                                          {new Date(event.createdAt).toLocaleString('zh-CN')}
+                                          {event.taskId ? ` · 任务 ${event.taskId}` : ''}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
-                        <Switch
-                          checked={code.isEnabled}
-                          onChange={(checked) => handleUpdateUsageCode(code.id, { isEnabled: checked })}
-                        />
                       </div>
-                      <label className="mt-3 block">
-                        <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">图片额度</span>
-                        <input
-                          value={quotaValue}
-                          onChange={(event) => {
-                            const value = event.target.value
-                            setUsageCodes((prev) => prev.map((item) =>
-                              item.id === code.id
-                                ? { ...item, imageQuota: value.trim() ? Number(value) : null }
-                                : item,
-                            ))
-                          }}
-                          onBlur={() => {
-                            const quota = code.imageQuota == null ? null : Number(code.imageQuota)
-                            void handleUpdateUsageCode(code.id, { imageQuota: quota && quota > 0 ? quota : null })
-                          }}
-                          type="number"
-                          min={1}
-                          placeholder="留空表示不限量"
-                          className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
-                        />
-                      </label>
-                      {profiles.length > 0 && (
-                        <div className="mt-3">
-                          <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
-                          <div className="flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: null })}
-                              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                                !code.allowedProviderProfileIds?.length
-                                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
-                                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
-                              }`}
-                            >
-                              全部可用
-                            </button>
-                            {profiles.map((profile) => {
-                              const selected = code.allowedProviderProfileIds?.includes(profile.id) ?? false
-                              const nextIds = selected
-                                ? (code.allowedProviderProfileIds ?? []).filter((id) => id !== profile.id)
-                                : [...(code.allowedProviderProfileIds ?? []), profile.id]
-                              return (
-                                <button
-                                  key={profile.id}
-                                  type="button"
-                                  onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: nextIds.length ? nextIds : [] })}
-                                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                                    selected
-                                      ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
-                                      : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
-                                  }`}
-                                >
-                                  {profile.name}
-                                </button>
-                              )
-                            })}
-                          </div>
-                          <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                            不选表示该使用码不可调用任何 API 配置。点“全部可用”可恢复不限制。
-                          </p>
-                        </div>
-                      )}
                     </div>
                   )
                 })}
-                {!usageCodes.length && (
+                {!filteredUsageCodes.length && (
                   <div className="rounded-2xl border border-dashed border-gray-200 py-8 text-center text-sm text-gray-400 dark:border-white/[0.08]">
-                    暂无使用码
+                    {usageCodes.length ? '没有匹配的使用码' : '暂无使用码'}
                   </div>
                 )}
               </div>

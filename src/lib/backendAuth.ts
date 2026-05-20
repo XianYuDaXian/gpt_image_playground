@@ -4,9 +4,13 @@ export interface AuthUsageCode {
   id: string
   /** 普通用户侧显示的是使用码本身，不是管理员备注名。 */
   name: string
+  allowedProviderProfileIds: string[] | null
   imageQuota: number | null
   usedImageCredits: number
   remainingImageCredits: number | null
+  providerImageQuotas: Record<string, number> | null
+  providerUsedImageCredits: Record<string, number> | null
+  providerRemainingImageCredits: Record<string, number> | null
 }
 
 export interface AuthStatus {

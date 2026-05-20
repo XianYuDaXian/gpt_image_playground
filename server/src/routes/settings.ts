@@ -128,6 +128,7 @@ const usageCodeCreateSchema = z.object({
   name: z.string().min(1).optional(),
   imageQuota: z.number().int().positive().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
+  providerImageQuotas: z.record(z.string().min(1), z.number().int().positive()).nullable().optional(),
 })
 
 const usageCodePatchSchema = z.object({
@@ -135,13 +136,30 @@ const usageCodePatchSchema = z.object({
   isEnabled: z.boolean().optional(),
   imageQuota: z.number().int().positive().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
+  providerImageQuotas: z.record(z.string().min(1), z.number().int().positive()).nullable().optional(),
 }).refine((value) =>
   value.name !== undefined
     || value.isEnabled !== undefined
     || value.imageQuota !== undefined
-    || value.allowedProviderProfileIds !== undefined,
+    || value.allowedProviderProfileIds !== undefined
+    || value.providerImageQuotas !== undefined,
   { message: '至少需要更新一个字段' },
 )
+
+const usageCodeAdjustSchema = z.object({
+  action: z.enum(['increase', 'decrease']),
+  credits: z.number().int().positive(),
+  providerProfileId: z.string().min(1).nullable().optional(),
+})
+
+function formatQuotaEventLabel(event: { eventType: string; providerProfileName: string | null; credits: number }) {
+  const providerLabel = event.providerProfileName ? ` · ${event.providerProfileName}` : ''
+  if (event.eventType === 'reserve') return `任务占用 ${event.credits} 张${providerLabel}`
+  if (event.eventType === 'refund') return `额度退回 ${event.credits} 张${providerLabel}`
+  if (event.eventType === 'admin_increase') return `管理员增加 ${event.credits} 张${providerLabel}`
+  if (event.eventType === 'admin_decrease') return `管理员减少 ${event.credits} 张${providerLabel}`
+  return `${event.eventType} ${event.credits} 张${providerLabel}`
+}
 
 function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
   const runtime = app.db.getAppSetting<Partial<z.infer<typeof runtimeSettingsSchema>>>('runtime')
@@ -198,9 +216,19 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
 }
 
 function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageCodeStatsRecord) {
-  const remainingImageCredits = code.imageQuota == null
-    ? null
-    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const providerRemainingImageCredits = code.providerImageQuotas
+    ? Object.fromEntries(
+        Object.entries(code.providerImageQuotas).map(([providerProfileId, quota]) => [
+          providerProfileId,
+          Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
+        ]),
+      )
+    : null
+  const remainingImageCredits = providerRemainingImageCredits
+    ? Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
+    : code.imageQuota == null
+      ? null
+      : Math.max(0, code.imageQuota - code.usedImageCredits)
   let codePlain: string | null = null
   if (code.codeEncrypted) {
     try {
@@ -219,8 +247,15 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     imageQuota: code.imageQuota,
     usedImageCredits: code.usedImageCredits,
     remainingImageCredits,
+    providerImageQuotas: code.providerImageQuotas ?? null,
+    providerUsedImageCredits: code.providerUsedImageCredits ?? null,
+    providerRemainingImageCredits,
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
+    quotaEvents: app.db.listUsageQuotaEvents(code.id, 50).map((event) => ({
+      ...event,
+      label: formatQuotaEventLabel(event),
+    })),
     allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     createdAt: code.createdAt,
     updatedAt: code.updatedAt,
@@ -581,6 +616,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       name: payload.name?.trim() || '未命名使用码',
       imageQuota: payload.imageQuota ?? null,
       allowedProviderProfileIds: payload.allowedProviderProfileIds ?? null,
+      providerImageQuotas: payload.providerImageQuotas ?? null,
     })
     if (!usageCode) throw new Error('创建使用码失败')
 
@@ -593,8 +629,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         codeRecoverable: true,
         isEnabled: Boolean(usageCode.isEnabled),
         remainingImageCredits: usageCode.imageQuota,
+        providerImageQuotas: usageCode.providerImageQuotas ?? null,
+        providerUsedImageCredits: usageCode.providerUsedImageCredits ?? null,
+        providerRemainingImageCredits: usageCode.providerImageQuotas ?? null,
         taskCount: 0,
         outputImageCount: 0,
+        quotaEvents: [],
       },
     }
   })
@@ -609,6 +649,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       isEnabled: payload.isEnabled,
       imageQuota: payload.imageQuota,
       allowedProviderProfileIds: payload.allowedProviderProfileIds,
+      providerImageQuotas: payload.providerImageQuotas,
     })
     if (!updated) {
       reply.code(404)
@@ -617,6 +658,24 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const stats = app.db.listUsageCodesWithStats().find((item) => item.id === updated.id)
     return stats ? serializeUsageCode(app, stats) : updated
+  })
+
+  app.post('/api/admin/usage-codes/:codeId/adjust-quota', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const params = z.object({ codeId: z.string().min(1) }).parse(request.params)
+    const payload = usageCodeAdjustSchema.parse(request.body)
+    const adjusted = app.db.adjustUsageCodeQuota({
+      usageCodeId: params.codeId,
+      action: payload.action,
+      credits: payload.credits,
+      providerProfileId: payload.providerProfileId ?? null,
+    })
+    if (!adjusted) {
+      reply.code(404)
+      return { message: '使用码不存在' }
+    }
+    const stats = app.db.listUsageCodesWithStats().find((item) => item.id === adjusted.id)
+    return stats ? serializeUsageCode(app, stats) : adjusted
   })
 
   app.delete('/api/admin/usage-codes/:codeId', async (request, reply) => {

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
-import { matchesTaskSearch } from '../lib/taskSearch'
+import { matchesTaskFilters } from '../lib/taskSearch'
 import TaskCard from './TaskCard'
 
 export default function TaskGrid() {
@@ -9,6 +9,7 @@ export default function TaskGrid() {
   const filterStatus = useStore((s) => s.filterStatus)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
+  const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
   const authStatus = useStore((s) => s.authStatus)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -34,16 +35,18 @@ export default function TaskGrid() {
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
     const q = searchQuery.trim().toLowerCase()
-    
-    return sorted.filter((t) => {
-      if (filterFavorite && !t.isFavorite) return false
-      if (filterArchived ? !t.isArchived : t.isArchived) return false
-      const matchStatus = filterStatus === 'all' || t.status === filterStatus
-      if (!matchStatus) return false
-      
-      return matchesTaskSearch(t, q, authStatus?.role)
-    })
-  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived])
+    return sorted.filter((t) =>
+      matchesTaskFilters(t, {
+        filterStatus,
+        filterFavorite,
+        filterArchived,
+        role: authStatus?.role,
+        showUsageCodeTasksForAdmin,
+        query: q,
+      }),
+    )
+  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  const shouldDeferImageLoading = filteredTasks.filter((task) => task.outputImages.length > 0).length > 20
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -202,6 +205,7 @@ export default function TaskGrid() {
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
+              deferImageLoading={shouldDeferImageLoading}
               onClick={(e) => {
                 if (Date.now() < suppressClickUntil.current) {
                   e.preventDefault()

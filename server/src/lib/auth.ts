@@ -107,16 +107,30 @@ function getUsageCodeDisplayValue(code: UsageCodeRecord, appSecret: string) {
 }
 
 export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
-  const remainingImageCredits = code.imageQuota == null
-    ? null
-    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const providerRemainingImageCredits = code.providerImageQuotas
+    ? Object.fromEntries(
+        Object.entries(code.providerImageQuotas).map(([providerProfileId, quota]) => [
+          providerProfileId,
+          Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
+        ]),
+      )
+    : null
+  const remainingImageCredits = providerRemainingImageCredits
+    ? Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
+    : code.imageQuota == null
+      ? null
+      : Math.max(0, code.imageQuota - code.usedImageCredits)
 
   return {
     id: code.id,
     name: getUsageCodeDisplayValue(code, appSecret),
+    allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     imageQuota: code.imageQuota,
     usedImageCredits: code.usedImageCredits,
     remainingImageCredits,
+    providerImageQuotas: code.providerImageQuotas ?? null,
+    providerUsedImageCredits: code.providerUsedImageCredits ?? null,
+    providerRemainingImageCredits,
   }
 }
 
@@ -126,21 +140,26 @@ export function serializeUsageCodeList(codes: UsageCodeRecord[], appSecret: stri
 
 function serializeAggregatedUser(codes: UsageCodeRecord[], appSecret: string) {
   if (codes.length === 0) return null
-  const hasUnlimited = codes.some((code) => code.imageQuota == null)
+  const serializedCodes = codes.map((code) => serializeUsageQuota(code, appSecret))
+  const hasUnlimited = serializedCodes.some((code) => code.imageQuota == null)
   const imageQuota = hasUnlimited
     ? null
-    : codes.reduce((sum, code) => sum + (code.imageQuota ?? 0), 0)
-  const usedImageCredits = codes.reduce((sum, code) => sum + code.usedImageCredits, 0)
-  const remainingImageCredits = hasUnlimited
+    : serializedCodes.reduce((sum, code) => sum + (code.imageQuota ?? 0), 0)
+  const usedImageCredits = serializedCodes.reduce((sum, code) => sum + code.usedImageCredits, 0)
+  const remainingImageCredits = serializedCodes.some((code) => code.remainingImageCredits == null)
     ? null
-    : Math.max(0, (imageQuota ?? 0) - usedImageCredits)
+    : serializedCodes.reduce((sum, code) => sum + (code.remainingImageCredits ?? 0), 0)
 
   return {
     id: codes[0]?.id ?? '',
     name: codes.length === 1 && codes[0] ? getUsageCodeDisplayValue(codes[0], appSecret) : `${codes.length} 个使用码`,
+    allowedProviderProfileIds: null,
     imageQuota,
     usedImageCredits,
     remainingImageCredits,
+    providerImageQuotas: null,
+    providerUsedImageCredits: null,
+    providerRemainingImageCredits: null,
   }
 }
 

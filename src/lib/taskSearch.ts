@@ -2,6 +2,32 @@ import type { AuthRole } from './backendAuth'
 import { formatImageRatio } from './size'
 import type { TaskRecord } from '../types'
 
+export function matchesTaskFilters(
+  task: TaskRecord,
+  options: {
+    filterStatus: 'all' | 'running' | 'done' | 'error'
+    filterFavorite: boolean
+    filterArchived: boolean
+    role: AuthRole | null | undefined
+    showUsageCodeTasksForAdmin: boolean
+    query: string
+  },
+) {
+  const queryText = options.query.trim()
+  if (options.filterFavorite && !task.isFavorite) return false
+  if (options.filterArchived ? !task.isArchived : task.isArchived) return false
+  if (options.filterStatus !== 'all' && task.status !== options.filterStatus) return false
+  if (
+    options.role === 'admin' &&
+    !options.showUsageCodeTasksForAdmin &&
+    task.ownerKind === 'usage_code' &&
+    !queryText
+  ) {
+    return false
+  }
+  return matchesTaskSearch(task, queryText, options.role)
+}
+
 function normalizeSearchText(value: string) {
   return value
     .toLowerCase()

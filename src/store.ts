@@ -256,6 +256,10 @@ interface AppState {
   setFilterFavorite: (f: boolean) => void
   filterArchived: boolean
   setFilterArchived: (f: boolean) => void
+  showUsageCodeTasksForAdmin: boolean
+  setShowUsageCodeTasksForAdmin: (value: boolean) => void
+  loadedTaskImageIds: string[]
+  markTaskImageLoaded: (imageId: string) => void
 
   // 多选
   selectedTaskIds: string[]
@@ -466,6 +470,15 @@ export const useStore = create<AppState>()(
       setFilterFavorite: (filterFavorite) => set({ filterFavorite }),
       filterArchived: false,
       setFilterArchived: (filterArchived) => set({ filterArchived }),
+      showUsageCodeTasksForAdmin: false,
+      setShowUsageCodeTasksForAdmin: (showUsageCodeTasksForAdmin) => set({ showUsageCodeTasksForAdmin }),
+      loadedTaskImageIds: [],
+      markTaskImageLoaded: (imageId) =>
+        set((s) => (
+          s.loadedTaskImageIds.includes(imageId)
+            ? s
+            : { loadedTaskImageIds: [...s.loadedTaskImageIds, imageId] }
+        )),
 
       // Selection
       selectedTaskIds: [],
@@ -524,6 +537,8 @@ export const useStore = create<AppState>()(
           : {}),
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
         themeMode: state.themeMode,
+        showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+        loadedTaskImageIds: state.loadedTaskImageIds,
       }),
     },
   ),
