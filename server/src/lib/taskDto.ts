@@ -33,6 +33,21 @@ function decryptUsageCode(task: TaskRecord, appSecret?: string) {
   }
 }
 
+function buildVideoMetadataMap(images: TaskImageRecord[]) {
+  return images.reduce<Record<string, { duration?: number | null }>>((acc, image) => {
+    if (!image.metadataJson) {
+      acc[image.id] = {}
+      return acc
+    }
+    try {
+      acc[image.id] = JSON.parse(image.metadataJson) as { duration?: number | null }
+    } catch {
+      acc[image.id] = {}
+    }
+    return acc
+  }, {})
+}
+
 function buildImageSizeMap(images: TaskImageRecord[]) {
   return images.reduce<Record<string, { width: number | null; height: number | null }>>((acc, image) => {
     acc[image.id] = {
@@ -54,6 +69,7 @@ export function serializeTaskRecord(
 ) {
   const inputImages = images.filter((image) => image.kind === 'input')
   const outputImages = images.filter((image) => image.kind === 'output')
+  const outputVideos = images.filter((image) => image.kind === 'video_output')
   const maskImage = images.find((image) => image.kind === 'mask') ?? null
   const createdAt = toMs(task.createdAt) ?? Date.now()
   const finishedAt = toMs(task.finishedAt)
@@ -65,16 +81,20 @@ export function serializeTaskRecord(
   return {
     id: task.id,
     prompt: task.prompt,
+    taskType: task.taskType ?? 'image',
     params: JSON.parse(task.paramsJson),
     providerProfileId: task.providerProfileId,
     providerProfileName: options.providerProfile?.name ?? null,
     providerProfileModel: options.providerProfile?.model ?? null,
     inputImageIds: inputImages.map((image) => image.id),
     outputImages: outputImages.map((image) => image.id),
+    outputVideos: outputVideos.map((video) => video.id),
     maskImageId: maskImage?.id ?? null,
     maskTargetImageId: maskImage ? inputImages[0]?.id ?? null : null,
     imageUrlsById: buildImageUrlMap(images),
+    mediaUrlsById: buildImageUrlMap(images),
     imageSizesById: buildImageSizeMap(images),
+    videoMetadataById: buildVideoMetadataMap(outputVideos),
     status: toUiStatus(task.status),
     serverStatus: task.status,
     currentStep: task.currentStep,

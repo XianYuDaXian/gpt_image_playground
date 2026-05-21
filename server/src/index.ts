@@ -84,6 +84,7 @@ if (appConfig.bootstrapProvider && !app.db.getDefaultProviderProfile()) {
     timeoutSeconds: appConfig.bootstrapProvider.timeoutSeconds,
     codexCli: appConfig.bootstrapProvider.codexCli,
     grokApiCompat: false,
+    xaiImage2kEnabled: false,
     responseFormatB64Json: false,
     isDefault: true,
   })
@@ -156,10 +157,8 @@ if (webIndexHtml) {
   })
 }
 
-for (const task of app.db.listTasks(200)) {
-  if (['queued', 'submitted', 'processing', 'downloading'].includes(task.status)) {
-    app.taskWorker.enqueue(task.id)
-  }
+for (const task of app.db.listActiveTasks()) {
+  app.taskWorker.enqueue(task.id)
 }
 
 app.setErrorHandler((error, _request, reply) => {

@@ -121,7 +121,12 @@ export async function exportBackendBackup() {
 
   const imageEntries = new Map<string, BackupImageEntry>()
   for (const task of payload.tasks) {
-    for (const imageId of [...task.inputImageIds, ...(task.maskImageId ? [task.maskImageId] : []), ...task.outputImages]) {
+    for (const imageId of [
+      ...task.inputImageIds,
+      ...(task.maskImageId ? [task.maskImageId] : []),
+      ...task.outputImages,
+      ...(task.outputVideos || []),
+    ]) {
       if (imageEntries.has(imageId)) continue
       const imageUrl = task.imageUrlsById?.[imageId]
       if (!imageUrl) continue

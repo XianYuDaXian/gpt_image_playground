@@ -480,6 +480,7 @@ function normalizeTask(task: Partial<TaskRecord>, fallback: number): TaskRecord 
     },
     inputImageIds: task.inputImageIds ?? [],
     outputImages: task.outputImages ?? [],
+    outputVideos: task.outputVideos ?? [],
     status: task.status === 'done' || task.status === 'error' ? task.status : 'running',
     error: task.error ?? null,
     createdAt: task.createdAt ?? fallback,

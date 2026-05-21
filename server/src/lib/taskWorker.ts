@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
 import { executeImageTask, writeOutputImage } from './imageApi.js'
+import { downloadVideoOutput, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
 
 export class TaskWorker {
@@ -115,6 +116,11 @@ export class TaskWorker {
     const provider = this.db.getProviderProfile(providerId)
     if (!provider) {
       this.emit(taskId, { status: 'failed', step: 'config', percent: 5, message: 'provider 配置不存在' })
+      return
+    }
+
+    if (task.taskType === 'video') {
+      await this.processVideoTask(taskId, task, provider)
       return
     }
 
@@ -231,8 +237,132 @@ export class TaskWorker {
           usageCodeId: task.ownerUsageCodeId,
           count: images.length,
         })
+        this.db.insertUsageCodeActivityLog({
+          usageCodeId: task.ownerUsageCodeId,
+          taskId,
+          actorKind: 'user',
+          eventType: 'image_task_succeeded',
+          message: `使用码用户生成图片 ${images.length} 张`,
+        })
       }
       this.emit(taskId, { status: 'succeeded', step: 'succeeded', percent: 100, message: `生成完成，共 ${images.length} 张图片` })
+    } catch (error) {
+      if (this.isTaskInactive(taskId)) return
+      this.emit(taskId, {
+        status: 'failed',
+        step: 'failed',
+        percent: 60,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  private async processVideoTask(
+    taskId: string,
+    task: NonNullable<ReturnType<AppDatabase['getTask']>>,
+    provider: NonNullable<ReturnType<AppDatabase['getProviderProfile']>>,
+  ) {
+    try {
+      const inputImages = this.db.listTaskImages(taskId).filter((image) => image.kind === 'input' || image.kind === 'video_input')
+      const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
+      const params = JSON.parse(task.paramsJson) as {
+        aspect_ratio?: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
+        resolution: '480p' | '720p' | '1080p'
+        duration: number
+      }
+
+      if (!this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 10, message: '已提交到视频接口' })) return
+      const requestId = await submitVideoGeneration(
+        {
+          prompt: task.prompt,
+          params,
+          provider,
+          inputImages: inputImages.map((image) => ({
+            filePath: path.join(this.config.mediaDir, image.filePath),
+            mimeType: image.mimeType,
+          })),
+        },
+        apiKey,
+      )
+      this.db.updateTaskProgress({
+        id: taskId,
+        status: 'processing',
+        progressPercent: 15,
+        currentStep: 'processing',
+        upstreamRequestId: requestId,
+      })
+
+      const startedAt = Date.now()
+      const timeoutMs = Math.max(30, provider.timeoutSeconds) * 1000
+      let finalVideoUrl = ''
+      let finalDuration: number | null = null
+      let finalUsage: unknown = null
+
+      while (!this.isTaskInactive(taskId)) {
+        if (Date.now() - startedAt > timeoutMs) {
+          throw new Error('视频生成超时')
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+        const result = await pollVideoGeneration(provider, apiKey, requestId)
+        finalUsage = result.usage ?? null
+
+        if (result.status === 'failed') {
+          throw new Error(result.error?.message || '视频生成失败')
+        }
+
+        const progress = Math.max(15, Math.min(95, Number(result.progress) || 15))
+        if (result.status !== 'done') {
+          if (!this.emit(taskId, {
+            status: 'processing',
+            step: 'processing',
+            percent: progress,
+            message: `视频生成中 ${progress}%`,
+          })) return
+          continue
+        }
+
+        if (result.video?.respect_moderation === false || !result.video?.url) {
+          throw new Error('视频未通过审核或未返回可下载地址')
+        }
+        finalVideoUrl = result.video.url
+        finalDuration = result.video.duration ?? null
+        break
+      }
+
+      if (!finalVideoUrl || this.isTaskInactive(taskId)) return
+      if (!this.emit(taskId, { status: 'downloading', step: 'downloading', percent: 96, message: '正在保存视频' })) return
+
+      const outputDir = path.join(this.config.outputsDir, taskId)
+      const written = await downloadVideoOutput(outputDir, finalVideoUrl, finalDuration)
+      const saved = this.db.addTaskImage({
+        id: crypto.randomUUID(),
+        taskId,
+        kind: 'video_output',
+        filePath: path.join('outputs', taskId, written.fileName),
+        mimeType: written.mimeType,
+        bytes: written.bytes,
+        sha256: written.sha256,
+        metadataJson: written.metadataJson,
+      })
+      if (!saved) return
+
+      this.db.updateTaskProgress({
+        id: taskId,
+        status: 'downloading',
+        progressPercent: 98,
+        currentStep: 'downloading',
+        upstreamUsageJson: finalUsage ? JSON.stringify(finalUsage) : null,
+      })
+      if (task.ownerKind === 'usage_code' && task.ownerUsageCodeId) {
+        this.db.insertUsageCodeActivityLog({
+          usageCodeId: task.ownerUsageCodeId,
+          taskId,
+          actorKind: 'user',
+          eventType: 'video_task_succeeded',
+          message: '使用码用户生成视频 1 个',
+        })
+      }
+      this.emit(taskId, { status: 'succeeded', step: 'succeeded', percent: 100, message: '视频生成完成' })
     } catch (error) {
       if (this.isTaskInactive(taskId)) return
       this.emit(taskId, {

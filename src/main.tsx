@@ -8,6 +8,27 @@ import { applyThemeMode } from './lib/theme'
 installMobileViewportGuards()
 
 try {
+  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  const iosMatch = userAgent.match(/OS (\d+)_\d+(?:_\d+)?/)
+  const iosMajorVersion = iosMatch ? Number(iosMatch[1]) : null
+  const shouldForceBackdropFallback = Number.isFinite(iosMajorVersion) && iosMajorVersion != null && iosMajorVersion <= 16
+  const supportsBackdropFilter =
+    typeof window !== 'undefined'
+    && typeof CSS !== 'undefined'
+    && typeof CSS.supports === 'function'
+    && !shouldForceBackdropFallback
+    && (
+      CSS.supports('backdrop-filter: blur(24px)')
+      || CSS.supports('-webkit-backdrop-filter: blur(24px)')
+    )
+  document.documentElement.classList.toggle('supports-backdrop-filter', supportsBackdropFilter)
+  document.documentElement.classList.toggle('no-backdrop-filter', !supportsBackdropFilter)
+  document.documentElement.classList.toggle('legacy-backdrop-fallback', Boolean(shouldForceBackdropFallback))
+} catch {
+  document.documentElement.classList.add('no-backdrop-filter')
+}
+
+try {
   const saved = localStorage.getItem('gpt-image-playground')
   const parsed = saved ? JSON.parse(saved) as { state?: { themeMode?: 'system' | 'light' | 'dark' } } : null
   applyThemeMode(parsed?.state?.themeMode ?? 'system')

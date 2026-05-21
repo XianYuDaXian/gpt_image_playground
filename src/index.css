@@ -340,6 +340,124 @@ input[type="number"] {
   background: rgba(0, 0, 0, 0.62);
 }
 
+.no-backdrop-filter .glass-surface {
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .glass-surface-strong {
+  background: rgba(255, 255, 255, 0.985);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .glass-surface-dark {
+  background: rgba(18, 22, 29, 0.985);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .glass-overlay-soft {
+  background: rgba(0, 0, 0, 0.5);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .glass-overlay {
+  background: rgba(0, 0, 0, 0.66);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .safe-input-card {
+  background: rgba(255, 255, 255, 0.96);
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.no-backdrop-filter .glass-surface::before,
+.no-backdrop-filter .glass-surface-strong::before,
+.no-backdrop-filter .glass-surface-dark::before,
+.no-backdrop-filter .glass-overlay-soft::before,
+.no-backdrop-filter .glass-overlay::before,
+.no-backdrop-filter .safe-input-card::before {
+  content: '';
+  position: absolute;
+  inset: -18px;
+  z-index: -1;
+  background: inherit;
+  filter: blur(18px);
+  opacity: 0.98;
+  transform: scale(1.08);
+  pointer-events: none;
+}
+
+.no-backdrop-filter .backdrop-blur-sm,
+.no-backdrop-filter .backdrop-blur,
+.no-backdrop-filter .backdrop-blur-md,
+.no-backdrop-filter .backdrop-blur-lg,
+.no-backdrop-filter .backdrop-blur-xl {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.no-backdrop-filter [class*="bg-black/"].backdrop-blur-sm,
+.no-backdrop-filter [class*="bg-black/"].backdrop-blur,
+.no-backdrop-filter [class*="bg-black/"].backdrop-blur-md,
+.no-backdrop-filter [class*="bg-black/"].backdrop-blur-lg,
+.no-backdrop-filter [class*="bg-black/"].backdrop-blur-xl {
+  background-color: rgba(0, 0, 0, 0.76) !important;
+}
+
+.no-backdrop-filter [class*="bg-white/"].backdrop-blur-sm,
+.no-backdrop-filter [class*="bg-white/"].backdrop-blur,
+.no-backdrop-filter [class*="bg-white/"].backdrop-blur-md,
+.no-backdrop-filter [class*="bg-white/"].backdrop-blur-lg,
+.no-backdrop-filter [class*="bg-white/"].backdrop-blur-xl {
+  background-color: rgba(255, 255, 255, 0.92) !important;
+}
+
+.dark.no-backdrop-filter [class*="bg-white/"].backdrop-blur-sm,
+.dark.no-backdrop-filter [class*="bg-white/"].backdrop-blur,
+.dark.no-backdrop-filter [class*="bg-white/"].backdrop-blur-md,
+.dark.no-backdrop-filter [class*="bg-white/"].backdrop-blur-lg,
+.dark.no-backdrop-filter [class*="bg-white/"].backdrop-blur-xl {
+  background-color: rgba(24, 24, 27, 0.92) !important;
+}
+
+.no-backdrop-filter.dark .glass-surface {
+  background: rgba(24, 24, 27, 0.94);
+}
+
+.no-backdrop-filter.dark .glass-surface-strong {
+  background: rgba(24, 24, 27, 0.97);
+}
+
+.no-backdrop-filter.dark .glass-surface-dark {
+  background: rgba(18, 22, 29, 0.985);
+}
+
+.no-backdrop-filter.dark .safe-input-card {
+  background: rgba(24, 24, 27, 0.94);
+}
+
 @supports ((-webkit-backdrop-filter: blur(24px)) or (backdrop-filter: blur(24px))) {
   .safe-input-card {
     background: rgba(255, 255, 255, 0.88);

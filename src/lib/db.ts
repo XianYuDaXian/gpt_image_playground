@@ -5,6 +5,7 @@ const DB_VERSION = 2
 const STORE_TASKS = 'tasks'
 const STORE_IMAGES = 'images'
 const STORE_THUMBNAILS = 'thumbnails'
+const VIDEO_CACHE_NAME = 'gpt-image-playground-videos-v1'
 const THUMBNAIL_MAX_SIZE = 720
 const THUMBNAIL_QUALITY = 0.9
 const THUMBNAIL_VERSION = 1
@@ -95,27 +96,33 @@ export function putImage(image: StoredImage): Promise<IDBValidKey> {
 
 export function deleteImage(id: string): Promise<undefined> {
   return openDB().then(
-    (db) =>
-      new Promise((resolve, reject) => {
+    async (db) => {
+      await new Promise<void>((resolve, reject) => {
         const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
         tx.objectStore(STORE_IMAGES).delete(id)
         tx.objectStore(STORE_THUMBNAILS).delete(id)
-        tx.oncomplete = () => resolve(undefined)
+        tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)
-      }),
+      })
+      await deleteCachedVideo(id)
+      return undefined
+    },
   )
 }
 
 export function clearImages(): Promise<undefined> {
   return openDB().then(
-    (db) =>
-      new Promise((resolve, reject) => {
+    async (db) => {
+      await new Promise<void>((resolve, reject) => {
         const tx = db.transaction([STORE_IMAGES, STORE_THUMBNAILS], 'readwrite')
         tx.objectStore(STORE_IMAGES).clear()
         tx.objectStore(STORE_THUMBNAILS).clear()
-        tx.oncomplete = () => resolve(undefined)
+        tx.oncomplete = () => resolve()
         tx.onerror = () => reject(tx.error)
-      }),
+      })
+      await clearCachedVideos()
+      return undefined
+    },
   )
 }
 
@@ -247,5 +254,103 @@ async function safeCreateImageThumbnail(dataUrl: string): Promise<Partial<Omit<S
     return await createImageThumbnail(dataUrl)
   } catch {
     return {}
+  }
+}
+
+function getVideoCacheRequest(id: string) {
+  return new Request(`https://gpt-image-playground.local/video-cache/${encodeURIComponent(id)}`)
+}
+
+async function openVideoCache() {
+  if (typeof caches === 'undefined') return null
+  return caches.open(VIDEO_CACHE_NAME)
+}
+
+export async function getCachedVideoBlob(id: string): Promise<Blob | undefined> {
+  const cache = await openVideoCache()
+  if (!cache) return undefined
+  const response = await cache.match(getVideoCacheRequest(id))
+  if (!response?.ok) return undefined
+  return response.blob()
+}
+
+export async function putCachedVideoBlob(id: string, blob: Blob): Promise<void> {
+  const cache = await openVideoCache()
+  if (!cache) return
+  await cache.put(
+    getVideoCacheRequest(id),
+    new Response(blob, {
+      headers: {
+        'content-type': blob.type || 'video/mp4',
+        'cache-control': 'private, max-age=31536000',
+      },
+    }),
+  )
+}
+
+export async function deleteCachedVideo(id: string): Promise<void> {
+  const cache = await openVideoCache()
+  if (!cache) return
+  await cache.delete(getVideoCacheRequest(id))
+}
+
+export async function clearCachedVideos(): Promise<void> {
+  if (typeof caches === 'undefined') return
+  await caches.delete(VIDEO_CACHE_NAME)
+}
+
+function loadVideo(url: string): Promise<HTMLVideoElement> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    video.preload = 'auto'
+    video.muted = true
+    video.playsInline = true
+
+    const cleanup = () => {
+      video.onloadeddata = null
+      video.onerror = null
+    }
+
+    video.onloadeddata = () => {
+      cleanup()
+      resolve(video)
+    }
+    video.onerror = () => {
+      cleanup()
+      reject(new Error('视频加载失败'))
+    }
+    video.src = url
+  })
+}
+
+export async function createAndStoreVideoThumbnail(id: string, blob: Blob) {
+  const objectUrl = URL.createObjectURL(blob)
+  try {
+    const video = await loadVideo(objectUrl)
+    const width = video.videoWidth
+    const height = video.videoHeight
+    if (width <= 0 || height <= 0) {
+      throw new Error('视频尺寸无效')
+    }
+
+    const scale = Math.min(1, THUMBNAIL_MAX_SIZE / Math.max(width, height))
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(width * scale))
+    canvas.height = Math.max(1, Math.round(height * scale))
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('当前浏览器不支持 Canvas')
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    const record: StoredImageThumbnail = {
+      id,
+      thumbnailDataUrl: canvas.toDataURL('image/webp', THUMBNAIL_QUALITY),
+      width,
+      height,
+      thumbnailVersion: THUMBNAIL_VERSION,
+    }
+    await putImageThumbnail(record)
+    return record
+  } finally {
+    URL.revokeObjectURL(objectUrl)
   }
 }

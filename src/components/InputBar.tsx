@@ -1,6 +1,6 @@
 import { Fragment, useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, ensureTaskImageAvailable } from '../store'
-import { DEFAULT_PARAMS, type InputImage } from '../types'
+import { DEFAULT_PARAMS, DEFAULT_VIDEO_PARAMS, type InputImage, type TaskParams, type VideoTaskParams } from '../types'
 import {
   getAtImageQuery,
   getImageMentionLabel,
@@ -21,6 +21,7 @@ import { useKeyboardVisible } from '../hooks/useKeyboardVisible'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
 import SizePickerModal from './SizePickerModal'
+import VideoAspectModal from './VideoAspectModal'
 
 /** 通用悬浮气泡提示 */
 function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
@@ -312,14 +313,20 @@ export default function InputBar() {
   const clearInputImages = useStore((s) => s.clearInputImages)
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
+  const taskMode = useStore((s) => s.taskMode)
+  const setTaskMode = useStore((s) => s.setTaskMode)
+  const videoAspectRatio = useStore((s) => s.videoAspectRatio)
+  const setVideoAspectRatio = useStore((s) => s.setVideoAspectRatio)
   const settings = useStore((s) => s.settings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
+  const visibleTaskIds = useStore((s) => s.visibleTaskIds)
   const tasks = useStore((s) => s.tasks)
   const filterStatus = useStore((s) => s.filterStatus)
+  const filterTaskType = useStore((s) => s.filterTaskType)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
   const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
@@ -332,6 +339,7 @@ export default function InputBar() {
     return sorted.filter((t) =>
       matchesTaskFilters(t, {
         filterStatus,
+        filterTaskType,
         filterFavorite,
         filterArchived,
         role: authStatus?.role,
@@ -339,7 +347,11 @@ export default function InputBar() {
         query: q,
       }),
     )
-  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  const visibleTasks = useMemo(
+    () => filteredTasks.filter((task) => visibleTaskIds.includes(task.id)),
+    [filteredTasks, visibleTaskIds],
+  )
 
   const isIOS = useMemo(() => {
     const ua = navigator.userAgent || ''
@@ -348,12 +360,12 @@ export default function InputBar() {
   }, [])
 
   const handleSelectAllToggle = useCallback(() => {
-    if (selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0) {
+    if (selectedTaskIds.length === visibleTasks.length && visibleTasks.length > 0) {
       clearSelection()
     } else {
-      setSelectedTaskIds(filteredTasks.map((t) => t.id))
+      setSelectedTaskIds(visibleTasks.map((t) => t.id))
     }
-  }, [selectedTaskIds.length, filteredTasks, clearSelection, setSelectedTaskIds])
+  }, [selectedTaskIds.length, visibleTasks, clearSelection, setSelectedTaskIds])
 
   const handleToggleFavorite = useCallback(() => {
     const selectedTasks = tasks.filter((t) => selectedTaskIds.includes(t.id))
@@ -425,16 +437,26 @@ export default function InputBar() {
         const url = remoteUrl || await ensureTaskImageAvailable(imageId)
         if (!url) continue
 
-        const extFromParams = task.params.output_format || 'png'
+        const extFromParams = task.taskType === 'video' ? 'png' : ((task.params as TaskParams).output_format || 'png')
         targets.push({
           url,
           filename: `${baseName}-${index + 1}.${extFromParams}`,
         })
       }
+      for (let index = 0; index < (task.outputVideos || []).length; index += 1) {
+        const videoId = task.outputVideos?.[index]
+        if (!videoId) continue
+        const url = task.mediaUrlsById?.[videoId] || task.imageUrlsById?.[videoId]
+        if (!url) continue
+        targets.push({
+          url,
+          filename: `${baseName}-${index + 1}.mp4`,
+        })
+      }
     }
 
     if (targets.length === 0) {
-      useStore.getState().showToast('选中的记录里没有可下载图片', 'error')
+      useStore.getState().showToast('选中的记录里没有可下载媒体', 'error')
       return
     }
 
@@ -449,7 +471,7 @@ export default function InputBar() {
       await new Promise((resolve) => window.setTimeout(resolve, 120))
     }
 
-    useStore.getState().showToast(`已开始下载 ${targets.length} 张图片`, 'success')
+    useStore.getState().showToast(`已开始下载 ${targets.length} 个文件`, 'success')
   }, [isIOS, selectedTaskIds, tasks])
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
@@ -472,6 +494,7 @@ export default function InputBar() {
   const [dragOverInputImageIndex, setDragOverInputImageIndex] = useState<number | null>(null)
   const [imageHintId, setImageHintId] = useState<string | null>(null)
   const [showSizePicker, setShowSizePicker] = useState(false)
+  const [showVideoAspectPicker, setShowVideoAspectPicker] = useState(false)
   const [showParamsModal, setShowParamsModal] = useState(false)
   const [mobileParamSheet, setMobileParamSheet] = useState<'quality' | 'format' | 'moderation' | null>(null)
   const [showUsageCodePicker, setShowUsageCodePicker] = useState(false)
@@ -494,12 +517,18 @@ export default function InputBar() {
 
   const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
   const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
+  const quotaCost = taskMode === 'video' ? 1 : params.n
   const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
-  const activeProviderProfileId = settings.providerProfileId
-    ?? providerOptions.find((option) => option.isDefault)?.id
-    ?? providerOptions[0]?.id
-    ?? null
-  const activeProviderOption = providerOptions.find((option) => option.id === activeProviderProfileId) ?? null
+  const modeProviderOptions = useMemo(
+    () => providerOptions.filter((option) => taskMode === 'video' ? option.apiMode === 'videos' : option.apiMode !== 'videos'),
+    [providerOptions, taskMode],
+  )
+  const activeProviderProfileId = modeProviderOptions.some((option) => option.id === settings.providerProfileId)
+    ? settings.providerProfileId
+    : modeProviderOptions.find((option) => option.isDefault)?.id
+      ?? modeProviderOptions[0]?.id
+      ?? null
+  const activeProviderOption = modeProviderOptions.find((option) => option.id === activeProviderProfileId) ?? null
   const getProviderQuotaSummary = useCallback((providerProfileId: string) => {
     if (authStatus?.role !== 'user') return null
     const availableCodes = userUsageCodes.filter((code) => (
@@ -511,9 +540,19 @@ export default function InputBar() {
         text: '当前使用码不可调用该端点',
       }
     }
-    const hasSplitQuota = availableCodes.some((code) => code.providerImageQuotas?.[providerProfileId] != null)
+    const hasSplitQuota = availableCodes.some((code) => (
+      taskMode === 'video'
+        ? code.providerVideoQuotas?.[providerProfileId] != null
+        : code.providerImageQuotas?.[providerProfileId] != null
+    ))
     if (hasSplitQuota) {
       const hasUnlimited = availableCodes.some((code) => {
+        if (taskMode === 'video') {
+          if (code.providerVideoQuotas?.[providerProfileId] != null) {
+            return code.providerRemainingVideoCredits?.[providerProfileId] == null
+          }
+          return code.remainingVideoCredits == null
+        }
         if (code.providerImageQuotas?.[providerProfileId] != null) {
           return code.providerRemainingImageCredits?.[providerProfileId] == null
         }
@@ -522,6 +561,12 @@ export default function InputBar() {
       const remaining = hasUnlimited
         ? null
         : availableCodes.reduce((sum, code) => {
+            if (taskMode === 'video') {
+              if (code.providerVideoQuotas?.[providerProfileId] != null) {
+                return sum + (code.providerRemainingVideoCredits?.[providerProfileId] ?? 0)
+              }
+              return sum + (code.remainingVideoCredits ?? 0)
+            }
             if (code.providerImageQuotas?.[providerProfileId] != null) {
               return sum + (code.providerRemainingImageCredits?.[providerProfileId] ?? 0)
             }
@@ -532,19 +577,25 @@ export default function InputBar() {
         text: remaining == null ? '端点剩余不限' : `端点剩余 ${remaining}`,
       }
     }
-    const hasUnlimited = availableCodes.some((code) => code.remainingImageCredits == null)
+    const hasUnlimited = availableCodes.some((code) => (
+      taskMode === 'video' ? code.remainingVideoCredits == null : code.remainingImageCredits == null
+    ))
     const remaining = hasUnlimited
       ? null
-      : availableCodes.reduce((sum, code) => sum + (code.remainingImageCredits ?? 0), 0)
+      : availableCodes.reduce((sum, code) => sum + (
+          taskMode === 'video' ? (code.remainingVideoCredits ?? 0) : (code.remainingImageCredits ?? 0)
+        ), 0)
     return {
       kind: 'total' as const,
       text: remaining == null ? '总剩余不限' : `总剩余 ${remaining}`,
     }
-  }, [authStatus?.role, userUsageCodes])
+  }, [authStatus?.role, taskMode, userUsageCodes])
   const codeHasQuota = useCallback((code: {
     allowedProviderProfileIds?: string[] | null
     remainingImageCredits: number | null
     providerRemainingImageCredits?: Record<string, number> | null
+    remainingVideoCredits?: number | null
+    providerRemainingVideoCredits?: Record<string, number> | null
   }) => {
     if (
       activeProviderProfileId
@@ -553,20 +604,25 @@ export default function InputBar() {
     ) {
       return false
     }
-    if (code.remainingImageCredits != null && code.remainingImageCredits < params.n) {
+    const remainingTotal = taskMode === 'video' ? code.remainingVideoCredits : code.remainingImageCredits
+    if (remainingTotal != null && remainingTotal < quotaCost) {
       return false
     }
     if (!activeProviderProfileId) {
       return true
     }
-    const providerRemainingImageCredits = code.providerRemainingImageCredits?.[activeProviderProfileId]
-    return providerRemainingImageCredits == null || providerRemainingImageCredits >= params.n
-  }, [activeProviderProfileId, params.n])
+    const providerRemaining = taskMode === 'video'
+      ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
+      : code.providerRemainingImageCredits?.[activeProviderProfileId]
+    return providerRemaining == null || providerRemaining >= quotaCost
+  }, [activeProviderProfileId, quotaCost, taskMode])
 
   const getCodeQuotaErrorMessage = useCallback((code: {
     allowedProviderProfileIds?: string[] | null
     remainingImageCredits: number | null
     providerRemainingImageCredits?: Record<string, number> | null
+    remainingVideoCredits?: number | null
+    providerRemainingVideoCredits?: Record<string, number> | null
   }) => {
     if (
       activeProviderProfileId
@@ -575,20 +631,42 @@ export default function InputBar() {
     ) {
       return `当前使用码无权调用 ${activeProviderOption?.name ?? '当前端点'}`
     }
-    if (code.remainingImageCredits != null && code.remainingImageCredits < params.n) {
-      return `当前使用码总额度不足，剩余 ${code.remainingImageCredits} 张`
+    const unit = taskMode === 'video' ? '次' : '张'
+    const remainingTotal = taskMode === 'video' ? code.remainingVideoCredits : code.remainingImageCredits
+    if (remainingTotal != null && remainingTotal < quotaCost) {
+      return `当前使用码总额度不足，剩余 ${remainingTotal} ${unit}`
     }
     if (!activeProviderProfileId) {
       return '当前使用码额度不足'
     }
-    const providerRemainingImageCredits = code.providerRemainingImageCredits?.[activeProviderProfileId]
-    if (providerRemainingImageCredits != null && providerRemainingImageCredits < params.n) {
-      return `${activeProviderOption?.name ?? '当前端点'}额度不足，剩余 ${providerRemainingImageCredits} 张`
+    const providerRemaining = taskMode === 'video'
+      ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
+      : code.providerRemainingImageCredits?.[activeProviderProfileId]
+    if (providerRemaining != null && providerRemaining < quotaCost) {
+      return `${activeProviderOption?.name ?? '当前端点'}额度不足，剩余 ${providerRemaining} ${unit}`
     }
     return '当前使用码额度不足'
-  }, [activeProviderOption?.name, activeProviderProfileId, params.n])
+  }, [activeProviderOption?.name, activeProviderProfileId, quotaCost, taskMode])
+
+  const applyProviderOption = useCallback((option: BackendProviderOption | null) => {
+    if (!option) return
+    useStore.getState().setSettings({
+      providerProfileId: option.id,
+      apiMode: option.apiMode,
+      model: option.model,
+      timeout: option.timeoutSeconds,
+      codexCli: option.codexCli,
+      grokApiCompat: option.grokApiCompat,
+      responseFormatB64Json: option.responseFormatB64Json,
+    })
+  }, [])
 
   const submitWithUsageCode = useCallback(async (usageCodeId?: string | null) => {
+    const nextProvider = activeProviderOption
+    if (nextProvider && useStore.getState().settings.providerProfileId !== nextProvider.id) {
+      applyProviderOption(nextProvider)
+      await new Promise((resolve) => window.setTimeout(resolve, 0))
+    }
     setShowUsageCodePicker(false)
     setIsSubmitting(true)
     try {
@@ -596,10 +674,15 @@ export default function InputBar() {
     } finally {
       setIsSubmitting(false)
     }
-  }, [])
+  }, [activeProviderOption, applyProviderOption])
 
   const handleSubmit = useCallback(async () => {
     if (!hasConfiguredProvider) {
+      setShowSettings(true)
+      return
+    }
+    if (!activeProviderOption) {
+      useStore.getState().showToast(taskMode === 'video' ? '请先配置视频 API' : '请先配置图片 API', 'error')
       setShowSettings(true)
       return
     }
@@ -626,7 +709,7 @@ export default function InputBar() {
       return
     }
     await submitWithUsageCode(null)
-  }, [authStatus?.role, canSubmit, codeHasQuota, getCodeQuotaErrorMessage, hasConfiguredProvider, setShowSettings, submitWithUsageCode, userUsageCodes])
+  }, [activeProviderOption, authStatus?.role, canSubmit, codeHasQuota, getCodeQuotaErrorMessage, hasConfiguredProvider, setShowSettings, submitWithUsageCode, taskMode, userUsageCodes])
 
   const renderUsageCodePicker = () => {
     if (!showUsageCodePicker || authStatus?.role !== 'user' || userUsageCodes.length <= 1) return null
@@ -652,10 +735,13 @@ export default function InputBar() {
                 <span className="shrink-0 text-xs">
                   {(() => {
                     const providerRemaining = activeProviderProfileId
-                      ? code.providerRemainingImageCredits?.[activeProviderProfileId]
+                      ? taskMode === 'video'
+                        ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
+                        : code.providerRemainingImageCredits?.[activeProviderProfileId]
                       : null
                     if (providerRemaining != null) return `端点剩余 ${providerRemaining}`
-                    return code.remainingImageCredits == null ? '不限' : `剩余 ${code.remainingImageCredits}`
+                    const remainingTotal = taskMode === 'video' ? code.remainingVideoCredits : code.remainingImageCredits
+                    return remainingTotal == null ? '不限' : `剩余 ${remainingTotal}`
                   })()}
                 </span>
               </button>
@@ -666,6 +752,7 @@ export default function InputBar() {
     )
   }
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
+  const hasVideoReferenceImage = taskMode === 'video' && inputImages.length > 0
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
     : null
@@ -692,8 +779,15 @@ export default function InputBar() {
   }, [atImageMenuIndex, atImageOptions.length])
 
   useCloseOnEscape(showParamsModal, () => setShowParamsModal(false))
+  useCloseOnEscape(showVideoAspectPicker, () => setShowVideoAspectPicker(false))
   useCloseOnEscape(Boolean(mobileParamSheet), () => setMobileParamSheet(null))
   usePreventBackgroundScroll(showParamsModal || Boolean(mobileParamSheet))
+
+  useEffect(() => {
+    if (hasVideoReferenceImage && videoAspectRatio !== 'auto') {
+      setVideoAspectRatio('auto')
+    }
+  }, [hasVideoReferenceImage, setVideoAspectRatio, videoAspectRatio])
 
   useEffect(() => {
     if (!selectedInputImageId) return
@@ -721,24 +815,11 @@ export default function InputBar() {
       .catch(() => setProviderOptions([]))
   }, [authStatus?.role])
 
-  const applyProviderOption = useCallback((option: BackendProviderOption | null) => {
-    if (!option) return
-    useStore.getState().setSettings({
-      providerProfileId: option.id,
-      apiMode: option.apiMode,
-      model: option.model,
-      timeout: option.timeoutSeconds,
-      codexCli: option.codexCli,
-      grokApiCompat: option.grokApiCompat,
-      responseFormatB64Json: option.responseFormatB64Json,
-    })
-  }, [])
-
   useEffect(() => {
-    if (!providerOptions.length) return
+    if (!modeProviderOptions.length) return
     const currentId = settings.providerProfileId
-    const matched = currentId ? providerOptions.find((item) => item.id === currentId) : null
-    const target = matched ?? providerOptions.find((item) => item.isDefault) ?? providerOptions[0] ?? null
+    const matched = currentId ? modeProviderOptions.find((item) => item.id === currentId) : null
+    const target = matched ?? modeProviderOptions.find((item) => item.isDefault) ?? modeProviderOptions[0] ?? null
     if (!target) return
     if (
       settings.providerProfileId !== target.id
@@ -753,7 +834,7 @@ export default function InputBar() {
     }
   }, [
     applyProviderOption,
-    providerOptions,
+    modeProviderOptions,
     settings.apiMode,
     settings.codexCli,
     settings.grokApiCompat,
@@ -1141,17 +1222,19 @@ export default function InputBar() {
 
   const renderProviderSelector = (className: string) => {
     if (!showProviderSelector) return null
-    const currentId = settings.providerProfileId ?? providerOptions.find((item) => item.isDefault)?.id ?? providerOptions[0]?.id ?? ''
+    const currentId = modeProviderOptions.some((item) => item.id === settings.providerProfileId)
+      ? settings.providerProfileId ?? ''
+      : modeProviderOptions.find((item) => item.isDefault)?.id ?? modeProviderOptions[0]?.id ?? ''
     const currentQuotaSummary = currentId ? getProviderQuotaSummary(currentId) : null
     return (
       <div className={className}>
         <Select
           value={currentId}
           onChange={(value) => {
-            const nextOption = providerOptions.find((option) => option.id === String(value)) ?? null
+            const nextOption = modeProviderOptions.find((option) => option.id === String(value)) ?? null
             applyProviderOption(nextOption)
           }}
-          options={providerOptions.map((option) => ({
+          options={modeProviderOptions.map((option) => ({
             label: option.name,
             value: option.id,
           }))}
@@ -1519,10 +1602,29 @@ export default function InputBar() {
   )
 
   const mobileChipClass = 'inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-full border border-gray-200/60 bg-white/80 px-2.5 py-1 text-[11px] font-medium text-gray-600 shadow-sm transition-all active:scale-95 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-300'
-  const showProviderSelector = providerOptions.length > 1
+  const showProviderSelector = modeProviderOptions.length > 1
 
   const renderMobileParamChips = () => (
     <div className="hide-scrollbar flex items-center gap-1.5 overflow-x-auto pb-2">
+      {taskMode === 'video' ? (
+        <>
+          <button type="button" onClick={() => setTaskMode('image')} className={mobileChipClass}>
+            <span className="text-gray-400 dark:text-gray-500">模式</span>
+            <span>视频</span>
+          </button>
+          <button type="button" onClick={() => setShowVideoAspectPicker(true)} className={mobileChipClass}>
+            <span className="text-gray-400 dark:text-gray-500">比例</span>
+            <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
+          </button>
+        </>
+      ) : (
+        <button type="button" onClick={() => setTaskMode('video')} className={mobileChipClass}>
+          <span className="text-gray-400 dark:text-gray-500">模式</span>
+          <span>图片</span>
+        </button>
+      )}
+      {taskMode === 'video' ? null : (
+        <>
       <button type="button" onClick={() => setShowSizePicker(true)} className={mobileChipClass}>
         <span className="text-gray-400 dark:text-gray-500">尺寸</span>
         <span>{normalizeImageSize(params.size) || DEFAULT_PARAMS.size}</span>
@@ -1539,6 +1641,8 @@ export default function InputBar() {
         <span className="text-gray-400 dark:text-gray-500">审核</span>
         <span>{settings.apiMode === 'responses' ? 'auto' : params.moderation}</span>
       </button>
+        </>
+      )}
     </div>
   )
 
@@ -1643,7 +1747,7 @@ export default function InputBar() {
         </div>
       )}
 
-      {showSizePicker && (
+      {taskMode === 'image' && showSizePicker && (
         <SizePickerModal
           currentSize={params.size}
           onSelect={(size) => setParams({ size })}
@@ -1651,7 +1755,16 @@ export default function InputBar() {
         />
       )}
 
-      {showParamsModal && (
+      {taskMode === 'video' && showVideoAspectPicker && (
+        <VideoAspectModal
+          currentAspect={hasVideoReferenceImage ? 'auto' : videoAspectRatio}
+          hasReferenceImage={hasVideoReferenceImage}
+          onSelect={setVideoAspectRatio}
+          onClose={() => setShowVideoAspectPicker(false)}
+        />
+      )}
+
+      {taskMode === 'image' && showParamsModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" onMouseDown={() => setShowParamsModal(false)}>
           <div className="absolute inset-0 bg-black/30 backdrop-blur-sm animate-overlay-in" />
           <div
@@ -1702,9 +1815,9 @@ export default function InputBar() {
               <button
                 onClick={handleSelectAllToggle}
                 className="p-2 text-blue-400 hover:text-blue-300 transition-colors"
-                title={selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? "取消全选" : "全选当前可见"}
+                title={selectedTaskIds.length === visibleTasks.length && visibleTasks.length > 0 ? "取消全选" : "全选当前可见"}
               >
-                {selectedTaskIds.length === filteredTasks.length && filteredTasks.length > 0 ? (
+                {selectedTaskIds.length === visibleTasks.length && visibleTasks.length > 0 ? (
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                     <path d="M9 12l2 2 4-4" />
@@ -1834,7 +1947,7 @@ export default function InputBar() {
 
           <div className="relative">
             {showAtImageMenu && (
-              <div className="absolute bottom-full left-0 z-40 mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 bg-white/95 p-1.5 shadow-xl ring-1 ring-black/5 backdrop-blur-xl dark:border-white/[0.08] dark:bg-gray-900/95 dark:ring-white/10">
+              <div className="glass-surface-strong absolute bottom-full left-0 z-[90] mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择当前参考图</div>
                 <div className="tiny-scrollbar max-h-56 overflow-y-auto">
                   {atImageOptions.map(({ img, index }, optionIndex) => (
@@ -1911,7 +2024,7 @@ export default function InputBar() {
                 }
                 syncMentionTagSelection(el)
               }}
-              data-placeholder="描述你想生成的图片。输入 @ 可引用当前参考图。"
+              data-placeholder={taskMode === 'video' ? '描述你想生成的视频。可添加参考图。' : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
               className="w-full min-h-[42px] px-4 py-3 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />
           </div>
@@ -1919,21 +2032,48 @@ export default function InputBar() {
           <div className="mt-3">
             <div className="hidden items-center justify-between gap-3 sm:flex">
               <div className="flex items-center gap-2 overflow-visible">
-                <div
-                  className="relative"
-                  onMouseEnter={sizeHint.show}
-                  onMouseLeave={sizeHint.hide}
-                >
-                  <ButtonTooltip visible={sizeHint.visible} text="设置输出尺寸" />
+                <div className="flex h-10 shrink-0 rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <button
                     type="button"
-                    onClick={() => setShowSizePicker(true)}
-                    className="flex h-10 w-[132px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                    onClick={() => setTaskMode('image')}
+                    className={`inline-flex min-w-12 items-center justify-center rounded-lg px-3 leading-none transition ${taskMode === 'image' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'text-gray-500 dark:text-gray-300'}`}
                   >
-                    <span className="text-gray-400 dark:text-gray-500">尺寸</span>
-                    <span>{normalizeImageSize(params.size) || DEFAULT_PARAMS.size}</span>
+                    图片
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaskMode('video')}
+                    className={`inline-flex min-w-12 items-center justify-center rounded-lg px-3 leading-none transition ${taskMode === 'video' ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900' : 'text-gray-500 dark:text-gray-300'}`}
+                  >
+                    视频
                   </button>
                 </div>
+                {taskMode === 'video' ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowVideoAspectPicker(true)}
+                    className="flex h-10 min-w-[104px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                  >
+                    <span className="text-gray-400 dark:text-gray-500">比例</span>
+                    <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
+                  </button>
+                ) : (
+                  <div
+                    className="relative"
+                    onMouseEnter={sizeHint.show}
+                    onMouseLeave={sizeHint.hide}
+                  >
+                    <ButtonTooltip visible={sizeHint.visible} text="设置输出尺寸" />
+                    <button
+                      type="button"
+                      onClick={() => setShowSizePicker(true)}
+                      className="flex h-10 w-[132px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                    >
+                      <span className="text-gray-400 dark:text-gray-500">尺寸</span>
+                      <span>{normalizeImageSize(params.size) || DEFAULT_PARAMS.size}</span>
+                    </button>
+                  </div>
+                )}
                 <div
                   className="relative"
                   onMouseEnter={() => setAttachHover(true)}
@@ -1955,17 +2095,19 @@ export default function InputBar() {
                     </svg>
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowParamsModal(true)}
-                  className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-200 text-gray-500 shadow-sm transition-all hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-                  title="打开参数设置"
-                >
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.572c1.756.427 1.756 2.925 0 3.352a1.724 1.724 0 00-1.066 2.572c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.066c-.427 1.756-2.925 1.756-3.352 0a1.724 1.724 0 00-2.572-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.572c-1.756-.427-1.756-2.925 0-3.352A1.724 1.724 0 005.38 7.753c-.94-1.543.826-3.31 2.37-2.37 1 .608 2.296.07 2.572-1.066z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </button>
+                {taskMode === 'image' && (
+                  <button
+                    type="button"
+                    onClick={() => setShowParamsModal(true)}
+                    className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-200 text-gray-500 shadow-sm transition-all hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+                    title="打开参数设置"
+                  >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.572c1.756.427 1.756 2.925 0 3.352a1.724 1.724 0 00-1.066 2.572c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.066c-.427 1.756-2.925 1.756-3.352 0a1.724 1.724 0 00-2.572-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.572c-1.756-.427-1.756-2.925 0-3.352A1.724 1.724 0 005.38 7.753c-.94-1.543.826-3.31 2.37-2.37 1 .608 2.296.07 2.572-1.066z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center gap-2">
@@ -1986,7 +2128,7 @@ export default function InputBar() {
                         ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'
                     }`}
-                    title={hasConfiguredProvider ? (maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
+                    title={hasConfiguredProvider ? (taskMode === 'image' && maskDraft ? '遮罩编辑 (Ctrl+Enter)' : '生成 (Ctrl+Enter)') : '请先配置后端 API'}
                   >
                     {isSubmitting ? (
                       <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -1998,7 +2140,7 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
-                    <span>{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
+                    <span>{isSubmitting ? '提交中' : taskMode === 'video' ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
                   </button>
                 </div>
               </div>
@@ -2083,7 +2225,7 @@ export default function InputBar() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
                     )}
-                    <span className="whitespace-nowrap">{isSubmitting ? '提交中' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
+                    <span className="whitespace-nowrap">{isSubmitting ? '提交中' : taskMode === 'video' ? '生成视频' : maskDraft ? '遮罩编辑' : '生成图像'}</span>
                   </button>
                 </div>
               </div>

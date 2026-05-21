@@ -1,12 +1,14 @@
 import { useEffect, useState, useRef } from 'react'
-import type { TaskRecord } from '../types'
+import type { TaskRecord, VideoTaskParams } from '../types'
 import {
-  useStore,
+  cacheTaskVideoForPlayback,
   cacheTaskImageForEditing,
-  ensureImageThumbnailCached,
+  ensureMediaThumbnailCached,
   ensureTaskImageAvailable,
-  subscribeImageThumbnail,
+  ensureTaskVideoAvailable,
+  subscribeMediaThumbnail,
   updateTaskInStore,
+  useStore,
 } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
@@ -32,6 +34,7 @@ export default function TaskCard({
   deferImageLoading = false,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
+  const [videoSrc, setVideoSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [now, setNow] = useState(Date.now())
   const [swipeOffset, setSwipeOffset] = useState(0)
@@ -46,6 +49,10 @@ export default function TaskCard({
   const taskImageBlurOverrides = useStore((s) => s.taskImageBlurOverrides)
   const toggleTaskImageBlur = useStore((s) => s.toggleTaskImageBlur)
   const firstOutputImageId = task.outputImages?.[0]
+  const firstOutputVideoId = task.outputVideos?.[0]
+  const firstOutputVideoRemoteUrl = firstOutputVideoId
+    ? task.mediaUrlsById?.[firstOutputVideoId] || task.imageUrlsById?.[firstOutputVideoId] || ''
+    : ''
   const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
   const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
   const shouldLoadImage = Boolean(firstOutputImageId) && (!deferImageLoading || firstOutputImageLoaded)
@@ -217,10 +224,11 @@ export default function TaskCard({
 
     setCoverRatio('')
     setThumbSrc('')
+    setVideoSrc('')
 
-    const imageId = task.outputImages?.[0]
-    if (imageId && shouldLoadImage) {
-      unsubscribe = subscribeImageThumbnail(imageId, (thumbnail) => {
+    const mediaId = task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
+    if (mediaId && (task.taskType === 'video' || shouldLoadImage)) {
+      unsubscribe = subscribeMediaThumbnail(mediaId, (thumbnail) => {
         if (cancelled) return
         setThumbSrc(thumbnail.dataUrl)
         if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
@@ -228,14 +236,17 @@ export default function TaskCard({
         }
       })
 
-      ensureImageThumbnailCached(imageId).then((thumbnail) => {
+      ensureMediaThumbnailCached(mediaId).then((thumbnail) => {
         if (cancelled || !thumbnail) return
         setThumbSrc(thumbnail.dataUrl)
         if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
         }
       })
+    }
 
+    const imageId = task.outputImages?.[0]
+    if (imageId && shouldLoadImage) {
       const remoteUrl = task.imageUrlsById?.[imageId]
       if (remoteUrl) {
         setThumbSrc((prev) => prev || remoteUrl)
@@ -246,11 +257,32 @@ export default function TaskCard({
       }
     }
 
+    if (task.taskType === 'video' && firstOutputVideoId) {
+      ensureTaskVideoAvailable(firstOutputVideoId).then((url) => {
+        if (!cancelled && url) setVideoSrc(url)
+      })
+
+      if (firstOutputVideoRemoteUrl) {
+        void cacheTaskVideoForPlayback(firstOutputVideoId, firstOutputVideoRemoteUrl).then((url) => {
+          if (!cancelled && url) setVideoSrc(url)
+        })
+      }
+    }
+
     return () => {
       cancelled = true
       unsubscribe?.()
     }
-  }, [firstOutputSize?.height, firstOutputSize?.width, shouldLoadImage, task.outputImages, task.imageUrlsById])
+  }, [
+    firstOutputSize?.height,
+    firstOutputSize?.width,
+    firstOutputVideoId,
+    firstOutputVideoRemoteUrl,
+    shouldLoadImage,
+    task.imageUrlsById,
+    task.outputImages,
+    task.taskType,
+  ])
 
   useEffect(() => {
     if (firstOutputSize?.width && firstOutputSize.height) {
@@ -315,6 +347,9 @@ export default function TaskCard({
     ? { ...task.actualParams, n: task.outputImages.length }
     : task.actualParams
   const hasOutputImage = Boolean(task.outputImages?.length)
+  const hasOutputVideo = Boolean(task.outputVideos?.length)
+  const isVideoTask = task.taskType === 'video'
+  const videoParams = isVideoTask ? task.params as VideoTaskParams : null
   const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
   const taskModelLabel = task.providerProfileModel ?? null
   const isSwipeReady = Math.abs(swipeOffset) >= 40
@@ -398,7 +433,7 @@ export default function TaskCard({
           </svg>
         </div>
       )}
-      {hasOutputImage && (
+      {hasOutputImage && !isVideoTask && (
         <button
           type="button"
           data-no-long-press
@@ -432,7 +467,38 @@ export default function TaskCard({
       <div className="flex h-40">
         {/* 左侧图片区域 */}
         <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
-          {hasOutputImage && thumbSrc && (
+          {isVideoTask && thumbSrc && (
+            <>
+              <img
+                src={thumbSrc}
+                className="h-full w-full object-cover"
+                alt=""
+              />
+              <div className="absolute inset-0 bg-black/20" />
+            </>
+          )}
+          {isVideoTask && !thumbSrc && videoSrc && (
+            <>
+              <video
+                src={videoSrc}
+                className="h-full w-full object-cover"
+                muted
+                playsInline
+                preload="metadata"
+              />
+              <div className="absolute inset-0 bg-black/20" />
+            </>
+          )}
+          {hasOutputVideo && (
+            <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm">
+                <svg className="ml-0.5 h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 6.5v11l9-5.5-9-5.5z" />
+                </svg>
+              </div>
+            </div>
+          )}
+          {hasOutputImage && thumbSrc && !isVideoTask && (
             <>
               <img
                 src={thumbSrc}
@@ -470,7 +536,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'running' && !hasOutputImage && (
+          {task.status === 'running' && !hasOutputImage && !hasOutputVideo && (
             <div className="flex flex-col items-center gap-2">
               <svg
                 className="w-8 h-8 text-blue-400 animate-spin"
@@ -492,11 +558,11 @@ export default function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">
-                {task.currentStep ? `${task.currentStep}...` : '生成中...'}
+                {task.progressPercent != null ? `${task.progressPercent}%` : task.currentStep ? `${task.currentStep}...` : '生成中...'}
               </span>
             </div>
           )}
-          {task.status === 'error' && !hasOutputImage && (
+          {task.status === 'error' && !hasOutputImage && !hasOutputVideo && (
             <div className="flex flex-col items-center gap-1 px-2">
               <svg
                 className="w-7 h-7 text-red-400"
@@ -516,7 +582,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'done' && !thumbSrc && (
+          {task.status === 'done' && !thumbSrc && !videoSrc && (
             <svg
               className="w-8 h-8 text-gray-300"
               fill="none"
@@ -533,7 +599,16 @@ export default function TaskCard({
           )}
           {/* 运行中显示耗时，完成后显示封面图比例 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {task.status !== 'done' || !hasOutputImage || !coverRatio ? (
+            {isVideoTask ? (
+              <>
+                <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm">
+                  视频
+                </span>
+              <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                {videoParams?.aspect_ratio ?? 'auto'}
+              </span>
+              </>
+            ) : task.status !== 'done' || !hasOutputImage || !coverRatio ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -546,7 +621,7 @@ export default function TaskCard({
               </span>
             )}
           </div>
-          {task.status === 'running' && hasOutputImage && task.currentStep && (
+          {task.status === 'running' && (hasOutputImage || hasOutputVideo) && task.currentStep && (
             <div className="absolute bottom-1.5 left-1.5 right-1.5">
               <span className="inline-flex max-w-full rounded bg-black/55 px-2 py-1 text-[10px] text-white/90 backdrop-blur-sm">
                 {task.currentStep}
@@ -571,10 +646,21 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              <ParamValue task={task} paramKey="quality" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
-              <ParamValue task={task} paramKey="size" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
-              <ParamValue task={task} paramKey="output_format" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
-              <ParamValue task={task} paramKey="n" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" actualParams={aggregateActualParams} />
+              {isVideoTask ? (
+                <>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">视频</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">{videoParams?.aspect_ratio ?? 'auto'}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">480p</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">6s</span>
+                </>
+              ) : (
+                <>
+                  <ParamValue task={task} paramKey="quality" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
+                  <ParamValue task={task} paramKey="size" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
+                  <ParamValue task={task} paramKey="output_format" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" />
+                  <ParamValue task={task} paramKey="n" className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" actualParams={aggregateActualParams} />
+                </>
+              )}
               {task.maskImageId && (
                 <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">
                   mask

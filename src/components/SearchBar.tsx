@@ -7,6 +7,8 @@ export default function SearchBar() {
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
+  const filterTaskType = useStore((s) => s.filterTaskType)
+  const setFilterTaskType = useStore((s) => s.setFilterTaskType)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const setFilterFavorite = useStore((s) => s.setFilterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
@@ -15,17 +17,18 @@ export default function SearchBar() {
   const setShowUsageCodeTasksForAdmin = useStore((s) => s.setShowUsageCodeTasksForAdmin)
   const blurLoadedImages = useStore((s) => s.blurLoadedImages)
   const setBlurLoadedImages = useStore((s) => s.setBlurLoadedImages)
+  const topButtonClass = 'flex h-11 w-11 items-center justify-center rounded-xl border transition-all'
 
   return (
-    <div className="mt-6 mb-4 flex flex-wrap gap-3">
-      <div className="flex gap-2 flex-shrink-0 z-20">
+    <div className="relative z-40 mt-6 mb-4 flex flex-col gap-3">
+      <div className="z-20 grid w-full min-w-0 grid-cols-[2.75rem_2.75rem_2.75rem_minmax(0,1fr)] items-center gap-2">
         <button
           onClick={() => {
             const nextValue = !filterFavorite
             setFilterFavorite(nextValue)
             if (nextValue) setFilterArchived(false)
           }}
-          className={`p-2.5 rounded-xl border transition-all ${
+          className={`${topButtonClass} ${
             filterFavorite
               ? 'border-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 text-yellow-500'
               : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
@@ -42,7 +45,7 @@ export default function SearchBar() {
             setFilterArchived(nextValue)
             if (nextValue) setFilterFavorite(false)
           }}
-          className={`p-2.5 rounded-xl border transition-all ${
+          className={`${topButtonClass} ${
             filterArchived
               ? 'border-slate-400 bg-slate-100 dark:bg-slate-500/10 text-slate-600 dark:text-slate-300'
               : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
@@ -57,7 +60,7 @@ export default function SearchBar() {
         </button>
         <button
           onClick={() => setBlurLoadedImages(!blurLoadedImages)}
-          className={`p-2.5 rounded-xl border transition-all ${
+          className={`${topButtonClass} ${
             blurLoadedImages
               ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-300'
               : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
@@ -78,20 +81,43 @@ export default function SearchBar() {
             </svg>
           )}
         </button>
+        <div className="flex h-11 min-w-0 items-center rounded-xl border border-gray-200 bg-white p-1 dark:border-white/[0.08] dark:bg-gray-900">
+          {[
+            { value: 'all', label: '全部' },
+            { value: 'image', label: '图片' },
+            { value: 'video', label: '视频' },
+          ].map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              onClick={() => setFilterTaskType(item.value as 'all' | 'image' | 'video')}
+              className={`flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-2 text-xs transition sm:text-sm ${
+                filterTaskType === item.value
+                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                  : 'text-gray-500 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-white/[0.06]'
+              }`}
+              title={`筛选${item.label}任务`}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={`grid w-full min-w-0 gap-2 ${authStatus?.role === 'admin' ? 'grid-cols-2' : 'grid-cols-1'}`}>
         {authStatus?.role === 'admin' && (
           <button
             onClick={() => setShowUsageCodeTasksForAdmin(!showUsageCodeTasksForAdmin)}
-            className={`px-3 py-2.5 rounded-xl border transition-all text-sm whitespace-nowrap ${
+            className={`flex h-11 min-w-0 items-center justify-center rounded-xl border px-3 text-xs transition-all sm:text-sm ${
               showUsageCodeTasksForAdmin
                 ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-300'
                 : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
             }`}
             title={showUsageCodeTasksForAdmin ? '隐藏使用码图片' : '显示使用码图片'}
           >
-            {showUsageCodeTasksForAdmin ? '已显示使用码图片' : '未显示使用码图片'}
+            {showUsageCodeTasksForAdmin ? '已显示使用码' : '未显示使用码'}
           </button>
         )}
-        <div className="relative w-28">
+        <div className="relative h-11 min-w-0">
           <Select
             value={filterStatus}
             onChange={(val) => setFilterStatus(val as any)}
@@ -101,11 +127,11 @@ export default function SearchBar() {
               { label: '生成中', value: 'running' },
               { label: '失败', value: 'error' },
             ]}
-            className="px-3 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-white/[0.06] text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
+            className="flex h-11 items-center rounded-xl border border-gray-200 bg-white px-3 text-sm transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06]"
           />
         </div>
       </div>
-      <div className="relative flex-1 z-10">
+      <div className="relative z-10 w-full min-w-0">
         <svg
           className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500"
           fill="none"
@@ -123,7 +149,7 @@ export default function SearchBar() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           type="text"
-          placeholder="搜索提示词、参数、比例、分辨率..."
+          placeholder="搜索提示词、参数、比例、分辨率、媒体类型..."
           className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
         />
       </div>

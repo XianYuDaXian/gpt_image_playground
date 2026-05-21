@@ -1,11 +1,12 @@
 import { useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
-import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureMediaThumbnailCached, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import UsageCodeBadge from './UsageCodeBadge'
+import type { VideoTaskParams } from '../types'
 
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
@@ -22,6 +23,7 @@ export default function DetailModal() {
 
   const [imageIndex, setImageIndex] = useState(0)
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
+  const [videoSrcs, setVideoSrcs] = useState<Record<string, string>>({})
   const [imageRatios, setImageRatios] = useState<Record<string, string>>({})
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
@@ -52,12 +54,14 @@ export default function DetailModal() {
   useEffect(() => {
     if (!task) {
       setImageSrcs({})
+      setVideoSrcs({})
       return
     }
 
     let cancelled = false
     const ids = [...new Set([
       ...(task.outputImages || []),
+      ...(task.outputVideos || []),
       ...(task.inputImageIds || []),
       ...(task.maskImageId ? [task.maskImageId] : []),
     ])]
@@ -72,11 +76,31 @@ export default function DetailModal() {
       if (cached) initial[id] = cached
     }
     setImageSrcs(initial)
+    setVideoSrcs({})
     for (const id of ids) {
       if (initial[id]) continue
       ensureTaskImageAvailable(id).then((url) => {
         if (!cancelled && url) setImageSrcs((prev) => ({ ...prev, [id]: url }))
       })
+    }
+
+    for (const videoId of task.outputVideos || []) {
+      ensureMediaThumbnailCached(videoId).then((thumbnail) => {
+        if (!cancelled && thumbnail?.dataUrl) {
+          setImageSrcs((prev) => ({ ...prev, [videoId]: prev[videoId] || thumbnail.dataUrl }))
+        }
+      })
+
+      ensureTaskVideoAvailable(videoId).then((url) => {
+        if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
+      })
+
+      const remoteUrl = task.mediaUrlsById?.[videoId] || task.imageUrlsById?.[videoId]
+      if (remoteUrl) {
+        void cacheTaskVideoForPlayback(videoId, remoteUrl).then((url) => {
+          if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
+        })
+      }
     }
 
     return () => {
@@ -86,6 +110,11 @@ export default function DetailModal() {
 
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
   const currentOutputImageSrc = currentOutputImageId ? imageSrcs[currentOutputImageId] || '' : ''
+  const currentOutputVideoId = task?.outputVideos?.[0] || ''
+  const currentOutputVideoSrc = currentOutputVideoId
+    ? videoSrcs[currentOutputVideoId] || task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
+    : ''
+  const currentOutputVideoPoster = currentOutputVideoId ? imageSrcs[currentOutputVideoId] || '' : ''
   const maskTargetId = task?.maskTargetImageId || null
   const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
   const maskSrc = task?.maskImageId ? imageSrcs[task.maskImageId] || '' : ''
@@ -162,6 +191,8 @@ export default function DetailModal() {
   if (!task) return null
 
   const outputLen = task.outputImages?.length || 0
+  const isVideoTask = task.taskType === 'video'
+  const videoParams = isVideoTask ? task.params as VideoTaskParams : null
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
@@ -171,7 +202,7 @@ export default function DetailModal() {
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const showPromptWarning = Boolean(currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
-  const hasRenderedOutput = Boolean(outputLen > 0 && currentOutputImageSrc)
+  const hasRenderedOutput = Boolean(isVideoTask ? currentOutputVideoSrc : outputLen > 0 && currentOutputImageSrc)
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -304,6 +335,15 @@ export default function DetailModal() {
         <div ref={imagePanelRef} className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
           {hasRenderedOutput && (
             <>
+              {isVideoTask ? (
+                <video
+                  src={currentOutputVideoSrc}
+                  poster={currentOutputVideoPoster || undefined}
+                  className="max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain"
+                  controls
+                  playsInline
+                />
+              ) : (
               <img
                 ref={mainImageRef}
                 src={currentOutputImageSrc}
@@ -329,8 +369,13 @@ export default function DetailModal() {
                 }
                 alt=""
               />
+              )}
               <div className="absolute top-[15px] flex items-center gap-1.5" style={{ left: imageLabelLeft }}>
-                {currentImageRatio && currentImageSize ? (
+                {isVideoTask ? (
+                  <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+                    {videoParams?.aspect_ratio ?? 'auto'}
+                  </span>
+                ) : currentImageRatio && currentImageSize ? (
                   <>
                     <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                       {currentImageRatio}
@@ -350,7 +395,7 @@ export default function DetailModal() {
                   )
                 )}
               </div>
-              {outputLen > 1 && (
+              {!isVideoTask && outputLen > 1 && (
                 <>
                   <button
                     onClick={() =>
@@ -583,6 +628,31 @@ export default function DetailModal() {
               参数配置
             </h3>
             <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+              {isVideoTask ? (
+                <>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">类型</span>
+                    <br />
+                    <span className="font-medium">视频</span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">比例</span>
+                    <br />
+                    <span className="font-medium">{videoParams?.aspect_ratio ?? 'auto'}</span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">分辨率</span>
+                    <br />
+                    <span className="font-medium">480p</span>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                    <span className="text-gray-400 dark:text-gray-500">时长</span>
+                    <br />
+                    <span className="font-medium">6s</span>
+                  </div>
+                </>
+              ) : (
+                <>
               <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                 <span className="text-gray-400 dark:text-gray-500">尺寸</span>
                 <br />
@@ -622,12 +692,14 @@ export default function DetailModal() {
                   <span className="font-medium break-all">{task.providerProfileModel}</span>
                 </div>
               )}
-              {task.params.output_compression != null && (
+              {(task.params as { output_compression?: number | null }).output_compression != null && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                   <span className="text-gray-400 dark:text-gray-500">压缩率</span>
                   <br />
                   <DetailParamValue task={task} paramKey="output_compression" className="font-medium" actualParams={currentActualParams} />
                 </div>
+              )}
+                </>
               )}
             </div>
 
@@ -653,7 +725,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleMaskEditCurrentOutput}
-              disabled={!outputLen}
+              disabled={!outputLen || isVideoTask}
               className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-blue-500/10 dark:text-blue-400 dark:hover:bg-blue-500/20"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -663,7 +735,7 @@ export default function DetailModal() {
             </button>
             <button
               onClick={handleQuickEditOutput}
-              disabled={!outputLen}
+              disabled={!outputLen || isVideoTask}
               className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-green-50 px-3 py-2 text-sm font-medium text-green-600 transition hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20"
             >
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -671,6 +743,18 @@ export default function DetailModal() {
               </svg>
               高级编辑
             </button>
+            {isVideoTask && currentOutputVideoSrc && (
+              <a
+                href={currentOutputVideoSrc}
+                download={`${task.id}.mp4`}
+                className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-green-50 px-3 py-2 text-sm font-medium text-green-600 transition hover:bg-green-100 dark:bg-green-500/10 dark:text-green-400 dark:hover:bg-green-500/20"
+              >
+                <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v11m0 0l4-4m-4 4l-4-4M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1" />
+                </svg>
+                下载视频
+              </a>
+            )}
             <button
               onClick={handleDelete}
               className="flex min-w-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-100 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20"

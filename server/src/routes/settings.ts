@@ -21,10 +21,11 @@ const providerProfileSchema = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().optional(),
   model: z.string().min(1),
-  apiMode: z.enum(['images', 'responses']),
+  apiMode: z.enum(['images', 'responses', 'videos']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
+  xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
   isDefault: z.boolean().default(false),
 }).refine((value) => !(value.codexCli && value.grokApiCompat), {
@@ -36,10 +37,11 @@ const runtimeSettingsSchemaBase = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1),
   model: z.string().min(1),
-  apiMode: z.enum(['images', 'responses']),
+  apiMode: z.enum(['images', 'responses', 'videos']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
+  xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
   clearInputAfterSubmit: z.boolean().default(false),
   persistInputOnRestart: z.boolean().default(true),
@@ -126,23 +128,29 @@ const distributionSettingsSchema = z.object({
 
 const usageCodeCreateSchema = z.object({
   name: z.string().min(1).optional(),
-  imageQuota: z.number().int().positive().nullable().optional(),
+  imageQuota: z.number().int().nonnegative().nullable().optional(),
+  videoQuota: z.number().int().nonnegative().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
-  providerImageQuotas: z.record(z.string().min(1), z.number().int().positive()).nullable().optional(),
+  providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
+  providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
 })
 
 const usageCodePatchSchema = z.object({
   name: z.string().min(1).optional(),
   isEnabled: z.boolean().optional(),
-  imageQuota: z.number().int().positive().nullable().optional(),
+  imageQuota: z.number().int().nonnegative().nullable().optional(),
+  videoQuota: z.number().int().nonnegative().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
-  providerImageQuotas: z.record(z.string().min(1), z.number().int().positive()).nullable().optional(),
+  providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
+  providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
 }).refine((value) =>
   value.name !== undefined
     || value.isEnabled !== undefined
     || value.imageQuota !== undefined
+    || value.videoQuota !== undefined
     || value.allowedProviderProfileIds !== undefined
-    || value.providerImageQuotas !== undefined,
+    || value.providerImageQuotas !== undefined
+    || value.providerVideoQuotas !== undefined,
   { message: '至少需要更新一个字段' },
 )
 
@@ -164,9 +172,21 @@ function formatQuotaEventLabel(event: { eventType: string; providerProfileName: 
   const reasonLabel = reason ? ` · ${reason}` : ''
   if (event.eventType === 'reserve') return `任务占用 ${event.credits} 张${providerLabel}${reasonLabel}`
   if (event.eventType === 'refund') return `额度退回 ${event.credits} 张${providerLabel}${reasonLabel}`
+  if (event.eventType === 'video_reserve') return `视频任务占用 ${event.credits} 次${providerLabel}${reasonLabel}`
+  if (event.eventType === 'video_refund') return `视频额度退回 ${event.credits} 次${providerLabel}${reasonLabel}`
+  if (event.eventType === 'video_admin_increase') return `管理员增加视频额度 ${event.credits} 次${providerLabel}${reasonLabel}`
+  if (event.eventType === 'video_admin_decrease') return `管理员减少视频额度 ${event.credits} 次${providerLabel}${reasonLabel}`
   if (event.eventType === 'admin_increase') return `管理员增加 ${event.credits} 张${providerLabel}${reasonLabel}`
   if (event.eventType === 'admin_decrease') return `管理员减少 ${event.credits} 张${providerLabel}${reasonLabel}`
   return `${event.eventType} ${event.credits} 张${providerLabel}${reasonLabel}`
+}
+
+function formatUsageCodeAccessLabel(app: Parameters<FastifyPluginAsync>[0], providerIds: string[] | null | undefined) {
+  if (!providerIds?.length) return '全部 API'
+  const names = providerIds
+    .map((id) => app.db.getProviderProfile(id)?.name ?? id)
+    .filter(Boolean)
+  return names.length ? names.join('、') : '未匹配 API'
 }
 
 function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
@@ -202,6 +222,7 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
+    xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
@@ -218,6 +239,7 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
+    xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     isDefault: Boolean(profile.isDefault),
   }
@@ -232,11 +254,20 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
         ]),
       )
     : null
-  const remainingImageCredits = providerRemainingImageCredits
-    ? Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
-    : code.imageQuota == null
-      ? null
-      : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const remainingImageCredits = code.imageQuota == null
+    ? null
+    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const providerRemainingVideoCredits = code.providerVideoQuotas
+    ? Object.fromEntries(
+        Object.entries(code.providerVideoQuotas).map(([providerProfileId, quota]) => [
+          providerProfileId,
+          Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
+        ]),
+      )
+    : null
+  const remainingVideoCredits = code.videoQuota == null
+    ? null
+    : Math.max(0, code.videoQuota - code.usedVideoCredits)
   let codePlain: string | null = null
   if (code.codeEncrypted) {
     try {
@@ -258,12 +289,34 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     providerImageQuotas: code.providerImageQuotas ?? null,
     providerUsedImageCredits: code.providerUsedImageCredits ?? null,
     providerRemainingImageCredits,
+    videoQuota: code.videoQuota,
+    usedVideoCredits: code.usedVideoCredits,
+    remainingVideoCredits,
+    providerVideoQuotas: code.providerVideoQuotas ?? null,
+    providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
+    providerRemainingVideoCredits,
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
     quotaEvents: app.db.listUsageQuotaEvents(code.id, 50).map((event) => ({
       ...event,
       label: formatQuotaEventLabel(event),
     })),
+    activityEvents: [
+      ...app.db.listUsageQuotaEvents(code.id, 50).map((event) => ({
+        id: `quota-${event.id}`,
+        taskId: event.taskId,
+        createdAt: event.createdAt,
+        label: formatQuotaEventLabel(event),
+      })),
+      ...app.db.listUsageCodeActivityLogs(code.id, 50).map((event) => ({
+        id: `activity-${event.id}`,
+        taskId: event.taskId,
+        createdAt: event.createdAt,
+        label: event.message,
+      })),
+    ]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 100),
     allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     createdAt: code.createdAt,
     updatedAt: code.updatedAt,
@@ -374,6 +427,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         timeoutSeconds: profile.timeoutSeconds,
         codexCli: Boolean(profile.codexCli),
         grokApiCompat: Boolean(profile.grokApiCompat),
+        xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
         responseFormatB64Json: Boolean(profile.responseFormatB64Json),
         clearInputAfterSubmit: preferences.clearInputAfterSubmit,
         persistInputOnRestart: preferences.persistInputOnRestart,
@@ -406,6 +460,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: profile.timeoutSeconds,
       codexCli: Boolean(profile.codexCli),
       grokApiCompat: Boolean(profile.grokApiCompat),
+      xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
       clearInputAfterSubmit: preferences.clearInputAfterSubmit,
       persistInputOnRestart: preferences.persistInputOnRestart,
@@ -429,6 +484,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
       grokApiCompat: payload.grokApiCompat,
+      xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
@@ -457,6 +513,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
       codexCli: Boolean(profile.codexCli),
       grokApiCompat: Boolean(profile.grokApiCompat),
+      xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
       clearInputAfterSubmit: payload.clearInputAfterSubmit,
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
@@ -520,6 +577,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
       grokApiCompat: payload.grokApiCompat,
+      xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: true,
     })
@@ -536,6 +594,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const payload = providerProfileSchema.parse(request.body)
     const apiKey = payload.apiKey?.trim()
     if (!apiKey) throw new Error('新建 API 配置需要填写 API Key')
+    const existingProviderProfileIds = app.db.listProviderProfiles().map((item) => item.id)
     const profile = app.db.upsertProviderProfile({
       id: payload.id ?? crypto.randomUUID(),
       name: payload.name,
@@ -546,10 +605,27 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
       grokApiCompat: payload.grokApiCompat,
+      xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: payload.isDefault,
     })
     if (!profile) throw new Error('创建 API 配置失败')
+    app.db.restrictUsageCodeAccessForNewProvider({
+      providerProfileId: profile.id,
+      existingProviderProfileIds,
+    })
+    app.db.appendProviderQuotaOverrideForUsageCodes({
+      providerProfileId: profile.id,
+      apiMode: profile.apiMode,
+    })
+    for (const code of app.db.listUsageCodesWithStats()) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: code.id,
+        actorKind: 'admin',
+        eventType: 'usage_code_provider_quota_initialized',
+        message: `管理员新增 API 配置「${profile.name}」，该端点默认未授权，额度设为 0`,
+      })
+    }
     return serializeProfile(app, profile)
   })
 
@@ -575,6 +651,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
       grokApiCompat: payload.grokApiCompat,
+      xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       isDefault: payload.isDefault,
     })
@@ -601,9 +678,21 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.put('/api/admin/distribution', async (request, reply) => {
     await requireAdmin(app, request, reply)
     const payload = distributionSettingsSchema.parse(request.body)
+    const current = app.db.getDistributionSettings()
     app.db.setDistributionSettings(payload)
     app.taskWorker.setMaxConcurrentTasks(payload.maxConcurrentTasks)
-    return app.db.getDistributionSettings()
+    const next = app.db.getDistributionSettings()
+    if (current.enabled !== next.enabled || current.maxConcurrentTasks !== next.maxConcurrentTasks) {
+      for (const code of app.db.listUsageCodesWithStats()) {
+        app.db.insertUsageCodeActivityLog({
+          usageCodeId: code.id,
+          actorKind: 'admin',
+          eventType: 'distribution_updated',
+          message: `管理员更新分发设置：${next.enabled ? '开启' : '关闭'}分发，同时执行任务数 ${current.maxConcurrentTasks} -> ${next.maxConcurrentTasks}`,
+        })
+      }
+    }
+    return next
   })
 
   app.get('/api/admin/usage-codes', async (request, reply) => {
@@ -623,12 +712,20 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       codeEncrypted: encryptText(code, app.config.appSecret),
       name: payload.name?.trim() || '未命名使用码',
       imageQuota: payload.imageQuota ?? null,
+      videoQuota: payload.videoQuota ?? null,
       allowedProviderProfileIds: payload.allowedProviderProfileIds ?? null,
       providerImageQuotas: payload.providerImageQuotas ?? null,
+      providerVideoQuotas: payload.providerVideoQuotas ?? null,
     })
     if (!usageCode) throw new Error('创建使用码失败')
 
     const stats = app.db.listUsageCodesWithStats().find((item) => item.id === usageCode.id)
+    app.db.insertUsageCodeActivityLog({
+      usageCodeId: usageCode.id,
+      actorKind: 'admin',
+      eventType: 'usage_code_created',
+      message: `管理员创建使用码，可用 API：${formatUsageCodeAccessLabel(app, usageCode.allowedProviderProfileIds)}`,
+    })
     return {
       code,
       item: stats ? serializeUsageCode(app, stats) : {
@@ -640,9 +737,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         providerImageQuotas: usageCode.providerImageQuotas ?? null,
         providerUsedImageCredits: usageCode.providerUsedImageCredits ?? null,
         providerRemainingImageCredits: usageCode.providerImageQuotas ?? null,
+        videoQuota: usageCode.videoQuota,
+        usedVideoCredits: usageCode.usedVideoCredits,
+        remainingVideoCredits: usageCode.videoQuota,
+        providerVideoQuotas: usageCode.providerVideoQuotas ?? null,
+        providerUsedVideoCredits: usageCode.providerUsedVideoCredits ?? null,
+        providerRemainingVideoCredits: usageCode.providerVideoQuotas ?? null,
         taskCount: 0,
         outputImageCount: 0,
         quotaEvents: [],
+        activityEvents: [],
       },
     }
   })
@@ -651,17 +755,53 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await requireAdmin(app, request, reply)
     const params = z.object({ codeId: z.string().min(1) }).parse(request.params)
     const payload = usageCodePatchSchema.parse(request.body)
+    const current = app.db.getUsageCode(params.codeId)
+    if (!current) {
+      reply.code(404)
+      return { message: '使用码不存在' }
+    }
     const updated = app.db.updateUsageCode({
       id: params.codeId,
       name: payload.name?.trim(),
       isEnabled: payload.isEnabled,
       imageQuota: payload.imageQuota,
+      videoQuota: payload.videoQuota,
       allowedProviderProfileIds: payload.allowedProviderProfileIds,
       providerImageQuotas: payload.providerImageQuotas,
+      providerVideoQuotas: payload.providerVideoQuotas,
     })
     if (!updated) {
       reply.code(404)
       return { message: '使用码不存在' }
+    }
+
+    if (payload.name !== undefined && payload.name.trim() !== current.name) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: params.codeId,
+        actorKind: 'admin',
+        eventType: 'usage_code_renamed',
+        message: `管理员修改使用码名称：${current.name} -> ${payload.name.trim()}`,
+      })
+    }
+    if (payload.isEnabled !== undefined && Boolean(current.isEnabled) !== payload.isEnabled) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: params.codeId,
+        actorKind: 'admin',
+        eventType: payload.isEnabled ? 'usage_code_enabled' : 'usage_code_disabled',
+        message: `管理员${payload.isEnabled ? '启用' : '禁用'}使用码`,
+      })
+    }
+    if (payload.allowedProviderProfileIds !== undefined) {
+      const prevLabel = formatUsageCodeAccessLabel(app, current.allowedProviderProfileIds)
+      const nextLabel = formatUsageCodeAccessLabel(app, payload.allowedProviderProfileIds)
+      if (prevLabel !== nextLabel) {
+        app.db.insertUsageCodeActivityLog({
+          usageCodeId: params.codeId,
+          actorKind: 'admin',
+          eventType: 'usage_code_allowed_apis_changed',
+          message: `管理员调整可用 API：${prevLabel} -> ${nextLabel}`,
+        })
+      }
     }
 
     const stats = app.db.listUsageCodesWithStats().find((item) => item.id === updated.id)
@@ -710,6 +850,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
       codexCli: payload.runtimeSettings.codexCli,
       grokApiCompat: payload.runtimeSettings.grokApiCompat,
+      xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled,
       responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json,
       isDefault: true,
     })
@@ -801,6 +942,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           timeoutSeconds: profile.timeoutSeconds,
           codexCli: Boolean(profile.codexCli),
           grokApiCompat: Boolean(profile.grokApiCompat),
+          xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
           responseFormatB64Json: Boolean(profile.responseFormatB64Json),
           ...getRuntimePreferences(app),
         }

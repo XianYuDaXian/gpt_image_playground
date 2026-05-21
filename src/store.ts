@@ -7,22 +7,26 @@ import type {
   MaskDraft,
   TaskRecord,
   ThemeMode,
+  VideoTaskParams,
 } from './types'
-import { DEFAULT_SETTINGS, DEFAULT_PARAMS } from './types'
+import { DEFAULT_SETTINGS, DEFAULT_PARAMS, DEFAULT_VIDEO_PARAMS } from './types'
 import {
   CURRENT_THUMBNAIL_VERSION,
   createAndStoreImageThumbnail,
+  createAndStoreVideoThumbnail,
+  getCachedVideoBlob,
   getImage,
   getStoredFreshImageThumbnail,
-  getAllImages,
   deleteImage,
   clearImages,
+  getAllImages,
+  putCachedVideoBlob,
   storeImage,
   putImage,
 } from './lib/db'
 import { fetchBackendRuntimeSettings } from './lib/backendSettings'
 import { fetchAuthStatus, logoutAuth, type AuthStatus } from './lib/backendAuth'
-import { createBackendTask, deleteBackendTask, fetchBackendTasks, updateBackendTaskFlags } from './lib/backendTasks'
+import { createBackendTask, deleteBackendTask, fetchBackendTaskPage, updateBackendTaskFlags } from './lib/backendTasks'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
@@ -32,10 +36,12 @@ import { normalizeImageSize } from './lib/size'
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
 
 const imageCache = new Map<string, string>()
+const videoUrlCache = new Map<string, string>()
 const thumbnailCache = new Map<string, { dataUrl: string; width?: number; height?: number; thumbnailVersion?: number }>()
 const thumbnailSubscribers = new Map<string, Set<(thumbnail: { dataUrl: string; width?: number; height?: number }) => void>>()
 const thumbnailBackfillIds = new Set<string>()
 const thumbnailBackfillRunningIds = new Set<string>()
+const videoLoadPromises = new Map<string, Promise<string | undefined>>()
 const taskEventSources = new Map<string, EventSource>()
 let taskListEventSource: EventSource | null = null
 let taskStreamInitialized = false
@@ -106,6 +112,39 @@ export async function ensureImageCached(id: string): Promise<string | undefined>
   return undefined
 }
 
+function revokeCachedVideoUrl(id: string) {
+  const objectUrl = videoUrlCache.get(id)
+  if (!objectUrl) return
+  URL.revokeObjectURL(objectUrl)
+  videoUrlCache.delete(id)
+}
+
+function cacheVideoUrl(id: string, objectUrl: string) {
+  revokeCachedVideoUrl(id)
+  videoUrlCache.set(id, objectUrl)
+}
+
+export function getCachedVideoUrl(id: string): string | undefined {
+  const objectUrl = videoUrlCache.get(id)
+  if (objectUrl) {
+    videoUrlCache.delete(id)
+    videoUrlCache.set(id, objectUrl)
+  }
+  return objectUrl
+}
+
+export async function ensureVideoCached(id: string): Promise<string | undefined> {
+  const cachedObjectUrl = getCachedVideoUrl(id)
+  if (cachedObjectUrl) return cachedObjectUrl
+
+  const cachedBlob = await getCachedVideoBlob(id)
+  if (!cachedBlob) return undefined
+
+  const objectUrl = URL.createObjectURL(cachedBlob)
+  cacheVideoUrl(id, objectUrl)
+  return objectUrl
+}
+
 export function primeImageCache(images: Array<{ id: string; dataUrl: string }>) {
   for (const img of images) {
     cacheImage(img.id, img.dataUrl)
@@ -154,6 +193,23 @@ export async function ensureImageThumbnailCached(id: string): Promise<{ dataUrl:
   return thumbnail
 }
 
+export async function ensureMediaThumbnailCached(id: string): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
+  const cached = getCachedThumbnail(id)
+  if (cached) return cached
+
+  const rec = await getStoredFreshImageThumbnail(id)
+  if (!rec?.thumbnailDataUrl) return undefined
+
+  const thumbnail = {
+    dataUrl: rec.thumbnailDataUrl,
+    width: rec.width,
+    height: rec.height,
+    thumbnailVersion: rec.thumbnailVersion,
+  }
+  cacheThumbnail(id, thumbnail)
+  return thumbnail
+}
+
 export function subscribeImageThumbnail(id: string, callback: (thumbnail: { dataUrl: string; width?: number; height?: number }) => void) {
   let subscribers = thumbnailSubscribers.get(id)
   if (!subscribers) {
@@ -165,6 +221,10 @@ export function subscribeImageThumbnail(id: string, callback: (thumbnail: { data
     subscribers?.delete(callback)
     if (subscribers?.size === 0) thumbnailSubscribers.delete(id)
   }
+}
+
+export function subscribeMediaThumbnail(id: string, callback: (thumbnail: { dataUrl: string; width?: number; height?: number }) => void) {
+  return subscribeImageThumbnail(id, callback)
 }
 
 function notifyImageThumbnail(id: string, thumbnail: { dataUrl: string; width?: number; height?: number }) {
@@ -253,18 +313,32 @@ interface AppState {
   setMaskEditorImageId: (id: string | null) => void
 
   // 参数
+  taskMode: 'image' | 'video'
+  setTaskMode: (mode: 'image' | 'video') => void
+  videoAspectRatio: VideoTaskParams['aspect_ratio']
+  setVideoAspectRatio: (ratio: VideoTaskParams['aspect_ratio']) => void
   params: TaskParams
   setParams: (p: Partial<TaskParams>) => void
 
   // 任务列表
   tasks: TaskRecord[]
   setTasks: (t: TaskRecord[]) => void
+  visibleTaskIds: string[]
+  setVisibleTaskIds: (ids: string[]) => void
+  taskPage: number
+  setTaskPage: (page: number) => void
+  taskPageSize: number
+  setTaskPageSize: (pageSize: number) => void
+  taskTotal: number
+  setTaskPaginationMeta: (input: { page?: number; pageSize?: number; total?: number }) => void
 
   // 搜索和筛选
   searchQuery: string
   setSearchQuery: (q: string) => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
   setFilterStatus: (status: AppState['filterStatus']) => void
+  filterTaskType: 'all' | 'image' | 'video'
+  setFilterTaskType: (taskType: AppState['filterTaskType']) => void
   filterFavorite: boolean
   setFilterFavorite: (f: boolean) => void
   filterArchived: boolean
@@ -328,7 +402,7 @@ export const useStore = create<AppState>()(
           ...st.settings,
           ...s,
           apiMode:
-            s.apiMode === 'images' || s.apiMode === 'responses'
+            s.apiMode === 'images' || s.apiMode === 'responses' || s.apiMode === 'videos'
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
@@ -471,6 +545,13 @@ export const useStore = create<AppState>()(
       setMaskEditorImageId: (maskEditorImageId) => set({ maskEditorImageId }),
 
       // Params
+      taskMode: 'image',
+      setTaskMode: (taskMode) => set((s) => ({
+        taskMode,
+        ...(taskMode === 'video' ? { maskDraft: null, maskEditorImageId: null } : {}),
+      })),
+      videoAspectRatio: DEFAULT_VIDEO_PARAMS.aspect_ratio,
+      setVideoAspectRatio: (videoAspectRatio) => set({ videoAspectRatio }),
       params: { ...DEFAULT_PARAMS },
       setParams: (p) => set((s) => ({ params: { ...s.params, ...p } })),
 
@@ -487,12 +568,35 @@ export const useStore = create<AppState>()(
 
         return { tasks, loadedTaskImageIds }
       }),
+      visibleTaskIds: [],
+      setVisibleTaskIds: (visibleTaskIds) => set({ visibleTaskIds }),
+      taskPage: 1,
+      setTaskPage: (taskPage) => set({ taskPage: Math.max(1, Math.floor(taskPage) || 1) }),
+      taskPageSize: 50,
+      setTaskPageSize: (pageSize) =>
+        set((state) => {
+          const nextPageSize = Math.max(1, Math.floor(pageSize) || 50)
+          if (nextPageSize === state.taskPageSize) return state
+          const firstItemIndex = Math.max(0, (state.taskPage - 1) * state.taskPageSize)
+          return {
+            taskPageSize: nextPageSize,
+            taskPage: Math.floor(firstItemIndex / nextPageSize) + 1,
+          }
+        }),
+      taskTotal: 0,
+      setTaskPaginationMeta: ({ page, pageSize, total }) => set((state) => ({
+        taskPage: page == null ? state.taskPage : Math.max(1, Math.floor(page) || 1),
+        taskPageSize: pageSize == null ? state.taskPageSize : Math.max(1, Math.floor(pageSize) || 50),
+        taskTotal: total == null ? state.taskTotal : Math.max(0, Math.floor(total) || 0),
+      })),
 
       // Search & Filter
       searchQuery: '',
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       filterStatus: 'all',
       setFilterStatus: (filterStatus) => set({ filterStatus }),
+      filterTaskType: 'all',
+      setFilterTaskType: (filterTaskType) => set({ filterTaskType }),
       filterFavorite: false,
       setFilterFavorite: (filterFavorite) => set({ filterFavorite }),
       filterArchived: false,
@@ -562,6 +666,8 @@ export const useStore = create<AppState>()(
       name: 'gpt-image-playground',
       partialize: (state) => ({
         settings: state.settings,
+        taskMode: state.taskMode,
+        videoAspectRatio: state.videoAspectRatio,
         params: state.params,
         tasks: state.tasks,
         ...(state.settings.persistInputOnRestart
@@ -700,8 +806,7 @@ export async function initStore() {
   }
 
   try {
-    const tasks = await fetchBackendTasks()
-    useStore.getState().setTasks(sortTasksForDisplay(mergeLocalTaskFlags(tasks)))
+    await refreshTasksFromServer({ silent: true })
   } catch (err) {
     useStore.getState().showToast(
       `读取后端任务失败：${err instanceof Error ? err.message : String(err)}`,
@@ -763,7 +868,7 @@ export async function logout() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; usageCodeId?: string | null } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, taskMode, videoAspectRatio, showToast, setConfirmDialog } =
     useStore.getState()
 
   if (!settings.apiKey && !settings.apiKeyConfigured) {
@@ -781,7 +886,7 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
   let maskImageId: string | null = null
   let maskTargetImageId: string | null = null
 
-  if (maskDraft) {
+  if (taskMode === 'image' && maskDraft) {
     try {
       orderedInputImages = orderInputImagesForMask(inputImages, maskDraft.targetImageId)
       const coverage = await validateMaskMatchesImage(maskDraft.maskDataUrl, orderedInputImages[0].dataUrl)
@@ -831,13 +936,17 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
     const result = await createBackendTask({
       prompt: replaceImageMentionsForApi(prompt.trim(), orderedInputImages.length),
       params: normalizedParams,
+      taskType: taskMode,
+      videoParams: taskMode === 'video'
+        ? { ...DEFAULT_VIDEO_PARAMS, aspect_ratio: orderedInputImages.length > 0 ? 'auto' : videoAspectRatio }
+        : undefined,
       inputImageDataUrls: inputDataUrls,
-      maskDataUrl: maskDraft?.maskDataUrl,
+      maskDataUrl: taskMode === 'image' ? maskDraft?.maskDataUrl : undefined,
       providerProfileId: settings.providerProfileId,
       usageCodeId: options.usageCodeId,
     })
     const task = result.task
-    await cacheSubmittedTaskImages(task, orderedInputImages, maskDraft?.maskDataUrl)
+    await cacheSubmittedTaskImages(task, orderedInputImages, taskMode === 'image' ? maskDraft?.maskDataUrl : undefined)
     if (result.auth) {
       useStore.getState().setAuthStatus(result.auth)
     }
@@ -882,9 +991,15 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast } = useStore.getState()
+  const { setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setTaskMode, setVideoAspectRatio } = useStore.getState()
   setPrompt(task.prompt)
-  setParams(task.params)
+  if (task.taskType === 'video') {
+    setTaskMode('video')
+    setVideoAspectRatio((task.params as VideoTaskParams).aspect_ratio ?? DEFAULT_VIDEO_PARAMS.aspect_ratio)
+  } else {
+    setTaskMode('image')
+    setParams(task.params as TaskParams)
+  }
 
   // 恢复输入图片
   const imgs: InputImage[] = []
@@ -945,6 +1060,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
       for (const id of t.inputImageIds || []) deletedImageIds.add(id)
       if (t.maskImageId) deletedImageIds.add(t.maskImageId)
       for (const id of t.outputImages || []) deletedImageIds.add(id)
+      for (const id of t.outputVideos || []) deletedImageIds.add(id)
     }
   }
 
@@ -964,6 +1080,7 @@ export async function removeMultipleTasks(taskIds: string[]) {
     for (const id of t.inputImageIds || []) stillUsed.add(id)
     if (t.maskImageId) stillUsed.add(t.maskImageId)
     for (const id of t.outputImages || []) stillUsed.add(id)
+    for (const id of t.outputVideos || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
 
@@ -972,6 +1089,8 @@ export async function removeMultipleTasks(taskIds: string[]) {
     if (!stillUsed.has(imgId)) {
       await deleteImage(imgId)
       imageCache.delete(imgId)
+      revokeCachedVideoUrl(imgId)
+      thumbnailCache.delete(imgId)
     }
   }
 
@@ -993,6 +1112,7 @@ export async function removeTask(task: TaskRecord) {
     ...(task.inputImageIds || []),
     ...(task.maskImageId ? [task.maskImageId] : []),
     ...(task.outputImages || []),
+    ...(task.outputVideos || []),
   ])
 
   // 从列表移除
@@ -1011,6 +1131,7 @@ export async function removeTask(task: TaskRecord) {
     for (const id of t.inputImageIds || []) stillUsed.add(id)
     if (t.maskImageId) stillUsed.add(t.maskImageId)
     for (const id of t.outputImages || []) stillUsed.add(id)
+    for (const id of t.outputVideos || []) stillUsed.add(id)
   }
   for (const img of inputImages) stillUsed.add(img.id)
 
@@ -1019,6 +1140,8 @@ export async function removeTask(task: TaskRecord) {
     if (!stillUsed.has(imgId)) {
       await deleteImage(imgId)
       imageCache.delete(imgId)
+      revokeCachedVideoUrl(imgId)
+      thumbnailCache.delete(imgId)
     }
   }
 
@@ -1029,6 +1152,10 @@ export async function removeTask(task: TaskRecord) {
 export async function clearAllData(options: { silent?: boolean } = {}) {
   await clearImages()
   imageCache.clear()
+  thumbnailCache.clear()
+  for (const videoId of Array.from(videoUrlCache.keys())) {
+    revokeCachedVideoUrl(videoId)
+  }
   closeAllTaskEventSources()
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
   setTasks([])
@@ -1044,6 +1171,9 @@ export async function clearAllData(options: { silent?: boolean } = {}) {
 
 export async function clearLocalTaskCache(options: { silent?: boolean } = {}) {
   closeAllTaskEventSources()
+  for (const videoId of Array.from(videoUrlCache.keys())) {
+    revokeCachedVideoUrl(videoId)
+  }
   const {
     setTasks,
     clearSelection,
@@ -1115,6 +1245,16 @@ async function loadTaskImageDataUrl(task: TaskRecord, imageId: string): Promise<
   return cacheTaskImageForEditing(imageId, remoteUrl)
 }
 
+async function loadTaskVideoUrl(task: TaskRecord, videoId: string): Promise<string | undefined> {
+  const cached = await ensureVideoCached(videoId)
+  if (cached) return cached
+
+  const remoteUrl = task.mediaUrlsById?.[videoId] || task.imageUrlsById?.[videoId]
+  if (!remoteUrl) return undefined
+
+  return cacheTaskVideoForPlayback(videoId, remoteUrl)
+}
+
 async function cacheSubmittedTaskImages(
   task: TaskRecord,
   inputImages: InputImage[],
@@ -1157,6 +1297,15 @@ export async function ensureTaskImageAvailable(imageId: string): Promise<string 
   )
   if (!task) return undefined
   return loadTaskImageDataUrl(task, imageId)
+}
+
+export async function ensureTaskVideoAvailable(videoId: string): Promise<string | undefined> {
+  const cached = await ensureVideoCached(videoId)
+  if (cached) return cached
+
+  const task = useStore.getState().tasks.find((item) => item.outputVideos?.includes(videoId))
+  if (!task) return undefined
+  return loadTaskVideoUrl(task, videoId)
 }
 
 export async function cacheTaskImageForEditing(
@@ -1202,6 +1351,56 @@ export async function cacheTaskImageForEditing(
   return dataUrl
 }
 
+export async function cacheTaskVideoForPlayback(
+  videoId: string,
+  remoteUrl: string,
+): Promise<string | undefined> {
+  const cached = await ensureVideoCached(videoId)
+  if (cached) return cached
+
+  const loading = videoLoadPromises.get(videoId)
+  if (loading) return loading
+
+  const loadPromise = (async () => {
+    const response = await fetch(remoteUrl)
+    const blob = await response.blob()
+    await putCachedVideoBlob(videoId, blob)
+
+    const objectUrl = URL.createObjectURL(blob)
+    cacheVideoUrl(videoId, objectUrl)
+
+    const thumbnail = await getStoredFreshImageThumbnail(videoId)
+    if (!thumbnail?.thumbnailDataUrl) {
+      try {
+        const generatedThumbnail = await createAndStoreVideoThumbnail(videoId, blob)
+        cacheThumbnail(videoId, {
+          dataUrl: generatedThumbnail.thumbnailDataUrl,
+          width: generatedThumbnail.width,
+          height: generatedThumbnail.height,
+          thumbnailVersion: generatedThumbnail.thumbnailVersion,
+        })
+        notifyImageThumbnail(videoId, {
+          dataUrl: generatedThumbnail.thumbnailDataUrl,
+          width: generatedThumbnail.width,
+          height: generatedThumbnail.height,
+        })
+      } catch {
+        /* 视频首帧生成失败时保留占位，不影响播放 */
+      }
+    }
+
+    return objectUrl
+  })()
+
+  videoLoadPromises.set(videoId, loadPromise)
+
+  try {
+    return await loadPromise
+  } finally {
+    videoLoadPromises.delete(videoId)
+  }
+}
+
 function upsertTaskFromServer(task: TaskRecord) {
   const tasks = useStore.getState().tasks
   const nextTasks = sortTasksForDisplay([
@@ -1244,10 +1443,25 @@ function removeTaskFromStore(taskId: string) {
   }
 }
 
-async function refreshTasksFromServer(options: { silent?: boolean } = {}) {
+export async function refreshTasksFromServer(options: { silent?: boolean } = {}) {
   try {
-    const tasksFromServer = await fetchBackendTasks()
-    const mergedTasks = mergeLocalTaskFlags(tasksFromServer)
+    const state = useStore.getState()
+    const taskPageResult = await fetchBackendTaskPage({
+      page: state.taskPage,
+      pageSize: state.taskPageSize,
+      query: state.searchQuery,
+      status: state.filterStatus,
+      taskType: state.filterTaskType,
+      favorite: state.filterFavorite,
+      archived: state.filterArchived,
+      showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+    })
+    const mergedTasks = mergeLocalTaskFlags(taskPageResult.items)
+    state.setTaskPaginationMeta({
+      page: taskPageResult.page,
+      pageSize: taskPageResult.pageSize,
+      total: taskPageResult.total,
+    })
     useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
     syncTaskEventSources(mergedTasks)
   } catch (err) {
@@ -1297,25 +1511,12 @@ function setupGlobalTaskListStream() {
 
   const source = new EventSource('/api/tasks/events')
   source.addEventListener('snapshot', (event) => {
-    const payload = JSON.parse((event as MessageEvent<string>).data) as { tasks?: TaskRecord[] }
-    if (!payload.tasks) return
-    const mergedTasks = mergeLocalTaskFlags(payload.tasks)
-    useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
-    syncTaskEventSources(mergedTasks)
+    void event
+    void refreshTasksFromServer({ silent: true })
   })
   source.addEventListener('task', (event) => {
-    const payload = JSON.parse((event as MessageEvent<string>).data) as
-      | { type: 'delete'; taskId: string }
-      | { type: 'upsert'; task: TaskRecord }
-
-    if (payload.type === 'delete') {
-      closeTaskEventSource(payload.taskId)
-      removeTaskFromStore(payload.taskId)
-      return
-    }
-
-    upsertTaskFromServer(payload.task)
-    syncTaskEventSources(useStore.getState().tasks)
+    void event
+    void refreshTasksFromServer({ silent: true })
   })
   source.onerror = () => {
     closeTaskListEventSource()

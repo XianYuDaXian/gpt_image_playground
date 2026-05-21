@@ -235,7 +235,26 @@ function buildGrokResolutionSize(aspectRatio: GrokAspectRatio, resolution: GrokR
       }
 }
 
-function mapSizeToGrokParams(size: string): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
+function pickGrokResolution(
+  parsedSize: { width: number; height: number },
+  aspectRatio: GrokAspectRatio,
+  xaiImage2kEnabled: boolean,
+): GrokResolution {
+  if (!xaiImage2kEnabled) return '1k'
+  const size1k = buildGrokResolutionSize(aspectRatio, '1k')
+  const size2k = buildGrokResolutionSize(aspectRatio, '2k')
+  if (!size1k || !size2k) return '1k'
+
+  const requestedLongEdge = Math.max(parsedSize.width, parsedSize.height)
+  const longEdge1k = Math.max(size1k.width, size1k.height)
+  const longEdge2k = Math.max(size2k.width, size2k.height)
+  return Math.abs(requestedLongEdge - longEdge2k) < Math.abs(requestedLongEdge - longEdge1k) ? '2k' : '1k'
+}
+
+function mapSizeToGrokParams(
+  size: string,
+  xaiImage2kEnabled: boolean,
+): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
   if (!size.trim() || size.trim() === 'auto') {
     return { aspectRatio: 'auto', resolution: '1k' }
   }
@@ -259,7 +278,7 @@ function mapSizeToGrokParams(size: string): { aspectRatio: GrokAspectRatio; reso
 
   return {
     aspectRatio,
-    resolution: '1k',
+    resolution: pickGrokResolution(parsed, aspectRatio, xaiImage2kEnabled),
   }
 }
 
@@ -334,7 +353,7 @@ async function callImagesApi(
 ): Promise<GeneratedImageResult[]> {
   const prompt = buildPrompt(payload.prompt, Boolean(payload.provider.codexCli))
   const shouldUseConcurrentSingles = payload.params.n > 1
-  const grokSize = mapSizeToGrokParams(payload.params.size)
+  const grokSize = mapSizeToGrokParams(payload.params.size, Boolean(payload.provider.xaiImage2kEnabled))
 
   const runSingleEdit = async () => {
     if (payload.provider.grokApiCompat) {

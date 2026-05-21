@@ -1,11 +1,12 @@
 import type { AuthRole } from './backendAuth'
 import { formatImageRatio } from './size'
-import type { TaskRecord } from '../types'
+import type { TaskParams, TaskRecord } from '../types'
 
 export function matchesTaskFilters(
   task: TaskRecord,
   options: {
     filterStatus: 'all' | 'running' | 'done' | 'error'
+    filterTaskType: 'all' | 'image' | 'video'
     filterFavorite: boolean
     filterArchived: boolean
     role: AuthRole | null | undefined
@@ -17,6 +18,7 @@ export function matchesTaskFilters(
   if (options.filterFavorite && !task.isFavorite) return false
   if (options.filterArchived ? !task.isArchived : task.isArchived) return false
   if (options.filterStatus !== 'all' && task.status !== options.filterStatus) return false
+  if (options.filterTaskType !== 'all' && (task.taskType ?? 'image') !== options.filterTaskType) return false
   if (
     options.role === 'admin' &&
     !options.showUsageCodeTasksForAdmin &&
@@ -47,10 +49,13 @@ export function matchesTaskSearch(task: TaskRecord, query: string, role: AuthRol
   const q = normalizeSearchText(query.trim())
   if (!q) return true
 
-  const requestedSizeMatch = /^(\d+)x(\d+)$/i.exec(task.params.size.replace(/×/g, 'x'))
-  const requestedSizeText = requestedSizeMatch
-    ? buildSizeSearchText(Number(requestedSizeMatch[1]), Number(requestedSizeMatch[2]))
-    : task.params.size
+  const imageParams = task.taskType === 'video' ? null : task.params as TaskParams
+  const requestedSizeMatch = imageParams ? /^(\d+)x(\d+)$/i.exec(imageParams.size.replace(/×/g, 'x')) : null
+  const requestedSizeText = imageParams
+    ? requestedSizeMatch
+      ? buildSizeSearchText(Number(requestedSizeMatch[1]), Number(requestedSizeMatch[2]))
+      : imageParams.size
+    : ''
 
   const imageSearchText = task.outputImages
     .map((imageId) => {

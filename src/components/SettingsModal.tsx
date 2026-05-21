@@ -44,6 +44,7 @@ function createEmptyProfile(): BackendProviderProfile {
     timeoutSeconds: DEFAULT_SETTINGS.timeout,
     codexCli: false,
     grokApiCompat: false,
+    xaiImage2kEnabled: false,
     responseFormatB64Json: false,
     isDefault: false,
   }
@@ -106,6 +107,7 @@ export default function SettingsModal() {
   const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
   const [newCodeName, setNewCodeName] = useState('新使用码')
   const [newCodeQuota, setNewCodeQuota] = useState('')
+  const [newCodeVideoQuota, setNewCodeVideoQuota] = useState('')
   const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>(null)
   const [newCodeProviderImageQuotas, setNewCodeProviderImageQuotas] = useState<Record<string, string>>({})
   const [latestPlainCode, setLatestPlainCode] = useState('')
@@ -122,7 +124,7 @@ export default function SettingsModal() {
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
-    apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+    apiMode === 'videos' ? 'grok-imagine-video' : apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
 
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
@@ -143,7 +145,7 @@ export default function SettingsModal() {
     const entries = Object.entries(value)
       .map(([providerProfileId, rawValue]) => {
         const quota = typeof rawValue === 'number' ? rawValue : Number(rawValue)
-        if (!Number.isInteger(quota) || quota <= 0) return null
+        if (!Number.isInteger(quota) || quota < 0) return null
         return [providerProfileId, quota] as const
       })
       .filter((item): item is readonly [string, number] => Boolean(item))
@@ -167,6 +169,20 @@ export default function SettingsModal() {
     const normalized = normalizeProviderImageQuotaPatch(value)
     if (!normalized) return 0
     return Object.values(normalized).reduce((sum, quota) => sum + quota, 0)
+  }
+
+  const formatQuotaValue = (value: number | null | undefined) => {
+    if (value == null) return '不限'
+    if (value === 0) return '禁用'
+    return String(value)
+  }
+
+  const getAllowedProfileLabels = (allowedProviderProfileIds: string[] | null | undefined) => {
+    if (!allowedProviderProfileIds?.length) return ['全部 API']
+    const profileNames = allowedProviderProfileIds
+      .map((id) => profiles.find((profile) => profile.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+    return profileNames.length ? profileNames : ['未匹配 API']
   }
 
   const syncProviderImageQuotasWithTotal = (
@@ -216,7 +232,7 @@ export default function SettingsModal() {
       }
     }
 
-    const filteredEntries = Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota > 0)
+    const filteredEntries = Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota >= 0)
     const nextNormalized = filteredEntries.length ? Object.fromEntries(filteredEntries) : null
     return {
       providerImageQuotas: nextNormalized,
@@ -248,6 +264,7 @@ export default function SettingsModal() {
             timeout: runtimeSettings.timeoutSeconds,
             codexCli: runtimeSettings.codexCli,
             grokApiCompat: runtimeSettings.grokApiCompat,
+            xaiImage2kEnabled: runtimeSettings.xaiImage2kEnabled,
             responseFormatB64Json: runtimeSettings.responseFormatB64Json,
             clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
             persistInputOnRestart: runtimeSettings.persistInputOnRestart,
@@ -273,6 +290,7 @@ export default function SettingsModal() {
           timeoutSeconds: runtimeSettings.timeoutSeconds,
           codexCli: runtimeSettings.codexCli,
           grokApiCompat: runtimeSettings.grokApiCompat,
+          xaiImage2kEnabled: runtimeSettings.xaiImage2kEnabled,
           responseFormatB64Json: runtimeSettings.responseFormatB64Json,
           isDefault: true,
         }]
@@ -335,6 +353,7 @@ export default function SettingsModal() {
         timeout: runtimeSettings.timeoutSeconds,
         codexCli: runtimeSettings.codexCli,
         grokApiCompat: runtimeSettings.grokApiCompat,
+        xaiImage2kEnabled: runtimeSettings.xaiImage2kEnabled,
         responseFormatB64Json: runtimeSettings.responseFormatB64Json,
         clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
         persistInputOnRestart: runtimeSettings.persistInputOnRestart,
@@ -361,6 +380,7 @@ export default function SettingsModal() {
             timeout: selectedOption.timeoutSeconds,
             codexCli: selectedOption.codexCli,
             grokApiCompat: selectedOption.grokApiCompat,
+            xaiImage2kEnabled: selectedOption.xaiImage2kEnabled,
             responseFormatB64Json: selectedOption.responseFormatB64Json,
           }
         : {
@@ -377,7 +397,11 @@ export default function SettingsModal() {
       baseUrl: normalizeBaseUrl(profileDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
       model: profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
       timeoutSeconds: Number(profileDraft.timeoutSeconds) || DEFAULT_SETTINGS.timeout,
-      apiMode: profileDraft.apiMode === 'responses' ? 'responses' : 'images',
+      apiMode: profileDraft.apiMode === 'videos' ? 'videos' : profileDraft.apiMode === 'responses' ? 'responses' : 'images',
+      codexCli: profileDraft.apiMode === 'videos' ? false : profileDraft.codexCli,
+      grokApiCompat: profileDraft.apiMode === 'videos' ? false : profileDraft.grokApiCompat,
+      xaiImage2kEnabled: profileDraft.apiMode === 'images' && profileDraft.grokApiCompat ? profileDraft.xaiImage2kEnabled : false,
+      responseFormatB64Json: profileDraft.apiMode === 'videos' ? false : profileDraft.responseFormatB64Json,
       isDefault: true,
     }
 
@@ -413,6 +437,7 @@ export default function SettingsModal() {
         timeout: savedProfile.timeoutSeconds,
         codexCli: savedProfile.codexCli,
         grokApiCompat: savedProfile.grokApiCompat,
+        xaiImage2kEnabled: savedProfile.xaiImage2kEnabled,
         responseFormatB64Json: savedProfile.responseFormatB64Json,
         clearInputAfterSubmit: savedPreferences.clearInputAfterSubmit,
         persistInputOnRestart: savedPreferences.persistInputOnRestart,
@@ -573,6 +598,7 @@ export default function SettingsModal() {
 
   const handleCreateUsageCode = async () => {
     const rawQuota = newCodeQuota.trim() ? Number(newCodeQuota) : null
+    const rawVideoQuota = newCodeVideoQuota.trim() ? Number(newCodeVideoQuota) : null
     const createQuotaEditorProfiles = getQuotaEditorProfiles(newCodeAllowedProviderProfileIds)
     const createProviderIds = createQuotaEditorProfiles.map((profile) => profile.id)
     const syncedCreateQuotas = syncProviderImageQuotasWithTotal(
@@ -582,13 +608,17 @@ export default function SettingsModal() {
       createProviderIds[0] ?? null,
     )
     const quota = syncedCreateQuotas.imageQuota
-    if (quota != null && (!Number.isInteger(quota) || quota <= 0)) {
-      useStore.getState().showToast('图片额度需要是正整数', 'error')
+    if (quota != null && (!Number.isInteger(quota) || quota < 0)) {
+      useStore.getState().showToast('图片额度需要是非负整数', 'error')
+      return
+    }
+    if (rawVideoQuota != null && (!Number.isInteger(rawVideoQuota) || rawVideoQuota < 0)) {
+      useStore.getState().showToast('视频额度需要是非负整数', 'error')
       return
     }
     const providerImageQuotas = syncedCreateQuotas.providerImageQuotas
-    if (providerImageQuotas && Object.values(providerImageQuotas).some((item) => !Number.isInteger(item) || item <= 0)) {
-      useStore.getState().showToast('端点图片额度需要是正整数', 'error')
+    if (providerImageQuotas && Object.values(providerImageQuotas).some((item) => !Number.isInteger(item) || item < 0)) {
+      useStore.getState().showToast('端点图片额度需要是非负整数', 'error')
       return
     }
 
@@ -596,6 +626,7 @@ export default function SettingsModal() {
       const result = await createBackendUsageCode({
         name: newCodeName.trim() || '未命名使用码',
         imageQuota: quota,
+        videoQuota: rawVideoQuota,
         allowedProviderProfileIds: newCodeAllowedProviderProfileIds,
         providerImageQuotas,
       })
@@ -604,6 +635,7 @@ export default function SettingsModal() {
       setNewCodeAllowedProviderProfileIds(null)
       setNewCodeProviderImageQuotas({})
       setNewCodeQuota('')
+      setNewCodeVideoQuota('')
       useStore.getState().showToast('使用码已生成，明文只显示一次', 'success')
     } catch (err) {
       useStore.getState().showToast(
@@ -619,8 +651,10 @@ export default function SettingsModal() {
       name?: string
       isEnabled?: boolean
       imageQuota?: number | null
+      videoQuota?: number | null
       allowedProviderProfileIds?: string[] | null
       providerImageQuotas?: Record<string, number> | null
+      providerVideoQuotas?: Record<string, number> | null
     },
   ) => {
     try {
@@ -915,7 +949,7 @@ export default function SettingsModal() {
                   }}
                   options={[
                     ...profiles.map((profile) => ({
-                      label: `${profile.isDefault ? '默认 · ' : ''}${profile.name}`,
+                      label: `${profile.isDefault ? '默认 · ' : ''}${profile.apiMode === 'videos' ? '视频 · ' : '图片 · '}${profile.name}`,
                       value: profile.id,
                     })),
                     { label: '新增 API 配置', value: '__new__' },
@@ -987,7 +1021,9 @@ export default function SettingsModal() {
                   onChange={(value) => {
                     const apiMode = value as AppSettings['apiMode']
                     const model =
-                      profileDraft.model === DEFAULT_IMAGES_MODEL || profileDraft.model === DEFAULT_RESPONSES_MODEL
+                      profileDraft.model === DEFAULT_IMAGES_MODEL
+                      || profileDraft.model === DEFAULT_RESPONSES_MODEL
+                      || profileDraft.model === 'grok-imagine-video'
                         ? getDefaultModelForMode(apiMode)
                         : profileDraft.model
                     updateProfileDraft({ apiMode, model })
@@ -995,6 +1031,7 @@ export default function SettingsModal() {
                   options={[
                     { label: 'Images API (/v1/images)', value: 'images' },
                     { label: 'Responses API (/v1/responses)', value: 'responses' },
+                    { label: 'Videos API (/v1/videos)', value: 'videos' },
                   ]}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
@@ -1023,30 +1060,42 @@ export default function SettingsModal() {
               </label>
 
               <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <PreferenceRow
-                  title="Grok API 兼容"
-                  description="启用后改用 xAI Images 接口的字段。尺寸只用于推导比例，分辨率固定为 1K。遮罩编辑不会提交到该接口。"
-                  checked={profileDraft.grokApiCompat}
-                  onChange={(checked) => updateProfileDraft({
-                    grokApiCompat: checked,
-                    ...(checked ? { codexCli: false } : {}),
-                  })}
-                />
-                <PreferenceRow
-                  title="Codex CLI 模式"
-                  description="禁用该接口不支持的质量参数，并使用兼容的多图提交方式。"
-                  checked={profileDraft.codexCli}
-                  onChange={(checked) => updateProfileDraft({
-                    codexCli: checked,
-                    ...(checked ? { grokApiCompat: false } : {}),
-                  })}
-                />
-                <PreferenceRow
-                  title="返回 Base64 图片数据"
-                  description={<>开启后在请求体中加入 <code className="rounded bg-gray-200 px-1 py-0.5 font-mono dark:bg-white/[0.08]">response_format: b64_json</code>，尝试让接口直接返回 Base64 图片。</>}
-                  checked={profileDraft.responseFormatB64Json}
-                  onChange={(checked) => updateProfileDraft({ responseFormatB64Json: checked })}
-                />
+                {profileDraft.apiMode !== 'videos' && (
+                  <>
+                    <PreferenceRow
+                      title="Grok API 兼容"
+                      description="启用后改用 xAI Images 接口的字段。尺寸会换算成 xAI 支持的比例与分辨率。遮罩编辑不会提交到该接口。"
+                      checked={profileDraft.grokApiCompat}
+                      onChange={(checked) => updateProfileDraft({
+                        grokApiCompat: checked,
+                        ...(checked ? { codexCli: false } : { xaiImage2kEnabled: false }),
+                      })}
+                    />
+                    {profileDraft.grokApiCompat && (
+                      <PreferenceRow
+                        title="允许 xAI 2K 图片"
+                        description="开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。"
+                        checked={profileDraft.xaiImage2kEnabled}
+                        onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
+                      />
+                    )}
+                    <PreferenceRow
+                      title="Codex CLI 模式"
+                      description="禁用该接口不支持的质量参数，并使用兼容的多图提交方式。"
+                      checked={profileDraft.codexCli}
+                      onChange={(checked) => updateProfileDraft({
+                        codexCli: checked,
+                        ...(checked ? { grokApiCompat: false, xaiImage2kEnabled: false } : {}),
+                      })}
+                    />
+                    <PreferenceRow
+                      title="返回 Base64 图片数据"
+                      description={<>开启后在请求体中加入 <code className="rounded bg-gray-200 px-1 py-0.5 font-mono dark:bg-white/[0.08]">response_format: b64_json</code>，尝试让接口直接返回 Base64 图片。</>}
+                      checked={profileDraft.responseFormatB64Json}
+                      onChange={(checked) => updateProfileDraft({ responseFormatB64Json: checked })}
+                    />
+                  </>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2 pt-1">
@@ -1098,7 +1147,7 @@ export default function SettingsModal() {
               </div>
 
               <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <div className="grid gap-2 sm:grid-cols-[1fr_7rem_5rem]">
+                <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_7rem_7rem_5rem]">
                   <input
                     value={newCodeName}
                     onChange={(event) => setNewCodeName(event.target.value)}
@@ -1110,7 +1159,15 @@ export default function SettingsModal() {
                     onChange={(event) => setNewCodeQuota(event.target.value)}
                     placeholder="图片额度"
                     type="number"
-                    min={1}
+                    min={0}
+                    className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                  />
+                  <input
+                    value={newCodeVideoQuota}
+                    onChange={(event) => setNewCodeVideoQuota(event.target.value)}
+                    placeholder="视频额度"
+                    type="number"
+                    min={0}
                     className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                   />
                   <button
@@ -1166,7 +1223,12 @@ export default function SettingsModal() {
                       </div>
                     </div>
                     <div>
-                      <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">端点图片额度</span>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">端点图片额度</span>
+                        <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                          总额度：{newCodeQuota.trim() === '' ? '不限' : Number(newCodeQuota) === 0 ? '禁用' : newCodeQuota}
+                        </span>
+                      </div>
                       <div className="space-y-2">
                         {getQuotaEditorProfiles(newCodeAllowedProviderProfileIds).map((profile) => (
                           <label key={profile.id} className="flex items-center gap-3">
@@ -1186,15 +1248,15 @@ export default function SettingsModal() {
                                 setNewCodeQuota(normalized ? String(sumProviderImageQuotas(normalized)) : '')
                               }}
                               type="number"
-                              min={1}
-                              placeholder="留空表示不限"
+                              min={0}
+                              placeholder={newCodeProviderImageQuotas[profile.id] == null ? '继承总额度' : '0 表示禁用'}
                               className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
                         ))}
                       </div>
                       <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                        留空表示该端点只受总图片额度限制。
+                        留空表示该端点继承总图片额度。填 0 表示禁用该端点图片生成。
                       </p>
                     </div>
                   </div>
@@ -1240,11 +1302,22 @@ export default function SettingsModal() {
                                 className="w-full rounded-lg bg-transparent pr-2 text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
                               />
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 剩余 {code.remainingImageCredits == null ? '不限' : code.remainingImageCredits}
+                                任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 图片剩余 {formatQuotaValue(code.remainingImageCredits)} · 视频剩余 {formatQuotaValue(code.remainingVideoCredits)}
                               </p>
                               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                                 最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
                               </p>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {getAllowedProfileLabels(code.allowedProviderProfileIds).map((label) => (
+                                  <span
+                                    key={label}
+                                    className="max-w-full truncate rounded-lg bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-600 dark:bg-blue-500/10 dark:text-blue-300"
+                                    title={label}
+                                  >
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                             <Switch
                               checked={code.isEnabled}
@@ -1319,22 +1392,69 @@ export default function SettingsModal() {
                                   </p>
                                 </div>
                               )}
+                              <div className="mt-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <span className="block text-xs text-gray-500 dark:text-gray-400">图片总额度</span>
+                                  <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                    当前：{formatQuotaValue(code.remainingImageCredits)}
+                                  </span>
+                                </div>
+                                <input
+                                  value={code.imageQuota == null ? '' : String(code.imageQuota)}
+                                  onChange={(event) => {
+                                    const value = event.target.value.trim()
+                                    const nextImageQuota = value === '' ? null : Math.max(0, Number(value) || 0)
+                                    setUsageCodes((prev) => prev.map((item) => item.id === code.id ? {
+                                      ...item,
+                                      imageQuota: nextImageQuota,
+                                      remainingImageCredits: nextImageQuota == null
+                                        ? null
+                                        : Math.max(0, nextImageQuota - item.usedImageCredits),
+                                    } : item))
+                                  }}
+                                  onBlur={(event) => {
+                                    const value = event.target.value.trim()
+                                    if (value === '') {
+                                      void handleUpdateUsageCode(code.id, { imageQuota: null })
+                                      return
+                                    }
+                                    const nextImageQuota = Number(value)
+                                    if (!Number.isInteger(nextImageQuota) || nextImageQuota < 0) {
+                                      useStore.getState().showToast('图片额度需要是非负整数', 'error')
+                                      return
+                                    }
+                                    void handleUpdateUsageCode(code.id, { imageQuota: nextImageQuota })
+                                  }}
+                                  type="number"
+                                  min={0}
+                                  placeholder="留空表示不限，0 表示禁用"
+                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                />
+                              </div>
                               {quotaEditorProfiles.length > 0 && (
                                 <div className="mt-3">
-                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">当前端点剩余额度</span>
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <span className="block text-xs text-gray-500 dark:text-gray-400">端点图片额度</span>
+                                    <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                      总剩余：{formatQuotaValue(code.remainingImageCredits)}
+                                    </span>
+                                  </div>
                                   <div className="space-y-2">
                                     {quotaEditorProfiles.map((profile) => {
+                                      const hasProviderLimit = code.providerImageQuotas?.[profile.id] != null
                                       const providerQuotaValue = usageCodeProviderRemainingDrafts[code.id]?.[profile.id]
-                                        ?? (code.providerRemainingImageCredits?.[profile.id] == null
+                                        ?? (!hasProviderLimit || code.providerRemainingImageCredits?.[profile.id] == null
                                           ? ''
                                           : String(code.providerRemainingImageCredits[profile.id]))
-                                      const providerRemaining = code.providerRemainingImageCredits?.[profile.id]
+                                      const providerRemaining = hasProviderLimit
+                                        ? code.providerRemainingImageCredits?.[profile.id] ?? null
+                                        : null
                                       return (
                                         <label key={profile.id} className="block">
                                           <div className="mb-1 flex items-center justify-between gap-3">
                                             <span className="truncate text-xs text-gray-500 dark:text-gray-400">{profile.name}</span>
                                             <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-                                              {providerRemaining == null ? '不限' : `剩余 ${providerRemaining}`}
+                                              {hasProviderLimit ? `单独限制：${formatQuotaValue(providerRemaining)}` : `继承总额度：${formatQuotaValue(code.remainingImageCredits)}`}
                                             </span>
                                           </div>
                                           <input
@@ -1350,22 +1470,61 @@ export default function SettingsModal() {
                                             type="number"
                                             min={0}
                                             className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
-                                            placeholder="留空表示不限"
+                                            placeholder="留空继承总额度，0 表示禁用"
                                           />
                                         </label>
                                       )
                                     })}
                                   </div>
                                   <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                                    这里显示的是当前端点剩余量。调整后会自动同步总剩余。
+                                    填写端点额度后，该 API 使用自己的剩余量。留空时，该 API 共享总图片额度。
                                   </p>
                                 </div>
                               )}
-                              {code.quotaEvents.length > 0 && (
+                              <div className="mt-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <span className="block text-xs text-gray-500 dark:text-gray-400">视频总额度</span>
+                                  <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                    当前：{formatQuotaValue(code.remainingVideoCredits)}
+                                  </span>
+                                </div>
+                                <input
+                                  value={code.videoQuota == null ? '' : String(code.videoQuota)}
+                                  onChange={(event) => {
+                                    const value = event.target.value.trim()
+                                    const nextVideoQuota = value === '' ? null : Math.max(0, Number(value) || 0)
+                                    setUsageCodes((prev) => prev.map((item) => item.id === code.id ? {
+                                      ...item,
+                                      videoQuota: nextVideoQuota,
+                                      remainingVideoCredits: nextVideoQuota == null
+                                        ? null
+                                        : Math.max(0, nextVideoQuota - item.usedVideoCredits),
+                                    } : item))
+                                  }}
+                                  onBlur={(event) => {
+                                    const value = event.target.value.trim()
+                                    if (value === '') {
+                                      void handleUpdateUsageCode(code.id, { videoQuota: null })
+                                      return
+                                    }
+                                    const nextVideoQuota = Number(value)
+                                  if (!Number.isInteger(nextVideoQuota) || nextVideoQuota < 0) {
+                                      useStore.getState().showToast('视频额度需要是非负整数', 'error')
+                                      return
+                                    }
+                                    void handleUpdateUsageCode(code.id, { videoQuota: nextVideoQuota })
+                                  }}
+                                  type="number"
+                                  min={0}
+                                  placeholder="留空表示不限，0 表示禁用"
+                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                />
+                              </div>
+                              {code.activityEvents.length > 0 && (
                                 <div className="mt-4">
-                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">额度记录</span>
+                                  <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">行为记录</span>
                                   <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200/70 bg-white/40 p-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
-                                    {code.quotaEvents.map((event) => (
+                                    {code.activityEvents.map((event) => (
                                       <div key={event.id} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
                                         <div className="text-gray-800 dark:text-gray-100">{event.label}</div>
                                         <div className="mt-1 text-gray-400 dark:text-gray-500">

@@ -66,7 +66,8 @@ export function ActualValueBadge({ value, className = '', variant = 'highlight' 
 }
 
 export function getParamDisplay(task: TaskRecord, paramKey: ParamKey, actualParams = task.actualParams) {
-  const requestedValue = task.params[paramKey]
+  const params = task.params as TaskParams
+  const requestedValue = params[paramKey]
   const actualValue = paramKey === 'n' && task.outputImages?.length > 0
     ? task.outputImages.length
     : actualParams?.[paramKey]

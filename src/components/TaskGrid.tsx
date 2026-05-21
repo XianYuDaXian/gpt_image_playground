@@ -1,21 +1,92 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
-import { matchesTaskFilters } from '../lib/taskSearch'
+import { useStore, reuseConfig, editOutputs, removeTask, refreshTasksFromServer } from '../store'
 import TaskCard from './TaskCard'
+import Select from './Select'
+
+function getPaginationLayout() {
+  if (typeof window === 'undefined') {
+    return {
+      pageSize: 50,
+      pageOptionCount: 7,
+      compact: false,
+    }
+  }
+
+  const width = window.innerWidth
+  const dpi = window.devicePixelRatio || 1
+  const isMobile = width < 640
+
+  if (isMobile) {
+    return {
+      pageSize: dpi >= 3 ? 24 : 30,
+      pageOptionCount: 5,
+      compact: true,
+    }
+  }
+
+  if (width >= 1536 && dpi >= 2) {
+    return {
+      pageSize: 72,
+      pageOptionCount: 9,
+      compact: false,
+    }
+  }
+
+  if (width >= 1280 || dpi >= 2) {
+    return {
+      pageSize: 60,
+      pageOptionCount: 9,
+      compact: false,
+    }
+  }
+
+  return {
+    pageSize: 50,
+    pageOptionCount: 7,
+    compact: false,
+  }
+}
+
+function buildPageOptions(totalPages: number, currentPage: number, visibleCount: number) {
+  const pages = new Set<number>()
+  const sideCount = Math.max(1, Math.floor(visibleCount / 2))
+  const start = Math.max(1, currentPage - sideCount)
+  const end = Math.min(totalPages, currentPage + sideCount)
+
+  pages.add(1)
+  pages.add(totalPages)
+
+  for (let page = start; page <= end; page += 1) {
+    pages.add(page)
+  }
+
+  return Array.from(pages)
+    .sort((a, b) => a - b)
+    .map((page) => ({
+      label: `第 ${page} 页`,
+      value: page,
+    }))
+}
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
+  const filterTaskType = useStore((s) => s.filterTaskType)
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
   const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
-  const authStatus = useStore((s) => s.authStatus)
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const selectedTaskIds = useStore((s) => s.selectedTaskIds)
   const setSelectedTaskIds = useStore((s) => s.setSelectedTaskIds)
   const clearSelection = useStore((s) => s.clearSelection)
+  const setVisibleTaskIds = useStore((s) => s.setVisibleTaskIds)
+  const taskPage = useStore((s) => s.taskPage)
+  const setTaskPage = useStore((s) => s.setTaskPage)
+  const taskPageSize = useStore((s) => s.taskPageSize)
+  const setTaskPageSize = useStore((s) => s.setTaskPageSize)
+  const taskTotal = useStore((s) => s.taskTotal)
   const hasOverlayOpen = useStore((s) =>
     Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
   )
@@ -23,6 +94,8 @@ export default function TaskGrid() {
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const [selectionBox, setSelectionBox] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null)
+  const [pageInput, setPageInput] = useState('1')
+  const [paginationLayout, setPaginationLayout] = useState(() => getPaginationLayout())
   const isDragging = useRef(false)
   const dragStart = useRef<{ x: number; y: number } | null>(null)
   const hasDragged = useRef(false)
@@ -32,21 +105,62 @@ export default function TaskGrid() {
   const initialSelection = useRef<string[]>([])
   const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-  const filteredTasks = useMemo(() => {
-    const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
-    return sorted.filter((t) =>
-      matchesTaskFilters(t, {
-        filterStatus,
-        filterFavorite,
-        filterArchived,
-        role: authStatus?.role,
-        showUsageCodeTasksForAdmin,
-        query: q,
-      }),
-    )
-  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
-  const shouldDeferImageLoading = filteredTasks.filter((task) => task.outputImages.length > 0).length > 20
+  const totalPages = Math.max(1, Math.ceil(taskTotal / taskPageSize))
+  const safeCurrentPage = Math.min(taskPage, totalPages)
+  const shouldDeferImageLoading = tasks.filter((task) => task.outputImages.length > 0).length > 20
+  const pageOptions = useMemo(
+    () => buildPageOptions(totalPages, safeCurrentPage, paginationLayout.pageOptionCount),
+    [paginationLayout.pageOptionCount, safeCurrentPage, totalPages],
+  )
+
+  useEffect(() => {
+    setPageInput(String(safeCurrentPage))
+  }, [safeCurrentPage])
+
+  useEffect(() => {
+    setTaskPage(1)
+  }, [searchQuery, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin, setTaskPage])
+
+  useEffect(() => {
+    if (taskPage > totalPages) {
+      setTaskPage(totalPages)
+    }
+  }, [taskPage, totalPages, setTaskPage])
+
+  useEffect(() => {
+    const applyLayout = () => {
+      setPaginationLayout((prev) => {
+        const next = getPaginationLayout()
+        if (
+          prev.pageSize === next.pageSize &&
+          prev.pageOptionCount === next.pageOptionCount &&
+          prev.compact === next.compact
+        ) {
+          return prev
+        }
+        return next
+      })
+    }
+
+    applyLayout()
+    window.addEventListener('resize', applyLayout)
+    return () => window.removeEventListener('resize', applyLayout)
+  }, [])
+
+  useEffect(() => {
+    if (taskPageSize !== paginationLayout.pageSize) {
+      setTaskPageSize(paginationLayout.pageSize)
+    }
+  }, [paginationLayout.pageSize, setTaskPageSize, taskPageSize])
+
+  useEffect(() => {
+    void refreshTasksFromServer({ silent: true })
+  }, [taskPage, taskPageSize, searchQuery, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+
+  useEffect(() => {
+    setVisibleTaskIds(tasks.map((task) => task.id))
+    return () => setVisibleTaskIds([])
+  }, [tasks, setVisibleTaskIds])
 
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
@@ -167,10 +281,87 @@ export default function TaskGrid() {
     }
   }, [clearSelection, hasOverlayOpen, isMac])
 
-  if (!filteredTasks.length) {
+  const goToPage = (page: number) => {
+    setTaskPage(Math.min(totalPages, Math.max(1, Math.floor(page) || 1)))
+  }
+
+  const submitPageInput = () => {
+    goToPage(Number(pageInput))
+    setPageInput(String(Math.min(totalPages, Math.max(1, Number(pageInput) || 1))))
+  }
+
+  const renderPagination = (position: 'top' | 'bottom') => {
+    if (totalPages <= 1) return null
+
+    return (
+      <div
+        className={`glass-surface-strong relative z-30 mb-4 rounded-2xl border border-gray-200/70 p-3 dark:border-white/[0.08] ${
+          position === 'bottom' ? 'mt-4 mb-28 sm:mb-36 md:mb-44' : ''
+        }`}
+      >
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            共 {taskTotal} 条，每页 {taskPageSize} 条，第 {safeCurrentPage} / {totalPages} 页
+          </div>
+          <div
+            className={
+              paginationLayout.compact
+                ? 'grid w-full grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.85fr)] items-center gap-2'
+                : 'flex items-center justify-end gap-2'
+            }
+          >
+            <button
+              type="button"
+              onClick={() => goToPage(safeCurrentPage - 1)}
+              disabled={safeCurrentPage <= 1}
+              className="h-12 min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+            >
+              上一页
+            </button>
+            <div className={paginationLayout.compact ? 'min-w-0' : 'w-32'}>
+              <Select
+                value={safeCurrentPage}
+                onChange={(value) => goToPage(Number(value))}
+                options={pageOptions}
+                className="flex h-12 items-center rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+              />
+            </div>
+            <label className="flex h-12 min-w-0 items-center gap-2 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200">
+              <span className="text-xs text-gray-500 dark:text-gray-400">跳转</span>
+              <input
+                type="number"
+                min={1}
+                max={totalPages}
+                value={pageInput}
+                onChange={(e) => setPageInput(e.target.value)}
+                onBlur={submitPageInput}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    submitPageInput()
+                  }
+                }}
+                className="min-w-0 flex-1 bg-transparent text-right outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => goToPage(safeCurrentPage + 1)}
+              disabled={safeCurrentPage >= totalPages}
+              className="h-12 min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!tasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || filterFavorite || filterArchived ? (
+        {searchQuery || filterFavorite || filterArchived || filterTaskType !== 'all' ? (
           <p className="text-sm">没有找到匹配的记录</p>
         ) : (
           <>
@@ -195,13 +386,14 @@ export default function TaskGrid() {
   }
 
   return (
-    <div 
+    <div
       ref={rootRef}
       data-task-grid-root
-      className="relative min-h-[50vh]"
+      className="relative min-h-[50vh] pb-8 md:pb-12"
     >
-      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {filteredTasks.map((task) => (
+      {renderPagination('top')}
+      <div ref={gridRef} className="grid grid-cols-1 gap-4 pb-6 sm:grid-cols-2 lg:grid-cols-3">
+        {tasks.map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
@@ -229,6 +421,7 @@ export default function TaskGrid() {
           </div>
         ))}
       </div>
+      {renderPagination('bottom')}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[100]"

@@ -1,11 +1,14 @@
-import fs from 'node:fs/promises'
 import path from 'node:path'
+import fs from 'node:fs/promises'
 import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth } from '../lib/auth.js'
 import { serializeTaskRecord, loadSerializedTask } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
+
+const ADMIN_TASK_LIST_LIMIT = 2000
+const USER_TASK_LIST_LIMIT = 500
 
 const taskParamsSchema = z.object({
   size: z.string().default('auto'),
@@ -16,11 +19,28 @@ const taskParamsSchema = z.object({
   n: z.number().int().positive().max(16).default(1),
 })
 
+const videoParamsSchema = z.object({
+  aspect_ratio: z.enum(['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']).default('auto'),
+  resolution: z.enum(['480p', '720p', '1080p']).default('480p'),
+  duration: z.coerce.number().int().min(1).max(15).default(6),
+})
+
 const taskFlagsSchema = z.object({
   isFavorite: z.boolean().optional(),
   isArchived: z.boolean().optional(),
 }).refine((value) => value.isFavorite !== undefined || value.isArchived !== undefined, {
   message: '至少需要更新一个任务状态',
+})
+
+const taskListQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  query: z.string().optional(),
+  status: z.enum(['all', 'running', 'done', 'error']).default('all'),
+  taskType: z.enum(['all', 'image', 'video']).default('all'),
+  favorite: z.union([z.literal('1'), z.literal('true')]).optional(),
+  archived: z.union([z.literal('1'), z.literal('true')]).optional(),
+  showUsageCodeTasksForAdmin: z.union([z.literal('1'), z.literal('true')]).optional(),
 })
 
 function formatSseEvent(event: string, data: unknown) {
@@ -33,6 +53,56 @@ function buildStoredPath(kind: 'uploads' | 'masks', taskId: string, filename: st
 
 function resolveAbsoluteMediaPath(app: Parameters<FastifyPluginAsync>[0], relativePath: string) {
   return path.join(app.config.mediaDir, relativePath)
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/×/g, 'x')
+    .replace(/：/g, ':')
+}
+
+function formatImageRatio(width: number, height: number) {
+  const roundedWidth = Math.round(width)
+  const roundedHeight = Math.round(height)
+  if (!Number.isFinite(roundedWidth) || !Number.isFinite(roundedHeight) || roundedWidth <= 0 || roundedHeight <= 0) {
+    return ''
+  }
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
+  const divisor = gcd(roundedWidth, roundedHeight)
+  return `${roundedWidth / divisor}:${roundedHeight / divisor}`
+}
+
+function buildSizeSearchText(width: number, height: number) {
+  return [`${width}x${height}`, `${width}×${height}`, formatImageRatio(width, height)].join(' ')
+}
+
+function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never, query: string, role: 'admin' | 'user') {
+  const q = normalizeSearchText(query.trim())
+  if (!q) return true
+
+  const imageSearchText = (task.outputImages ?? [])
+    .map((imageId) => {
+      const size = task.imageSizesById?.[imageId]
+      if (!size?.width || !size.height) return ''
+      return buildSizeSearchText(size.width, size.height)
+    })
+    .join(' ')
+
+  const ownerSearchText = [
+    task.ownerUsageCode?.code,
+    role === 'admin' ? task.ownerLabel : null,
+    role === 'admin' ? task.ownerUsageCode?.name : null,
+  ].filter(Boolean).join(' ')
+
+  const searchText = [
+    task.prompt,
+    JSON.stringify(task.params),
+    imageSearchText,
+    ownerSearchText,
+  ].join(' ')
+
+  return normalizeSearchText(searchText).includes(q)
 }
 
 export const taskRoutes: FastifyPluginAsync = async (app) => {
@@ -60,7 +130,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     let prompt = ''
     let providerProfileId = defaultProfile.id
     let selectedUsageCodeId: string | null = null
+    let taskType: 'image' | 'video' = 'image'
     let parsedParams = taskParamsSchema.parse({})
+    let parsedVideoParams = videoParamsSchema.parse({})
     const pendingFiles: Array<{
       fieldname: string
       filename: string
@@ -78,6 +150,21 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
             parsedParams = taskParamsSchema.parse(JSON.parse(String(part.value ?? '{}')))
           } catch {
             parsedParams = taskParamsSchema.parse({})
+          }
+        }
+        if (part.fieldname === 'taskType') {
+          taskType = String(part.value ?? '').trim() === 'video' ? 'video' : 'image'
+        }
+        if (part.fieldname === 'videoParams') {
+          try {
+            const rawVideoParams = videoParamsSchema.parse(JSON.parse(String(part.value ?? '{}')))
+            parsedVideoParams = {
+              aspect_ratio: rawVideoParams.aspect_ratio,
+              resolution: '480p',
+              duration: 6,
+            }
+          } catch {
+            parsedVideoParams = videoParamsSchema.parse({})
           }
         }
         if (part.fieldname === 'providerProfileId') {
@@ -109,6 +196,14 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       reply.code(400)
       return { message: 'API 配置不存在' }
     }
+    if (taskType === 'video' && providerProfile.apiMode !== 'videos') {
+      reply.code(400)
+      return { message: '请选择视频 API 配置' }
+    }
+    if (taskType === 'image' && providerProfile.apiMode === 'videos') {
+      reply.code(400)
+      return { message: '请选择图片 API 配置' }
+    }
     if (auth.role === 'user') {
       const allowedProviderProfileIds = getAllowedProviderProfileIds(auth)
       if (allowedProviderProfileIds && !allowedProviderProfileIds.includes(providerProfile.id)) {
@@ -124,14 +219,23 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         reply.code(403)
         return { message: '使用码不可用' }
       }
-      reservedImageCredits = parsedParams.n
+      reservedImageCredits = taskType === 'video' ? 1 : parsedParams.n
       try {
-        app.db.reserveUsageCreditsForTask({
-          usageCodeId: selectedUsageCodeId,
-          taskId,
-          credits: reservedImageCredits,
-          providerProfileId: providerProfile.id,
-        })
+        if (taskType === 'video') {
+          app.db.reserveVideoCreditsForTask({
+            usageCodeId: selectedUsageCodeId,
+            taskId,
+            credits: reservedImageCredits,
+            providerProfileId: providerProfile.id,
+          })
+        } else {
+          app.db.reserveUsageCreditsForTask({
+            usageCodeId: selectedUsageCodeId,
+            taskId,
+            credits: reservedImageCredits,
+            providerProfileId: providerProfile.id,
+          })
+        }
       } catch (error) {
         reply.code(403)
         const baseMessage = error instanceof Error ? error.message : '使用码额度不足'
@@ -145,7 +249,8 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const task = app.db.createTask({
       id: taskId,
       prompt,
-      paramsJson: JSON.stringify(parsedParams),
+      taskType,
+      paramsJson: JSON.stringify(taskType === 'video' ? parsedVideoParams : parsedParams),
       providerProfileId: providerProfile.id,
       ownerUsageCodeId: auth.role === 'user' ? selectedUsageCodeId : null,
       ownerKind: auth.role === 'user' ? 'usage_code' : 'admin',
@@ -154,15 +259,35 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     if (!task) {
       if (auth.role === 'user') {
-        app.db.refundUsageCreditsForTask({
-          usageCodeId: selectedUsageCodeId ?? '',
-          taskId,
-          credits: reservedImageCredits,
-          reason: 'task_create_failed',
-          providerProfileId: providerProfile.id,
-        })
+        if (taskType === 'video') {
+          app.db.refundVideoCreditsForTask({
+            usageCodeId: selectedUsageCodeId ?? '',
+            taskId,
+            credits: reservedImageCredits,
+            reason: 'task_create_failed',
+            providerProfileId: providerProfile.id,
+          })
+        } else {
+          app.db.refundUsageCreditsForTask({
+            usageCodeId: selectedUsageCodeId ?? '',
+            taskId,
+            credits: reservedImageCredits,
+            reason: 'task_create_failed',
+            providerProfileId: providerProfile.id,
+          })
+        }
       }
       throw new Error('创建任务失败')
+    }
+
+    if (auth.role === 'user' && selectedUsageCodeId) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: selectedUsageCodeId,
+        taskId,
+        actorKind: 'user',
+        eventType: taskType === 'video' ? 'video_task_submitted' : 'image_task_submitted',
+        message: `使用码用户提交${taskType === 'video' ? '视频' : '图片'}任务`,
+      })
     }
 
     let maskImageId: string | null = null
@@ -179,7 +304,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         app.db.addTaskImage({
           id: fileId,
           taskId,
-          kind: file.fieldname === 'mask' ? 'mask' : 'input',
+          kind: file.fieldname === 'mask' ? 'mask' : taskType === 'video' ? 'video_input' : 'input',
           filePath: relativePath,
           mimeType: file.mimetype,
           bytes: file.buffer.byteLength,
@@ -200,7 +325,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       status: 'queued',
       step: 'queued',
       percent: 5,
-      message: maskImageId ? '任务已创建，等待带遮罩处理' : '任务已创建，等待执行',
+      message: taskType === 'video'
+        ? '视频任务已创建，等待执行'
+        : maskImageId ? '任务已创建，等待带遮罩处理' : '任务已创建，等待执行',
     })
     if (event) {
       app.taskEvents.emit(taskId, event)
@@ -217,13 +344,35 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/api/tasks', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
-    const tasks = auth.role === 'admin'
-      ? app.db.listTasks(200)
-      : app.db.listTasksForUsageCodes(auth.usageCodeIds, 200)
+    const query = taskListQuerySchema.parse(request.query)
+    const rawTasks = auth.role === 'admin'
+      ? app.db.listTasks(ADMIN_TASK_LIST_LIMIT)
+      : app.db.listTasksForUsageCodes(auth.usageCodeIds, ADMIN_TASK_LIST_LIMIT)
+    const filteredTasks = rawTasks
+      .map((task) => serializeTask(task, auth.role === 'admin'))
+      .filter((task) => {
+        if (query.favorite && !task.isFavorite) return false
+        if (query.archived ? !task.isArchived : task.isArchived) return false
+        if (query.status !== 'all' && task.status !== query.status) return false
+        if (query.taskType !== 'all' && (task.taskType ?? 'image') !== query.taskType) return false
+        if (
+          auth.role === 'admin'
+          && !query.showUsageCodeTasksForAdmin
+          && task.ownerKind === 'usage_code'
+          && !query.query?.trim()
+        ) {
+          return false
+        }
+        return matchesTaskSearch(task, query.query ?? '', auth.role)
+      })
+    const total = filteredTasks.length
+    const start = (query.page - 1) * query.pageSize
+    const items = filteredTasks.slice(start, start + query.pageSize)
     return {
-      items: tasks.map((task) =>
-        serializeTask(task, auth.role === 'admin'),
-      ),
+      items,
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
     }
   })
 
@@ -278,8 +427,8 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const buildTaskList = () => {
       const tasks = auth.role === 'admin'
-        ? app.db.listTasks(200)
-        : app.db.listTasksForUsageCodes(auth.usageCodeIds, 200)
+        ? app.db.listTasks(ADMIN_TASK_LIST_LIMIT)
+        : app.db.listTasksForUsageCodes(auth.usageCodeIds, USER_TASK_LIST_LIMIT)
       return tasks.map((task) => serializeTask(task, auth.role === 'admin'))
     }
 
@@ -329,6 +478,17 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const images = app.db.listTaskImages(params.taskId)
+    if (auth.role === 'user' && task.ownerUsageCodeId) {
+      const outputImageCount = images.filter((image) => image.kind === 'output').length
+      const outputVideoCount = images.filter((image) => image.kind === 'video_output').length
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: task.ownerUsageCodeId,
+        taskId: params.taskId,
+        actorKind: 'user',
+        eventType: 'task_deleted',
+        message: `使用码用户删除任务，清理图片 ${outputImageCount} 张，视频 ${outputVideoCount} 个`,
+      })
+    }
     app.taskWorker.cancel(params.taskId)
     if (task.status !== 'succeeded') {
       app.db.refundTaskQuota(params.taskId, 'task_deleted')

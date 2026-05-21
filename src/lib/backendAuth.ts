@@ -11,6 +11,12 @@ export interface AuthUsageCode {
   providerImageQuotas: Record<string, number> | null
   providerUsedImageCredits: Record<string, number> | null
   providerRemainingImageCredits: Record<string, number> | null
+  videoQuota: number | null
+  usedVideoCredits: number
+  remainingVideoCredits: number | null
+  providerVideoQuotas: Record<string, number> | null
+  providerUsedVideoCredits: Record<string, number> | null
+  providerRemainingVideoCredits: Record<string, number> | null
 }
 
 export interface AuthStatus {

@@ -13,6 +13,7 @@ export interface BackendRuntimeSettings {
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean
+  xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -33,6 +34,7 @@ export interface BackendProviderProfile {
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean
+  xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
   isDefault: boolean
   createdAt?: string
@@ -47,6 +49,7 @@ export interface BackendProviderOption {
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean
+  xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
   isDefault: boolean
 }
@@ -69,6 +72,12 @@ export interface BackendUsageCode {
   providerImageQuotas: Record<string, number> | null
   providerUsedImageCredits: Record<string, number> | null
   providerRemainingImageCredits: Record<string, number> | null
+  videoQuota: number | null
+  usedVideoCredits: number
+  remainingVideoCredits: number | null
+  providerVideoQuotas: Record<string, number> | null
+  providerUsedVideoCredits: Record<string, number> | null
+  providerRemainingVideoCredits: Record<string, number> | null
   taskCount: number
   outputImageCount: number
   quotaEvents: Array<{
@@ -80,6 +89,12 @@ export interface BackendUsageCode {
     reason: string | null
     providerProfileId: string | null
     providerProfileName: string | null
+    createdAt: string
+    label: string
+  }>
+  activityEvents: Array<{
+    id: string
+    taskId: string | null
     createdAt: string
     label: string
   }>
@@ -120,6 +135,7 @@ export async function saveBackendRuntimeSettings(settings: {
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean
+  xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -240,8 +256,10 @@ export async function fetchBackendUsageCodes(): Promise<BackendUsageCode[]> {
 export async function createBackendUsageCode(input: {
   name: string
   imageQuota: number | null
+  videoQuota?: number | null
   allowedProviderProfileIds?: string[] | null
   providerImageQuotas?: Record<string, number> | null
+  providerVideoQuotas?: Record<string, number> | null
 }): Promise<{ code: string; item: BackendUsageCode }> {
   const response = await fetch('/api/admin/usage-codes', {
     method: 'POST',
@@ -257,8 +275,10 @@ export async function updateBackendUsageCode(
     name?: string
     isEnabled?: boolean
     imageQuota?: number | null
+    videoQuota?: number | null
     allowedProviderProfileIds?: string[] | null
     providerImageQuotas?: Record<string, number> | null
+    providerVideoQuotas?: Record<string, number> | null
   },
 ): Promise<BackendUsageCode> {
   const response = await fetch(`/api/admin/usage-codes/${encodeURIComponent(codeId)}`, {

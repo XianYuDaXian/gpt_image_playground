@@ -1,4 +1,4 @@
-import type { TaskParams, TaskRecord } from '../types'
+import type { TaskParams, TaskRecord, VideoTaskParams } from '../types'
 import type { AuthStatus } from './backendAuth'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 
@@ -21,6 +21,36 @@ export async function fetchBackendTasks(): Promise<TaskRecord[]> {
   const response = await fetch('/api/tasks', { cache: 'no-store' })
   const payload = await readResponseJson<{ items: TaskRecord[] }>(response)
   return payload.items
+}
+
+export interface BackendTaskListResult {
+  items: TaskRecord[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export async function fetchBackendTaskPage(input: {
+  page: number
+  pageSize: number
+  query?: string
+  status?: 'all' | 'running' | 'done' | 'error'
+  taskType?: 'all' | 'image' | 'video'
+  favorite?: boolean
+  archived?: boolean
+  showUsageCodeTasksForAdmin?: boolean
+}): Promise<BackendTaskListResult> {
+  const params = new URLSearchParams()
+  params.set('page', String(input.page))
+  params.set('pageSize', String(input.pageSize))
+  if (input.query?.trim()) params.set('query', input.query.trim())
+  if (input.status && input.status !== 'all') params.set('status', input.status)
+  if (input.taskType && input.taskType !== 'all') params.set('taskType', input.taskType)
+  if (input.favorite) params.set('favorite', '1')
+  if (input.archived) params.set('archived', '1')
+  if (input.showUsageCodeTasksForAdmin) params.set('showUsageCodeTasksForAdmin', '1')
+  const response = await fetch(`/api/tasks?${params.toString()}`, { cache: 'no-store' })
+  return readResponseJson<BackendTaskListResult>(response)
 }
 
 export async function fetchBackendTask(taskId: string): Promise<TaskRecord> {
@@ -52,6 +82,8 @@ export async function updateBackendTaskFlags(
 export async function createBackendTask(input: {
   prompt: string
   params: TaskParams
+  taskType?: 'image' | 'video'
+  videoParams?: VideoTaskParams
   inputImageDataUrls: string[]
   maskDataUrl?: string
   providerProfileId?: string | null
@@ -59,7 +91,11 @@ export async function createBackendTask(input: {
 }): Promise<{ task: TaskRecord; auth?: AuthStatus }> {
   const formData = new FormData()
   formData.append('prompt', input.prompt)
+  formData.append('taskType', input.taskType ?? 'image')
   formData.append('params', JSON.stringify(input.params))
+  if (input.taskType === 'video' && input.videoParams) {
+    formData.append('videoParams', JSON.stringify(input.videoParams))
+  }
   if (input.providerProfileId) {
     formData.append('providerProfileId', input.providerProfileId)
   }

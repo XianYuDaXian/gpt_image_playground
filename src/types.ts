@@ -1,6 +1,6 @@
 // ===== 设置 =====
 
-export type ApiMode = 'images' | 'responses'
+export type ApiMode = 'images' | 'responses' | 'videos'
 export type ThemeMode = 'system' | 'light' | 'dark'
 
 export interface AppSettings {
@@ -14,6 +14,7 @@ export interface AppSettings {
   apiMode: ApiMode
   codexCli: boolean
   grokApiCompat: boolean
+  xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
@@ -37,6 +38,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   apiMode: 'images',
   codexCli: false,
   grokApiCompat: false,
+  xaiImage2kEnabled: false,
   responseFormatB64Json: false,
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
@@ -64,6 +66,18 @@ export const DEFAULT_PARAMS: TaskParams = {
   n: 1,
 }
 
+export interface VideoTaskParams {
+  aspect_ratio: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
+  resolution: '480p' | '720p' | '1080p'
+  duration: number
+}
+
+export const DEFAULT_VIDEO_PARAMS: VideoTaskParams = {
+  aspect_ratio: 'auto',
+  resolution: '480p',
+  duration: 6,
+}
+
 // ===== 输入图片（UI 层面） =====
 
 export interface InputImage {
@@ -86,7 +100,8 @@ export type TaskStatus = 'running' | 'done' | 'error'
 export interface TaskRecord {
   id: string
   prompt: string
-  params: TaskParams
+  taskType?: 'image' | 'video'
+  params: TaskParams | VideoTaskParams
   providerProfileId?: string | null
   providerProfileName?: string | null
   providerProfileModel?: string | null
@@ -104,8 +119,12 @@ export interface TaskRecord {
   maskImageId?: string | null
   /** 输出图片的 image store id 列表 */
   outputImages: string[]
+  /** 输出视频的 media store id 列表 */
+  outputVideos?: string[]
   imageUrlsById?: Record<string, string>
+  mediaUrlsById?: Record<string, string>
   imageSizesById?: Record<string, { width: number | null; height: number | null }>
+  videoMetadataById?: Record<string, { duration?: number | null }>
   status: TaskStatus
   serverStatus?: string
   currentStep?: string

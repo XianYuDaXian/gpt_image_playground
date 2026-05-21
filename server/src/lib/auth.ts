@@ -115,11 +115,20 @@ export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
         ]),
       )
     : null
-  const remainingImageCredits = providerRemainingImageCredits
-    ? Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
-    : code.imageQuota == null
-      ? null
-      : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const remainingImageCredits = code.imageQuota == null
+    ? null
+    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const providerRemainingVideoCredits = code.providerVideoQuotas
+    ? Object.fromEntries(
+        Object.entries(code.providerVideoQuotas).map(([providerProfileId, quota]) => [
+          providerProfileId,
+          Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
+        ]),
+      )
+    : null
+  const remainingVideoCredits = code.videoQuota == null
+    ? null
+    : Math.max(0, code.videoQuota - code.usedVideoCredits)
 
   return {
     id: code.id,
@@ -131,6 +140,12 @@ export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
     providerImageQuotas: code.providerImageQuotas ?? null,
     providerUsedImageCredits: code.providerUsedImageCredits ?? null,
     providerRemainingImageCredits,
+    videoQuota: code.videoQuota,
+    usedVideoCredits: code.usedVideoCredits,
+    remainingVideoCredits,
+    providerVideoQuotas: code.providerVideoQuotas ?? null,
+    providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
+    providerRemainingVideoCredits,
   }
 }
 
@@ -149,6 +164,14 @@ function serializeAggregatedUser(codes: UsageCodeRecord[], appSecret: string) {
   const remainingImageCredits = serializedCodes.some((code) => code.remainingImageCredits == null)
     ? null
     : serializedCodes.reduce((sum, code) => sum + (code.remainingImageCredits ?? 0), 0)
+  const hasUnlimitedVideo = serializedCodes.some((code) => code.videoQuota == null)
+  const videoQuota = hasUnlimitedVideo
+    ? null
+    : serializedCodes.reduce((sum, code) => sum + (code.videoQuota ?? 0), 0)
+  const usedVideoCredits = serializedCodes.reduce((sum, code) => sum + code.usedVideoCredits, 0)
+  const remainingVideoCredits = serializedCodes.some((code) => code.remainingVideoCredits == null)
+    ? null
+    : serializedCodes.reduce((sum, code) => sum + (code.remainingVideoCredits ?? 0), 0)
 
   return {
     id: codes[0]?.id ?? '',
@@ -160,6 +183,12 @@ function serializeAggregatedUser(codes: UsageCodeRecord[], appSecret: string) {
     providerImageQuotas: null,
     providerUsedImageCredits: null,
     providerRemainingImageCredits: null,
+    videoQuota,
+    usedVideoCredits,
+    remainingVideoCredits,
+    providerVideoQuotas: null,
+    providerUsedVideoCredits: null,
+    providerRemainingVideoCredits: null,
   }
 }
 
