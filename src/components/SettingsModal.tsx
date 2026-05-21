@@ -842,21 +842,25 @@ export default function SettingsModal() {
                     <div key={code.id} className="rounded-lg bg-white/70 px-3 py-2 dark:bg-white/[0.04]">
                       <div className="flex items-center justify-between gap-3">
                         <span className="min-w-0 truncate font-medium">{code.name}</span>
-                        <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-                          图片剩余 {code.remainingImageCredits ?? 0}
-                        </span>
+                        <div className="shrink-0 text-right text-xs text-gray-500 dark:text-gray-400">
+                          <div>图片剩余 {code.remainingImageCredits ?? 0}</div>
+                          <div>视频剩余 {code.remainingVideoCredits ?? 0}</div>
+                        </div>
                       </div>
                       {providerOptions.length > 0 && (
                         <div className="mt-2 space-y-1">
                           {providerOptions
                             .filter((option) => !code.allowedProviderProfileIds?.length || code.allowedProviderProfileIds.includes(option.id))
                             .map((option) => {
-                              const providerRemaining = code.providerRemainingImageCredits?.[option.id]
+                              const isVideoProvider = option.apiMode === 'videos'
+                              const providerRemaining = isVideoProvider
+                                ? code.providerRemainingVideoCredits?.[option.id]
+                                : code.providerRemainingImageCredits?.[option.id]
                               return (
                                 <div key={option.id} className="flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
                                   <span className="min-w-0 truncate">{option.name}</span>
                                   <span className="shrink-0">
-                                    端点剩余 {providerRemaining ?? 0}
+                                    {isVideoProvider ? '视频剩余' : '图片剩余'} {providerRemaining ?? 0}
                                   </span>
                                 </div>
                               )
