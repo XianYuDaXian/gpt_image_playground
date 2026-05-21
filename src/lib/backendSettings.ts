@@ -15,6 +15,8 @@ export interface BackendRuntimeSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  videoMaxResolution?: '480p' | '720p'
+  videoMaxDuration?: 6 | 10 | 15
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
@@ -37,6 +39,8 @@ export interface BackendProviderProfile {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  videoMaxResolution?: '480p' | '720p'
+  videoMaxDuration?: 6 | 10 | 15
   isDefault: boolean
   createdAt?: string
   updatedAt?: string
@@ -53,6 +57,8 @@ export interface BackendProviderOption {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  videoMaxResolution?: '480p' | '720p'
+  videoMaxDuration?: 6 | 10 | 15
   isDefault: boolean
 }
 
@@ -82,6 +88,7 @@ export interface BackendUsageCode {
   providerRemainingVideoCredits: Record<string, number> | null
   taskCount: number
   outputImageCount: number
+  outputVideoCount: number
   quotaEvents: Array<{
     id: number
     usageCodeId: string
@@ -146,6 +153,8 @@ export async function saveBackendRuntimeSettings(settings: {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  videoMaxResolution?: '480p' | '720p'
+  videoMaxDuration?: 6 | 10 | 15
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
@@ -264,8 +273,6 @@ export async function fetchBackendUsageCodes(): Promise<BackendUsageCode[]> {
 
 export async function createBackendUsageCode(input: {
   name: string
-  imageQuota: number | null
-  videoQuota?: number | null
   allowedProviderProfileIds?: string[] | null
   providerImageQuotas?: Record<string, number> | null
   providerVideoQuotas?: Record<string, number> | null
@@ -283,8 +290,6 @@ export async function updateBackendUsageCode(
   patch: {
     name?: string
     isEnabled?: boolean
-    imageQuota?: number | null
-    videoQuota?: number | null
     allowedProviderProfileIds?: string[] | null
     providerImageQuotas?: Record<string, number> | null
     providerVideoQuotas?: Record<string, number> | null

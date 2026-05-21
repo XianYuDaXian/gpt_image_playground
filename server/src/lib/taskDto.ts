@@ -67,7 +67,7 @@ export function serializeTaskRecord(
     providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'model' | 'tagColor'> | null
   } = {},
 ) {
-  const inputImages = images.filter((image) => image.kind === 'input')
+  const inputImages = images.filter((image) => image.kind === 'input' || image.kind === 'video_input')
   const outputImages = images.filter((image) => image.kind === 'output')
   const outputVideos = images.filter((image) => image.kind === 'video_output')
   const maskImage = images.find((image) => image.kind === 'mask') ?? null
@@ -118,6 +118,7 @@ export function serializeTaskRecord(
             : Math.max(0, task.ownerUsageCodeImageQuota - (task.ownerUsageCodeUsedImageCredits ?? 0)),
           taskCount: task.ownerUsageCodeTaskCount ?? 0,
           outputImageCount: task.ownerUsageCodeOutputImageCount ?? 0,
+          providerOutputImageCount: task.ownerUsageCodeProviderOutputImageCount ?? 0,
         }
       : null,
     reservedImageCredits: task.reservedImageCredits,

@@ -5,8 +5,8 @@ import type { ProviderProfileRecord } from './db.js'
 
 export interface VideoTaskParams {
   aspect_ratio?: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-  resolution: '480p' | '720p' | '1080p'
-  duration: number
+  resolution: '480p' | '720p'
+  duration: 6 | 10 | 15
 }
 
 export interface VideoGenerationPayload {

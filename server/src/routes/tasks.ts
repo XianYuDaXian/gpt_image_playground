@@ -21,9 +21,26 @@ const taskParamsSchema = z.object({
 
 const videoParamsSchema = z.object({
   aspect_ratio: z.enum(['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']).default('auto'),
-  resolution: z.enum(['480p', '720p', '1080p']).default('480p'),
-  duration: z.coerce.number().int().min(1).max(15).default(6),
+  resolution: z.enum(['480p', '720p']).default('480p'),
+  duration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
 })
+
+function clampVideoParamsToProvider(
+  params: z.infer<typeof videoParamsSchema>,
+  provider: { grokApiCompat?: number | boolean; videoMaxResolution?: '480p' | '720p'; videoMaxDuration?: 6 | 10 | 15 },
+) {
+  const advancedEnabled = Boolean(provider.grokApiCompat)
+  const resolution = advancedEnabled && provider.videoMaxResolution === '720p' ? params.resolution : '480p'
+  const maxDuration = advancedEnabled
+    ? provider.videoMaxDuration === 15 ? 15 : provider.videoMaxDuration === 10 ? 10 : 6
+    : 6
+  const duration = params.duration <= maxDuration ? params.duration : maxDuration
+  return {
+    ...params,
+    resolution,
+    duration,
+  }
+}
 
 const taskFlagsSchema = z.object({
   isFavorite: z.boolean().optional(),
@@ -157,12 +174,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         }
         if (part.fieldname === 'videoParams') {
           try {
-            const rawVideoParams = videoParamsSchema.parse(JSON.parse(String(part.value ?? '{}')))
-            parsedVideoParams = {
-              aspect_ratio: rawVideoParams.aspect_ratio,
-              resolution: '480p',
-              duration: 6,
-            }
+            parsedVideoParams = videoParamsSchema.parse(JSON.parse(String(part.value ?? '{}')))
           } catch {
             parsedVideoParams = videoParamsSchema.parse({})
           }
@@ -203,6 +215,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     if (taskType === 'image' && providerProfile.apiMode === 'videos') {
       reply.code(400)
       return { message: '请选择图片 API 配置' }
+    }
+    if (taskType === 'video') {
+      parsedVideoParams = clampVideoParamsToProvider(parsedVideoParams, providerProfile)
     }
     if (auth.role === 'user') {
       const allowedProviderProfileIds = getAllowedProviderProfileIds(auth)

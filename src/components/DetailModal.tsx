@@ -316,7 +316,7 @@ export default function DetailModal() {
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[82dvh] overflow-hidden flex flex-col md:max-h-[90vh] md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
@@ -332,7 +332,7 @@ export default function DetailModal() {
         </div>
 
         {/* 左侧：图片 */}
-        <div ref={imagePanelRef} className="md:w-1/2 w-full h-64 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[16rem]">
+        <div ref={imagePanelRef} className="md:w-1/2 w-full h-52 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[13rem] md:min-h-[16rem]">
           {hasRenderedOutput && (
             <>
               {isVideoTask ? (
@@ -515,7 +515,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-5 overflow-y-auto flex flex-col">
+        <div className="md:w-1/2 w-full p-4 overflow-y-auto flex flex-col md:p-5">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"
@@ -643,12 +643,12 @@ export default function DetailModal() {
                   <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                     <span className="text-gray-400 dark:text-gray-500">分辨率</span>
                     <br />
-                    <span className="font-medium">480p</span>
+                    <span className="font-medium">{videoParams?.resolution ?? '480p'}</span>
                   </div>
                   <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                     <span className="text-gray-400 dark:text-gray-500">时长</span>
                     <br />
-                    <span className="font-medium">6s</span>
+                    <span className="font-medium">{videoParams?.duration ?? 6}s</span>
                   </div>
                 </>
               ) : (
@@ -683,6 +683,13 @@ export default function DetailModal() {
                   <span className="text-gray-400 dark:text-gray-500">API 配置</span>
                   <br />
                   <span className="font-medium break-all">{task.providerProfileName}</span>
+                </div>
+              )}
+              {task.ownerUsageCode && task.providerProfileName && !isVideoTask && (
+                <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
+                  <span className="text-gray-400 dark:text-gray-500">当前 API 已生成</span>
+                  <br />
+                  <span className="font-medium break-all">{task.ownerUsageCode.providerOutputImageCount} 张</span>
                 </div>
               )}
               {task.providerProfileModel && (

@@ -299,57 +299,108 @@ export async function clearCachedVideos(): Promise<void> {
   await caches.delete(VIDEO_CACHE_NAME)
 }
 
-function loadVideo(url: string): Promise<HTMLVideoElement> {
+function loadVideoFrame(url: string): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video')
     video.preload = 'auto'
     video.muted = true
     video.playsInline = true
+    video.crossOrigin = 'anonymous'
+    video.style.position = 'fixed'
+    video.style.left = '-9999px'
+    video.style.top = '0'
+    video.style.width = '1px'
+    video.style.height = '1px'
+    const timeoutId = window.setTimeout(() => {
+      dispose()
+      reject(new Error('视频缩略图生成超时'))
+    }, 8000)
 
-    const cleanup = () => {
+    const cleanupEvents = () => {
+      video.onloadedmetadata = null
       video.onloadeddata = null
+      video.onseeked = null
       video.onerror = null
     }
+    const dispose = () => {
+      cleanupEvents()
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+      video.remove()
+    }
 
-    video.onloadeddata = () => {
-      cleanup()
+    const resolveWithFrame = () => {
+      window.clearTimeout(timeoutId)
+      cleanupEvents()
       resolve(video)
     }
+    const seekToFirstFrame = () => {
+      if (video.videoWidth <= 0 || video.videoHeight <= 0) return
+      const targetTime = Math.min(0.1, Math.max(0, (video.duration || 1) - 0.01))
+      if (Math.abs(video.currentTime - targetTime) < 0.001) {
+        resolveWithFrame()
+        return
+      }
+      try {
+        video.currentTime = targetTime
+      } catch {
+        resolveWithFrame()
+      }
+    }
+
+    video.onloadedmetadata = seekToFirstFrame
     video.onerror = () => {
-      cleanup()
+      window.clearTimeout(timeoutId)
+      dispose()
       reject(new Error('视频加载失败'))
     }
+    video.onseeked = resolveWithFrame
+    video.onloadeddata = () => {
+      if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        seekToFirstFrame()
+      }
+    }
+    document.body.appendChild(video)
     video.src = url
+    video.load()
   })
 }
 
 export async function createAndStoreVideoThumbnail(id: string, blob: Blob) {
   const objectUrl = URL.createObjectURL(blob)
   try {
-    const video = await loadVideo(objectUrl)
-    const width = video.videoWidth
-    const height = video.videoHeight
-    if (width <= 0 || height <= 0) {
-      throw new Error('视频尺寸无效')
-    }
+    const video = await loadVideoFrame(objectUrl)
+    try {
+      const width = video.videoWidth
+      const height = video.videoHeight
+      if (width <= 0 || height <= 0) {
+        throw new Error('视频尺寸无效')
+      }
 
-    const scale = Math.min(1, THUMBNAIL_MAX_SIZE / Math.max(width, height))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(1, Math.round(width * scale))
-    canvas.height = Math.max(1, Math.round(height * scale))
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('当前浏览器不支持 Canvas')
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const scale = Math.min(1, THUMBNAIL_MAX_SIZE / Math.max(width, height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(width * scale))
+      canvas.height = Math.max(1, Math.round(height * scale))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('当前浏览器不支持 Canvas')
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-    const record: StoredImageThumbnail = {
-      id,
-      thumbnailDataUrl: canvas.toDataURL('image/webp', THUMBNAIL_QUALITY),
-      width,
-      height,
-      thumbnailVersion: THUMBNAIL_VERSION,
+      const record: StoredImageThumbnail = {
+        id,
+        thumbnailDataUrl: canvas.toDataURL('image/webp', THUMBNAIL_QUALITY),
+        width,
+        height,
+        thumbnailVersion: THUMBNAIL_VERSION,
+      }
+      await putImageThumbnail(record)
+      return record
+    } finally {
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+      video.remove()
     }
-    await putImageThumbnail(record)
-    return record
   } finally {
     URL.revokeObjectURL(objectUrl)
   }

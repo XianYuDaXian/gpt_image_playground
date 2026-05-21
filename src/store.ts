@@ -317,6 +317,10 @@ interface AppState {
   setTaskMode: (mode: 'image' | 'video') => void
   videoAspectRatio: VideoTaskParams['aspect_ratio']
   setVideoAspectRatio: (ratio: VideoTaskParams['aspect_ratio']) => void
+  videoResolution: VideoTaskParams['resolution']
+  setVideoResolution: (resolution: VideoTaskParams['resolution']) => void
+  videoDuration: VideoTaskParams['duration']
+  setVideoDuration: (duration: VideoTaskParams['duration']) => void
   params: TaskParams
   setParams: (p: Partial<TaskParams>) => void
 
@@ -409,6 +413,10 @@ export const useStore = create<AppState>()(
           grokApiCompat: s.grokApiCompat ?? st.settings.grokApiCompat ?? DEFAULT_SETTINGS.grokApiCompat,
           responseFormatB64Json:
             s.responseFormatB64Json ?? st.settings.responseFormatB64Json ?? DEFAULT_SETTINGS.responseFormatB64Json,
+          videoMaxResolution:
+            s.videoMaxResolution ?? st.settings.videoMaxResolution ?? DEFAULT_SETTINGS.videoMaxResolution,
+          videoMaxDuration:
+            s.videoMaxDuration ?? st.settings.videoMaxDuration ?? DEFAULT_SETTINGS.videoMaxDuration,
           clearInputAfterSubmit:
             s.clearInputAfterSubmit ?? st.settings.clearInputAfterSubmit ?? DEFAULT_SETTINGS.clearInputAfterSubmit,
           persistInputOnRestart:
@@ -552,6 +560,10 @@ export const useStore = create<AppState>()(
       })),
       videoAspectRatio: DEFAULT_VIDEO_PARAMS.aspect_ratio,
       setVideoAspectRatio: (videoAspectRatio) => set({ videoAspectRatio }),
+      videoResolution: DEFAULT_VIDEO_PARAMS.resolution,
+      setVideoResolution: (videoResolution) => set({ videoResolution }),
+      videoDuration: DEFAULT_VIDEO_PARAMS.duration,
+      setVideoDuration: (videoDuration) => set({ videoDuration }),
       params: { ...DEFAULT_PARAMS },
       setParams: (p) => set((s) => ({ params: { ...s.params, ...p } })),
 
@@ -668,6 +680,8 @@ export const useStore = create<AppState>()(
         settings: state.settings,
         taskMode: state.taskMode,
         videoAspectRatio: state.videoAspectRatio,
+        videoResolution: state.videoResolution,
+        videoDuration: state.videoDuration,
         params: state.params,
         tasks: state.tasks,
         ...(state.settings.persistInputOnRestart
@@ -868,7 +882,7 @@ export async function logout() {
 
 /** 提交新任务 */
 export async function submitTask(options: { allowFullMask?: boolean; usageCodeId?: string | null } = {}) {
-  const { settings, prompt, inputImages, maskDraft, params, taskMode, videoAspectRatio, showToast, setConfirmDialog } =
+  const { settings, prompt, inputImages, maskDraft, params, taskMode, videoAspectRatio, videoResolution, videoDuration, showToast, setConfirmDialog } =
     useStore.getState()
 
   if (!settings.apiKey && !settings.apiKeyConfigured) {
@@ -938,7 +952,11 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
       params: normalizedParams,
       taskType: taskMode,
       videoParams: taskMode === 'video'
-        ? { ...DEFAULT_VIDEO_PARAMS, aspect_ratio: orderedInputImages.length > 0 ? 'auto' : videoAspectRatio }
+        ? {
+            aspect_ratio: orderedInputImages.length > 0 ? 'auto' : videoAspectRatio,
+            resolution: videoResolution,
+            duration: videoDuration,
+          }
         : undefined,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl: taskMode === 'image' ? maskDraft?.maskDataUrl : undefined,
@@ -1356,7 +1374,31 @@ export async function cacheTaskVideoForPlayback(
   remoteUrl: string,
 ): Promise<string | undefined> {
   const cached = await ensureVideoCached(videoId)
-  if (cached) return cached
+  if (cached) {
+    const thumbnail = await getStoredFreshImageThumbnail(videoId)
+    if (!thumbnail?.thumbnailDataUrl) {
+      const cachedBlob = await getCachedVideoBlob(videoId)
+      if (cachedBlob) {
+        try {
+          const generatedThumbnail = await createAndStoreVideoThumbnail(videoId, cachedBlob)
+          cacheThumbnail(videoId, {
+            dataUrl: generatedThumbnail.thumbnailDataUrl,
+            width: generatedThumbnail.width,
+            height: generatedThumbnail.height,
+            thumbnailVersion: generatedThumbnail.thumbnailVersion,
+          })
+          notifyImageThumbnail(videoId, {
+            dataUrl: generatedThumbnail.thumbnailDataUrl,
+            width: generatedThumbnail.width,
+            height: generatedThumbnail.height,
+          })
+        } catch {
+          /* 视频首帧生成失败时保留占位，不影响播放 */
+        }
+      }
+    }
+    return cached
+  }
 
   const loading = videoLoadPromises.get(videoId)
   if (loading) return loading

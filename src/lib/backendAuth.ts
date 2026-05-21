@@ -17,6 +17,8 @@ export interface AuthUsageCode {
   providerVideoQuotas: Record<string, number> | null
   providerUsedVideoCredits: Record<string, number> | null
   providerRemainingVideoCredits: Record<string, number> | null
+  outputImageCount: number
+  outputVideoCount: number
 }
 
 export interface AuthStatus {

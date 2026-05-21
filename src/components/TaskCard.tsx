@@ -353,6 +353,7 @@ export default function TaskCard({
   const videoParams = isVideoTask ? task.params as VideoTaskParams : null
   const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
   const taskModelLabel = task.providerProfileModel ?? null
+  const videoPreviewSrc = videoSrc ? `${videoSrc}#t=0.001` : ''
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showDeferredPlaceholder =
@@ -434,7 +435,7 @@ export default function TaskCard({
           </svg>
         </div>
       )}
-      {hasOutputImage && !isVideoTask && (
+      {(hasOutputImage || hasOutputVideo) && (
         <button
           type="button"
           data-no-long-press
@@ -448,7 +449,7 @@ export default function TaskCard({
               ? 'border-blue-300/70 bg-blue-500/80 text-white'
               : 'border-white/30 bg-black/40 text-white/80 hover:bg-black/55'
           }`}
-          title={isCoverBlurred ? '取消模糊此图片' : '模糊此图片'}
+          title={isCoverBlurred ? '取消模糊预览图' : '模糊预览图'}
         >
           {isCoverBlurred ? (
             <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
@@ -472,7 +473,7 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
-                className="h-full w-full object-cover"
+                className={`h-full w-full object-cover transition duration-200 ${isCoverBlurred ? 'scale-[1.03] blur-md' : ''}`}
                 alt=""
               />
               <div className="absolute inset-0 bg-black/20" />
@@ -481,11 +482,11 @@ export default function TaskCard({
           {isVideoTask && !thumbSrc && videoSrc && (
             <>
               <video
-                src={videoSrc}
+                src={videoPreviewSrc}
                 className="h-full w-full object-cover"
                 muted
                 playsInline
-                preload="metadata"
+                preload="auto"
               />
               <div className="absolute inset-0 bg-black/20" />
             </>
@@ -651,8 +652,8 @@ export default function TaskCard({
                 <>
                   <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">视频</span>
                   <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">{videoParams?.aspect_ratio ?? 'auto'}</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">480p</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">6s</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">{videoParams?.resolution ?? '480p'}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0">{videoParams?.duration ?? 6}s</span>
                 </>
               ) : (
                 <>

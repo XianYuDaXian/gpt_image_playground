@@ -27,6 +27,8 @@ const providerProfileSchema = z.object({
   grokApiCompat: z.boolean().default(false),
   xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
+  videoMaxResolution: z.enum(['480p', '720p']).default('480p'),
+  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
   isDefault: z.boolean().default(false),
 }).refine((value) => !(value.codexCli && value.grokApiCompat), {
   message: 'Codex CLI 模式与 Grok API 兼容不能同时启用',
@@ -43,6 +45,8 @@ const runtimeSettingsSchemaBase = z.object({
   grokApiCompat: z.boolean().default(false),
   xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
+  videoMaxResolution: z.enum(['480p', '720p']).default('480p'),
+  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
   clearInputAfterSubmit: z.boolean().default(false),
   persistInputOnRestart: z.boolean().default(true),
   reuseTaskApiProfileTemporarily: z.boolean().default(false),
@@ -128,8 +132,6 @@ const distributionSettingsSchema = z.object({
 
 const usageCodeCreateSchema = z.object({
   name: z.string().min(1).optional(),
-  imageQuota: z.number().int().nonnegative().nullable().optional(),
-  videoQuota: z.number().int().nonnegative().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
   providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
   providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
@@ -138,16 +140,12 @@ const usageCodeCreateSchema = z.object({
 const usageCodePatchSchema = z.object({
   name: z.string().min(1).optional(),
   isEnabled: z.boolean().optional(),
-  imageQuota: z.number().int().nonnegative().nullable().optional(),
-  videoQuota: z.number().int().nonnegative().nullable().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
   providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
   providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
 }).refine((value) =>
   value.name !== undefined
     || value.isEnabled !== undefined
-    || value.imageQuota !== undefined
-    || value.videoQuota !== undefined
     || value.allowedProviderProfileIds !== undefined
     || value.providerImageQuotas !== undefined
     || value.providerVideoQuotas !== undefined,
@@ -164,9 +162,9 @@ function formatQuotaEventLabel(event: { eventType: string; reason?: string | nul
   const isVideoProvider = event.providerProfileApiMode === 'videos'
   if (event.reason === 'admin_adjust_total') {
     if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') {
-      return '管理员调整视频总额度'
+      return '管理员调整视频额度'
     }
-    return '管理员调整图片总额度'
+    return '管理员调整图片额度'
   }
   if (event.reason === 'admin_adjust_provider') {
     if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease' || isVideoProvider) {
@@ -227,6 +225,8 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
     grokApiCompat: Boolean(profile.grokApiCompat),
     xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+    videoMaxResolution: profile.videoMaxResolution,
+    videoMaxDuration: profile.videoMaxDuration,
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -245,6 +245,8 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     grokApiCompat: Boolean(profile.grokApiCompat),
     xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+    videoMaxResolution: profile.videoMaxResolution,
+    videoMaxDuration: profile.videoMaxDuration,
     isDefault: Boolean(profile.isDefault),
   }
 }
@@ -258,32 +260,20 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
       .map((event) => event.taskId)
       .filter((taskId): taskId is string => Boolean(taskId)),
   )
-  const providerRemainingImageCredits = code.providerImageQuotas
-    ? Object.fromEntries(
-        Object.entries(code.providerImageQuotas).map(([providerProfileId, quota]) => [
-          providerProfileId,
-          Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
-        ]),
-      )
-    : null
-  const remainingImageCredits = code.providerImageQuotas
-    ? Object.values(providerRemainingImageCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
-    : code.imageQuota == null
-      ? null
-      : Math.max(0, code.imageQuota - code.usedImageCredits)
-  const providerRemainingVideoCredits = code.providerVideoQuotas
-    ? Object.fromEntries(
-        Object.entries(code.providerVideoQuotas).map(([providerProfileId, quota]) => [
-          providerProfileId,
-          Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
-        ]),
-      )
-    : null
-  const remainingVideoCredits = code.providerVideoQuotas
-    ? Object.values(providerRemainingVideoCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
-    : code.videoQuota == null
-      ? null
-      : Math.max(0, code.videoQuota - code.usedVideoCredits)
+  const providerRemainingImageCredits = Object.fromEntries(
+    Object.entries(code.providerImageQuotas ?? {}).map(([providerProfileId, quota]) => [
+      providerProfileId,
+      Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
+    ]),
+  )
+  const remainingImageCredits = Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
+  const providerRemainingVideoCredits = Object.fromEntries(
+    Object.entries(code.providerVideoQuotas ?? {}).map(([providerProfileId, quota]) => [
+      providerProfileId,
+      Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
+    ]),
+  )
+  const remainingVideoCredits = Object.values(providerRemainingVideoCredits).reduce((sum, remaining) => sum + remaining, 0)
   let codePlain: string | null = null
   if (code.codeEncrypted) {
     try {
@@ -313,6 +303,7 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     providerRemainingVideoCredits,
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
+    outputVideoCount: code.outputVideoCount,
     quotaEvents: quotaEvents.map((event) => ({
       ...event,
       label: formatQuotaEventLabel(event),
@@ -463,6 +454,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         grokApiCompat: Boolean(profile.grokApiCompat),
         xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
         responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+        videoMaxResolution: profile.videoMaxResolution,
+        videoMaxDuration: profile.videoMaxDuration,
         clearInputAfterSubmit: preferences.clearInputAfterSubmit,
         persistInputOnRestart: preferences.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
@@ -496,6 +489,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: Boolean(profile.grokApiCompat),
       xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+      videoMaxResolution: profile.videoMaxResolution,
+      videoMaxDuration: profile.videoMaxDuration,
       clearInputAfterSubmit: preferences.clearInputAfterSubmit,
       persistInputOnRestart: preferences.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
@@ -520,6 +515,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      videoMaxResolution: payload.videoMaxResolution,
+      videoMaxDuration: payload.videoMaxDuration,
       isDefault: true,
     })
 
@@ -548,6 +545,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       codexCli: Boolean(profile.codexCli),
       grokApiCompat: Boolean(profile.grokApiCompat),
       xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
+      videoMaxResolution: profile.videoMaxResolution,
+      videoMaxDuration: profile.videoMaxDuration,
       clearInputAfterSubmit: payload.clearInputAfterSubmit,
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
@@ -613,6 +612,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      videoMaxResolution: payload.videoMaxResolution,
+      videoMaxDuration: payload.videoMaxDuration,
       isDefault: true,
     })
 
@@ -641,6 +642,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      videoMaxResolution: payload.videoMaxResolution,
+      videoMaxDuration: payload.videoMaxDuration,
       isDefault: payload.isDefault,
     })
     if (!profile) throw new Error('创建 API 配置失败')
@@ -687,6 +690,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      videoMaxResolution: payload.videoMaxResolution,
+      videoMaxDuration: payload.videoMaxDuration,
       isDefault: payload.isDefault,
     })
     if (!profile) throw new Error('保存 API 配置失败')
@@ -745,8 +750,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       codeHash: hashSecret(code, app.config.appSecret),
       codeEncrypted: encryptText(code, app.config.appSecret),
       name: payload.name?.trim() || '未命名使用码',
-      imageQuota: payload.imageQuota ?? null,
-      videoQuota: payload.videoQuota ?? null,
+      imageQuota: null,
+      videoQuota: null,
       allowedProviderProfileIds: payload.allowedProviderProfileIds ?? null,
       providerImageQuotas: payload.providerImageQuotas ?? null,
       providerVideoQuotas: payload.providerVideoQuotas ?? null,
@@ -767,18 +772,19 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         code,
         codeRecoverable: true,
         isEnabled: Boolean(usageCode.isEnabled),
-        remainingImageCredits: usageCode.imageQuota,
+        remainingImageCredits: Object.values(usageCode.providerImageQuotas ?? {}).reduce((sum, quota) => sum + quota, 0),
         providerImageQuotas: usageCode.providerImageQuotas ?? null,
         providerUsedImageCredits: usageCode.providerUsedImageCredits ?? null,
-        providerRemainingImageCredits: usageCode.providerImageQuotas ?? null,
+        providerRemainingImageCredits: usageCode.providerImageQuotas ?? {},
         videoQuota: usageCode.videoQuota,
         usedVideoCredits: usageCode.usedVideoCredits,
-        remainingVideoCredits: usageCode.videoQuota,
+        remainingVideoCredits: Object.values(usageCode.providerVideoQuotas ?? {}).reduce((sum, quota) => sum + quota, 0),
         providerVideoQuotas: usageCode.providerVideoQuotas ?? null,
         providerUsedVideoCredits: usageCode.providerUsedVideoCredits ?? null,
-        providerRemainingVideoCredits: usageCode.providerVideoQuotas ?? null,
+        providerRemainingVideoCredits: usageCode.providerVideoQuotas ?? {},
         taskCount: 0,
         outputImageCount: 0,
+        outputVideoCount: 0,
         quotaEvents: [],
         activityEvents: [],
       },
@@ -798,8 +804,6 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       id: params.codeId,
       name: payload.name?.trim(),
       isEnabled: payload.isEnabled,
-      imageQuota: payload.imageQuota,
-      videoQuota: payload.videoQuota,
       allowedProviderProfileIds: payload.allowedProviderProfileIds,
       providerImageQuotas: payload.providerImageQuotas,
       providerVideoQuotas: payload.providerVideoQuotas,
@@ -886,6 +890,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.runtimeSettings.grokApiCompat,
       xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled,
       responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json,
+      videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
+      videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
       isDefault: true,
     })
 
@@ -978,6 +984,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           grokApiCompat: Boolean(profile.grokApiCompat),
           xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
           responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+          videoMaxResolution: profile.videoMaxResolution,
+          videoMaxDuration: profile.videoMaxDuration,
           ...getRuntimePreferences(app),
         }
       : null

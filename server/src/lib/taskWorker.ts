@@ -267,8 +267,8 @@ export class TaskWorker {
       const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
       const params = JSON.parse(task.paramsJson) as {
         aspect_ratio?: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-        resolution: '480p' | '720p' | '1080p'
-        duration: number
+        resolution: '480p' | '720p'
+        duration: 6 | 10 | 15
       }
 
       if (!this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 10, message: '已提交到视频接口' })) return

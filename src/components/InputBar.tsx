@@ -37,6 +37,44 @@ function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
   )
 }
 
+function CompactSegmentedSlider({
+  label,
+  value,
+  labels,
+  suffix = '',
+  onChange,
+}: {
+  label: string
+  value: string
+  labels: readonly string[]
+  suffix?: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex h-10 shrink-0 items-center rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+      {labels.map((item) => {
+        const selected = item === value
+        return (
+          <button
+            key={item}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(item)}
+            className={`inline-flex h-full min-w-12 items-center justify-center rounded-lg px-3 leading-none transition ${
+              selected
+                ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
+                : 'text-gray-500 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white'
+            }`}
+          >
+            {item}{suffix}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function getMentionTagTextLength(el: Element) {
   return el.textContent?.length ?? 0
 }
@@ -284,6 +322,7 @@ function renderPromptEditor(el: HTMLDivElement, prompt: string, inputImages: Inp
 
 /** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
+type MobileParamSheet = 'quality' | 'format' | 'moderation' | 'videoResolution' | 'videoDuration'
 
 function useIsMobile() {
   const getIsMobile = () => {
@@ -318,6 +357,10 @@ export default function InputBar() {
   const setTaskMode = useStore((s) => s.setTaskMode)
   const videoAspectRatio = useStore((s) => s.videoAspectRatio)
   const setVideoAspectRatio = useStore((s) => s.setVideoAspectRatio)
+  const videoResolution = useStore((s) => s.videoResolution)
+  const setVideoResolution = useStore((s) => s.setVideoResolution)
+  const videoDuration = useStore((s) => s.videoDuration)
+  const setVideoDuration = useStore((s) => s.setVideoDuration)
   const settings = useStore((s) => s.settings)
   const setShowSettings = useStore((s) => s.setShowSettings)
   const setConfirmDialog = useStore((s) => s.setConfirmDialog)
@@ -497,7 +540,7 @@ export default function InputBar() {
   const [showSizePicker, setShowSizePicker] = useState(false)
   const [showVideoAspectPicker, setShowVideoAspectPicker] = useState(false)
   const [showParamsModal, setShowParamsModal] = useState(false)
-  const [mobileParamSheet, setMobileParamSheet] = useState<'quality' | 'format' | 'moderation' | null>(null)
+  const [mobileParamSheet, setMobileParamSheet] = useState<MobileParamSheet | null>(null)
   const [showUsageCodePicker, setShowUsageCodePicker] = useState(false)
   const [maskPreviewUrl, setMaskPreviewUrl] = useState('')
   const [cursorPos, setCursorPos] = useState(0)
@@ -530,6 +573,34 @@ export default function InputBar() {
       ?? modeProviderOptions[0]?.id
       ?? null
   const activeProviderOption = modeProviderOptions.find((option) => option.id === activeProviderProfileId) ?? null
+  const currentUsageCodesForProvider = useMemo(() => (
+    authStatus?.role === 'user' && activeProviderProfileId
+      ? userUsageCodes.filter((code) =>
+          (!code.allowedProviderProfileIds?.length || code.allowedProviderProfileIds.includes(activeProviderProfileId))
+          && ((taskMode === 'video'
+            ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
+            : code.providerRemainingImageCredits?.[activeProviderProfileId]) ?? 0) > 0,
+        )
+      : []
+  ), [activeProviderProfileId, authStatus?.role, taskMode, userUsageCodes])
+  const canShowVideoAdvancedControls = Boolean(
+    taskMode === 'video'
+    && activeProviderOption?.grokApiCompat
+    && (authStatus?.role === 'admin' || currentUsageCodesForProvider.length > 0)
+    && (activeProviderOption.videoMaxResolution === '720p' || (activeProviderOption.videoMaxDuration ?? 6) > 6),
+  )
+  const allowedVideoResolutions: Array<VideoTaskParams['resolution']> = activeProviderOption?.grokApiCompat && activeProviderOption.videoMaxResolution === '720p'
+    ? ['480p', '720p']
+    : ['480p']
+  const maxVideoDuration = activeProviderOption?.grokApiCompat ? activeProviderOption.videoMaxDuration ?? 6 : 6
+  const allowedVideoDurations: Array<VideoTaskParams['duration']> = maxVideoDuration >= 15
+    ? [6, 10, 15]
+    : maxVideoDuration >= 10
+      ? [6, 10]
+      : [6]
+  const allowedVideoDurationLabels = allowedVideoDurations.map(String)
+  const canShowVideoResolutionControl = canShowVideoAdvancedControls && allowedVideoResolutions.length > 1
+  const canShowVideoDurationControl = canShowVideoAdvancedControls && allowedVideoDurations.length > 1
   const getProviderQuotaSummary = useCallback((providerProfileId: string) => {
     if (authStatus?.role !== 'user') return null
     const availableCodes = userUsageCodes.filter((code) => (
@@ -586,7 +657,7 @@ export default function InputBar() {
         ), 0)
     return {
       kind: 'total' as const,
-      text: remaining == null ? '总剩余不限' : `总剩余 ${remaining}`,
+      text: remaining == null ? '剩余不限' : `剩余 ${remaining}`,
     }
   }, [authStatus?.role, taskMode, userUsageCodes])
   const codeHasQuota = useCallback((code: {
@@ -637,7 +708,7 @@ export default function InputBar() {
     const unit = taskMode === 'video' ? '次' : '张'
     const remainingTotal = taskMode === 'video' ? code.remainingVideoCredits : code.remainingImageCredits
     if (remainingTotal != null && remainingTotal < quotaCost) {
-      return `当前使用码总额度不足，剩余 ${remainingTotal} ${unit}`
+      return `当前使用码额度不足，剩余 ${remainingTotal} ${unit}`
     }
     if (!activeProviderProfileId) {
       return '当前使用码额度不足'
@@ -660,7 +731,10 @@ export default function InputBar() {
       timeout: option.timeoutSeconds,
       codexCli: option.codexCli,
       grokApiCompat: option.grokApiCompat,
+      xaiImage2kEnabled: option.xaiImage2kEnabled,
       responseFormatB64Json: option.responseFormatB64Json,
+      videoMaxResolution: option.videoMaxResolution ?? '480p',
+      videoMaxDuration: option.videoMaxDuration ?? 6,
     })
   }, [])
 
@@ -791,6 +865,16 @@ export default function InputBar() {
       setVideoAspectRatio('auto')
     }
   }, [hasVideoReferenceImage, setVideoAspectRatio, videoAspectRatio])
+
+  useEffect(() => {
+    if (taskMode !== 'video') return
+    if (!allowedVideoResolutions.includes(videoResolution)) {
+      setVideoResolution(allowedVideoResolutions[allowedVideoResolutions.length - 1])
+    }
+    if (!allowedVideoDurations.includes(videoDuration)) {
+      setVideoDuration(allowedVideoDurations[allowedVideoDurations.length - 1])
+    }
+  }, [allowedVideoDurations, allowedVideoResolutions, setVideoDuration, setVideoResolution, taskMode, videoDuration, videoResolution])
 
   useEffect(() => {
     if (!selectedInputImageId) return
@@ -1627,6 +1711,22 @@ export default function InputBar() {
             <span className="text-gray-400 dark:text-gray-500">比例</span>
             <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
           </button>
+          {(canShowVideoResolutionControl || canShowVideoDurationControl) && (
+            <>
+              {canShowVideoResolutionControl && (
+              <button type="button" onClick={() => setMobileParamSheet('videoResolution')} className={mobileChipClass}>
+                <span className="text-gray-400 dark:text-gray-500">分辨率</span>
+                <span>{videoResolution}</span>
+              </button>
+              )}
+              {canShowVideoDurationControl && (
+              <button type="button" onClick={() => setMobileParamSheet('videoDuration')} className={mobileChipClass}>
+                <span className="text-gray-400 dark:text-gray-500">时长</span>
+                <span>{videoDuration}s</span>
+              </button>
+              )}
+            </>
+          )}
         </>
       ) : (
         <button type="button" onClick={() => setTaskMode('video')} className={mobileChipClass}>
@@ -1659,7 +1759,42 @@ export default function InputBar() {
 
   const renderMobileActionSheet = () => {
     if (!mobileParamSheet) return null
-    const configMap = {
+    if (mobileParamSheet === 'videoResolution' || mobileParamSheet === 'videoDuration') {
+      const isResolution = mobileParamSheet === 'videoResolution'
+      if ((isResolution && !canShowVideoResolutionControl) || (!isResolution && !canShowVideoDurationControl)) return null
+      const title = isResolution ? '视频分辨率' : '视频时长'
+      const labels = isResolution ? allowedVideoResolutions : allowedVideoDurationLabels
+      const value = isResolution ? videoResolution : String(videoDuration)
+      const suffix = isResolution ? '' : 's'
+      const onChange = (nextValue: string) => {
+        if (isResolution) {
+          setVideoResolution(nextValue as VideoTaskParams['resolution'])
+        } else {
+          setVideoDuration(Number(nextValue) as VideoTaskParams['duration'])
+        }
+      }
+      return (
+        <div className="fixed inset-0 z-[70]" onClick={() => setMobileParamSheet(null)}>
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-overlay-in" />
+          <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl bg-white dark:bg-gray-900 border-t border-gray-200/50 dark:border-white/[0.08] p-5 pb-safe animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-200">{title}</div>
+            <CompactSegmentedSlider
+              label={title}
+              value={value}
+              labels={labels}
+              suffix={suffix}
+              onChange={onChange}
+            />
+          </div>
+        </div>
+      )
+    }
+    const configMap: Record<Exclude<MobileParamSheet, 'videoResolution' | 'videoDuration'>, {
+      title: string
+      options: Array<{ label: string; value: string }>
+      value: string
+      onChange: (value: string) => void
+    }> = {
       quality: {
         title: '质量',
         options: [
@@ -1690,13 +1825,13 @@ export default function InputBar() {
         value: params.moderation,
         onChange: (value: string) => setParams({ moderation: value as any }),
       },
-    } as const
+    }
     const config = configMap[mobileParamSheet]
 
     return (
-      <div className="fixed inset-0 z-[70]" onMouseDown={() => setMobileParamSheet(null)} onTouchEnd={() => setMobileParamSheet(null)}>
+      <div className="fixed inset-0 z-[70]" onClick={() => setMobileParamSheet(null)}>
         <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-overlay-in" />
-        <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl bg-white dark:bg-gray-900 border-t border-gray-200/50 dark:border-white/[0.08] p-5 pb-safe animate-slide-up" onMouseDown={(e) => e.stopPropagation()} onTouchEnd={(e) => e.stopPropagation()}>
+        <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl bg-white dark:bg-gray-900 border-t border-gray-200/50 dark:border-white/[0.08] p-5 pb-safe animate-slide-up" onClick={(e) => e.stopPropagation()}>
           <div className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-200">{config.title}</div>
           <div className="flex flex-wrap gap-2">
             {config.options.map((option) => (
@@ -2060,14 +2195,37 @@ export default function InputBar() {
                   </button>
                 </div>
                 {taskMode === 'video' ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowVideoAspectPicker(true)}
-                    className="flex h-10 min-w-[104px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
-                  >
-                    <span className="text-gray-400 dark:text-gray-500">比例</span>
-                    <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setShowVideoAspectPicker(true)}
+                      className="flex h-10 min-w-[104px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                    >
+                      <span className="text-gray-400 dark:text-gray-500">比例</span>
+                      <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
+                    </button>
+                    {(canShowVideoResolutionControl || canShowVideoDurationControl) && (
+                      <>
+                        {canShowVideoResolutionControl && (
+                        <CompactSegmentedSlider
+                          label="分辨率"
+                          value={videoResolution}
+                          labels={allowedVideoResolutions}
+                          onChange={(value) => setVideoResolution(value as VideoTaskParams['resolution'])}
+                        />
+                        )}
+                        {canShowVideoDurationControl && (
+                        <CompactSegmentedSlider
+                          label="时长"
+                          value={String(videoDuration)}
+                          labels={allowedVideoDurationLabels}
+                          suffix="s"
+                          onChange={(value) => setVideoDuration(Number(value) as VideoTaskParams['duration'])}
+                        />
+                        )}
+                      </>
+                    )}
+                  </>
                 ) : (
                   <div
                     className="relative"

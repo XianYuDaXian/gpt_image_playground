@@ -16,6 +16,8 @@ export interface AppSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  videoMaxResolution?: '480p' | '720p'
+  videoMaxDuration?: 6 | 10 | 15
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
@@ -40,6 +42,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   grokApiCompat: false,
   xaiImage2kEnabled: false,
   responseFormatB64Json: false,
+  videoMaxResolution: '480p',
+  videoMaxDuration: 6,
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
   reuseTaskApiProfileTemporarily: false,
@@ -68,8 +72,8 @@ export const DEFAULT_PARAMS: TaskParams = {
 
 export interface VideoTaskParams {
   aspect_ratio: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-  resolution: '480p' | '720p' | '1080p'
-  duration: number
+  resolution: '480p' | '720p'
+  duration: 6 | 10 | 15
 }
 
 export const DEFAULT_VIDEO_PARAMS: VideoTaskParams = {
@@ -145,6 +149,7 @@ export interface TaskRecord {
     remainingImageCredits: number | null
     taskCount: number
     outputImageCount: number
+    providerOutputImageCount: number
   } | null
   reservedImageCredits?: number
   createdAt: number

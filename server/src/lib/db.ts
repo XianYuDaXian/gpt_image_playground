@@ -17,6 +17,8 @@ export interface ProviderProfileRecord {
   grokApiCompat: number
   xaiImage2kEnabled: number
   responseFormatB64Json: number
+  videoMaxResolution: '480p' | '720p'
+  videoMaxDuration: 6 | 10 | 15
   isDefault: number
   createdAt: string
   updatedAt: string
@@ -44,6 +46,7 @@ export interface TaskRecord {
   ownerUsageCodeUsedImageCredits: number | null
   ownerUsageCodeTaskCount: number | null
   ownerUsageCodeOutputImageCount: number | null
+  ownerUsageCodeProviderOutputImageCount: number | null
   reservedImageCredits: number
   createdAt: string
   updatedAt: string
@@ -82,6 +85,7 @@ export interface UsageCodeRecord {
   usedVideoCredits: number
   providerUsedVideoCredits: Record<string, number> | null
   outputImageCount: number
+  outputVideoCount: number
   createdAt: string
   updatedAt: string
   lastUsedAt: string | null
@@ -90,6 +94,7 @@ export interface UsageCodeRecord {
 export interface UsageCodeStatsRecord extends UsageCodeRecord {
   taskCount: number
   outputImageCount: number
+  outputVideoCount: number
   quotaEvents?: UsageQuotaEventRecord[]
 }
 
@@ -245,6 +250,7 @@ function selectUsageCodeFields() {
           used_video_credits as usedVideoCredits,
           provider_used_video_credits_json as providerUsedVideoCreditsJson,
           output_image_count as outputImageCount,
+          0 as outputVideoCount,
           created_at as createdAt,
           updated_at as updatedAt,
           last_used_at as lastUsedAt
@@ -299,6 +305,8 @@ export class AppDatabase {
         grok_api_compat INTEGER NOT NULL DEFAULT 0,
         xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0,
         response_format_b64_json INTEGER NOT NULL DEFAULT 0,
+        video_max_resolution TEXT NOT NULL DEFAULT '480p',
+        video_max_duration INTEGER NOT NULL DEFAULT 6,
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -482,6 +490,12 @@ export class AppDatabase {
     if (!profileColumnNames.has('xai_image_2k_enabled')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0')
     }
+    if (!profileColumnNames.has('video_max_resolution')) {
+      this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN video_max_resolution TEXT NOT NULL DEFAULT '480p'")
+    }
+    if (!profileColumnNames.has('video_max_duration')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN video_max_duration INTEGER NOT NULL DEFAULT 6')
+    }
     if (!profileColumnNames.has('tag_color')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN tag_color TEXT")
     }
@@ -610,6 +624,8 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -635,6 +651,8 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -660,6 +678,8 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -683,6 +703,8 @@ export class AppDatabase {
     grokApiCompat?: boolean
     xaiImage2kEnabled?: boolean
     responseFormatB64Json?: boolean
+    videoMaxResolution?: '480p' | '720p'
+    videoMaxDuration?: 6 | 10 | 15
     isDefault: boolean
   }) {
     const now = new Date().toISOString()
@@ -705,6 +727,8 @@ export class AppDatabase {
           grok_api_compat,
           xai_image_2k_enabled,
           response_format_b64_json,
+          video_max_resolution,
+          video_max_duration,
           is_default,
           created_at,
           updated_at
@@ -722,6 +746,8 @@ export class AppDatabase {
           @grokApiCompat,
           @xaiImage2kEnabled,
           @responseFormatB64Json,
+          @videoMaxResolution,
+          @videoMaxDuration,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -738,6 +764,8 @@ export class AppDatabase {
           grok_api_compat = excluded.grok_api_compat,
           xai_image_2k_enabled = excluded.xai_image_2k_enabled,
           response_format_b64_json = excluded.response_format_b64_json,
+          video_max_resolution = excluded.video_max_resolution,
+          video_max_duration = excluded.video_max_duration,
           is_default = excluded.is_default,
           updated_at = excluded.updated_at
       `).run({
@@ -747,6 +775,8 @@ export class AppDatabase {
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
         responseFormatB64Json: input.responseFormatB64Json ? 1 : 0,
+        videoMaxResolution: input.videoMaxResolution === '720p' ? '720p' : '480p',
+        videoMaxDuration: input.videoMaxDuration === 15 ? 15 : input.videoMaxDuration === 10 ? 10 : 6,
         isDefault: input.isDefault ? 1 : 0,
         createdAt: now,
         updatedAt: now,
@@ -1167,6 +1197,7 @@ ${selectUsageCodeFields()}
           usage_codes.used_video_credits as usedVideoCredits,
           usage_codes.provider_used_video_credits_json as providerUsedVideoCreditsJson,
           usage_codes.output_image_count as outputImageCount,
+          COALESCE(COUNT(DISTINCT video_task_images.id), 0) as outputVideoCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
@@ -1175,6 +1206,7 @@ ${selectUsageCodeFields()}
         FROM usage_codes
         LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
         LEFT JOIN task_images ON task_images.task_id = tasks.id AND task_images.kind = 'output'
+        LEFT JOIN task_images video_task_images ON video_task_images.task_id = tasks.id AND video_task_images.kind = 'video_output'
         GROUP BY usage_codes.id
         ORDER BY usage_codes.created_at DESC
       `)
@@ -1316,13 +1348,17 @@ ${selectUsageCodeFields()}
           usage_codes.used_video_credits as usedVideoCredits,
           usage_codes.provider_used_video_credits_json as providerUsedVideoCreditsJson,
           usage_codes.output_image_count as outputImageCount,
+          COALESCE(COUNT(DISTINCT video_task_images.id), 0) as outputVideoCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
           auth_session_usage_codes.created_at as sessionUsageCreatedAt
         FROM auth_session_usage_codes
         INNER JOIN usage_codes ON usage_codes.id = auth_session_usage_codes.usage_code_id
+        LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
+        LEFT JOIN task_images video_task_images ON video_task_images.task_id = tasks.id AND video_task_images.kind = 'video_output'
         WHERE auth_session_usage_codes.session_id = ?
+        GROUP BY usage_codes.id, auth_session_usage_codes.created_at
         ORDER BY auth_session_usage_codes.created_at ASC
       `)
       .all(sessionId) as Array<{
@@ -1379,20 +1415,10 @@ ${selectUsageCodeFields()}
       if (!code || !code.isEnabled) {
         throw new Error('使用码不可用')
       }
-      const remaining = code.imageQuota == null
-        ? null
-        : code.imageQuota - code.usedImageCredits
-      if (remaining != null && remaining < input.credits) {
-        throw new Error(`使用码剩余图片额度不足，当前剩余 ${Math.max(0, remaining)} 张`)
-      }
-      const providerQuota = code.providerImageQuotas
-        ? code.providerImageQuotas[input.providerProfileId] ?? 0
-        : null
+      const providerQuota = code.providerImageQuotas?.[input.providerProfileId] ?? 0
       const providerUsedCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
-      const providerRemaining = providerQuota == null
-        ? null
-        : providerQuota - providerUsedCredits
-      if (providerRemaining != null && providerRemaining < input.credits) {
+      const providerRemaining = providerQuota - providerUsedCredits
+      if (providerRemaining < input.credits) {
         throw new Error(`当前端点剩余图片额度不足，当前剩余 ${Math.max(0, providerRemaining)} 张`)
       }
 
@@ -1432,16 +1458,15 @@ ${selectUsageCodeFields()}
       return nextCode
         ? {
             usedImageCredits: nextCode.usedImageCredits,
-            remainingImageCredits: nextCode.imageQuota == null
-              ? null
-              : Math.max(0, nextCode.imageQuota - nextCode.usedImageCredits),
-            providerRemainingImageCredits: nextCode.providerImageQuotas?.[input.providerProfileId] == null
-              ? null
-              : Math.max(
-                  0,
-                  (nextCode.providerImageQuotas?.[input.providerProfileId] ?? 0)
-                  - (nextCode.providerUsedImageCredits?.[input.providerProfileId] ?? 0),
-                ),
+            remainingImageCredits: Object.entries(nextCode.providerImageQuotas ?? {}).reduce(
+              (sum, [providerProfileId, quota]) => sum + Math.max(0, quota - (nextCode.providerUsedImageCredits?.[providerProfileId] ?? 0)),
+              0,
+            ),
+            providerRemainingImageCredits: Math.max(
+              0,
+              (nextCode.providerImageQuotas?.[input.providerProfileId] ?? 0)
+              - (nextCode.providerUsedImageCredits?.[input.providerProfileId] ?? 0),
+            ),
           }
         : null
     })
@@ -1521,20 +1546,10 @@ ${selectUsageCodeFields()}
       if (!code || !code.isEnabled) {
         throw new Error('使用码不可用')
       }
-      const remaining = code.videoQuota == null
-        ? null
-        : code.videoQuota - code.usedVideoCredits
-      if (remaining != null && remaining < input.credits) {
-        throw new Error(`使用码剩余视频额度不足，当前剩余 ${Math.max(0, remaining)} 次`)
-      }
-      const providerQuota = code.providerVideoQuotas
-        ? code.providerVideoQuotas[input.providerProfileId] ?? 0
-        : null
+      const providerQuota = code.providerVideoQuotas?.[input.providerProfileId] ?? 0
       const providerUsedCredits = code.providerUsedVideoCredits?.[input.providerProfileId] ?? 0
-      const providerRemaining = providerQuota == null
-        ? null
-        : providerQuota - providerUsedCredits
-      if (providerRemaining != null && providerRemaining < input.credits) {
+      const providerRemaining = providerQuota - providerUsedCredits
+      if (providerRemaining < input.credits) {
         throw new Error(`当前端点剩余视频额度不足，当前剩余 ${Math.max(0, providerRemaining)} 次`)
       }
 
@@ -1574,16 +1589,15 @@ ${selectUsageCodeFields()}
       return nextCode
         ? {
             usedVideoCredits: nextCode.usedVideoCredits,
-            remainingVideoCredits: nextCode.videoQuota == null
-              ? null
-              : Math.max(0, nextCode.videoQuota - nextCode.usedVideoCredits),
-            providerRemainingVideoCredits: nextCode.providerVideoQuotas?.[input.providerProfileId] == null
-              ? null
-              : Math.max(
-                  0,
-                  (nextCode.providerVideoQuotas?.[input.providerProfileId] ?? 0)
-                  - (nextCode.providerUsedVideoCredits?.[input.providerProfileId] ?? 0),
-                ),
+            remainingVideoCredits: Object.entries(nextCode.providerVideoQuotas ?? {}).reduce(
+              (sum, [providerProfileId, quota]) => sum + Math.max(0, quota - (nextCode.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
+              0,
+            ),
+            providerRemainingVideoCredits: Math.max(
+              0,
+              (nextCode.providerVideoQuotas?.[input.providerProfileId] ?? 0)
+              - (nextCode.providerUsedVideoCredits?.[input.providerProfileId] ?? 0),
+            ),
           }
         : null
     })
@@ -1931,6 +1945,14 @@ ${selectUsageCodeFields()}
         FROM tasks owner_tasks
         WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
       ) as ownerUsageCodeTaskCount
+      ,
+      (
+        SELECT COUNT(task_images.id)
+        FROM tasks owner_tasks
+        INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'output'
+        WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
+          AND owner_tasks.provider_profile_id = tasks.provider_profile_id
+      ) as ownerUsageCodeProviderOutputImageCount
     `
   }
 
