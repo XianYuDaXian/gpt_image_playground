@@ -104,6 +104,7 @@ export interface TaskRecord {
   params: TaskParams | VideoTaskParams
   providerProfileId?: string | null
   providerProfileName?: string | null
+  providerProfileTagColor?: string | null
   providerProfileModel?: string | null
   /** 最近一次写入时间（ms） */
   updatedAt?: number

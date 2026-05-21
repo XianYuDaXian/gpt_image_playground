@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
-  adjustBackendUsageCodeQuota,
   createBackendProviderProfile,
   createBackendUsageCode,
   deleteBackendProviderProfile,
@@ -28,6 +27,7 @@ import { useStore, clearAllData, clearLocalTaskCache } from '../store'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import Select from './Select'
+import ProviderProfileTag from './ProviderProfileTag'
 
 type SettingsTab = 'habits' | 'api' | 'data' | 'distribution'
 
@@ -111,7 +111,10 @@ export default function SettingsModal() {
   const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>(null)
   const [newCodeProviderImageQuotas, setNewCodeProviderImageQuotas] = useState<Record<string, string>>({})
   const [latestPlainCode, setLatestPlainCode] = useState('')
-  const [usageCodeProviderRemainingDrafts, setUsageCodeProviderRemainingDrafts] = useState<Record<string, Record<string, string>>>({})
+  const [usageCodeImageTotalDrafts, setUsageCodeImageTotalDrafts] = useState<Record<string, string>>({})
+  const [usageCodeVideoTotalDrafts, setUsageCodeVideoTotalDrafts] = useState<Record<string, string>>({})
+  const [usageCodeProviderImageQuotaDrafts, setUsageCodeProviderImageQuotaDrafts] = useState<Record<string, Record<string, string>>>({})
+  const [usageCodeProviderVideoQuotaDrafts, setUsageCodeProviderVideoQuotaDrafts] = useState<Record<string, Record<string, string>>>({})
   const [usageCodeSearchQuery, setUsageCodeSearchQuery] = useState('')
   const [expandedUsageCodeIds, setExpandedUsageCodeIds] = useState<string[]>([])
   const [addCodeValue, setAddCodeValue] = useState('')
@@ -140,35 +143,42 @@ export default function SettingsModal() {
     )
   }, [usageCodeSearchQuery, usageCodes])
 
-  const normalizeProviderImageQuotaPatch = (value: Record<string, string | number> | null | undefined) => {
+  const calculateQuotaExpression = (rawValue: string, baseValue: number) => {
+    const value = rawValue.trim().replace(/\s+/g, '')
+    if (value === '') return null
+    if (!/^[+-]?\d+(?:[+-]\d+)*$/.test(value)) return undefined
+    const startsWithOperator = value.startsWith('+') || value.startsWith('-')
+    const matches = value.match(/[+-]?\d+/g) ?? []
+    const result = matches.reduce((sum, part) => sum + Number(part), startsWithOperator ? baseValue : 0)
+    if (!Number.isInteger(result) || result < 0) return undefined
+    return result
+  }
+
+  const calculateQuotaMap = (value: Record<string, string | number> | null | undefined) => {
     if (!value) return null
     const entries = Object.entries(value)
       .map(([providerProfileId, rawValue]) => {
-        const quota = typeof rawValue === 'number' ? rawValue : Number(rawValue)
-        if (!Number.isInteger(quota) || quota < 0) return null
+        const quota = typeof rawValue === 'number'
+          ? rawValue
+          : calculateQuotaExpression(rawValue, 0)
+        if (quota == null || !Number.isInteger(quota) || quota < 0) return null
         return [providerProfileId, quota] as const
       })
       .filter((item): item is readonly [string, number] => Boolean(item))
     return entries.length ? Object.fromEntries(entries) : null
   }
 
-  const getQuotaEditorProfiles = (allowedProviderProfileIds: string[] | null | undefined) => {
+  const getQuotaEditorProfiles = (
+    allowedProviderProfileIds: string[] | null | undefined,
+    quotaType: 'image' | 'video',
+  ) => {
     if (allowedProviderProfileIds?.length) {
-      return profiles.filter((profile) => allowedProviderProfileIds.includes(profile.id))
+      return profiles.filter((profile) =>
+        allowedProviderProfileIds.includes(profile.id)
+        && (quotaType === 'video' ? profile.apiMode === 'videos' : profile.apiMode !== 'videos'),
+      )
     }
-    return profiles
-  }
-
-  const sumProviderImageQuotas = (value: Record<string, string | number> | null | undefined) => {
-    const normalized = normalizeProviderImageQuotaPatch(value)
-    if (!normalized) return 0
-    return Object.values(normalized).reduce((sum, quota) => sum + quota, 0)
-  }
-
-  const sumProviderRemainingImageCredits = (value: Record<string, string | number> | null | undefined) => {
-    const normalized = normalizeProviderImageQuotaPatch(value)
-    if (!normalized) return 0
-    return Object.values(normalized).reduce((sum, quota) => sum + quota, 0)
+    return profiles.filter((profile) => (quotaType === 'video' ? profile.apiMode === 'videos' : profile.apiMode !== 'videos'))
   }
 
   const formatQuotaValue = (value: number | null | undefined) => {
@@ -177,67 +187,20 @@ export default function SettingsModal() {
     return String(value)
   }
 
+  const formatActivityEventTagText = (event: BackendUsageCode['activityEvents'][number]) => {
+    if (!event.providerProfileName || event.credits == null) return null
+    const isIncrease = event.eventType === 'admin_increase' || event.eventType === 'video_admin_increase' || event.eventType === 'refund' || event.eventType === 'video_refund'
+    const isDecrease = event.eventType === 'admin_decrease' || event.eventType === 'video_admin_decrease' || event.eventType === 'reserve' || event.eventType === 'video_reserve'
+    if (!isIncrease && !isDecrease) return null
+    return `${event.providerProfileName}：${isIncrease ? '+' : '-'}${event.credits}`
+  }
+
   const getAllowedProfileLabels = (allowedProviderProfileIds: string[] | null | undefined) => {
     if (!allowedProviderProfileIds?.length) return ['全部 API']
     const profileNames = allowedProviderProfileIds
       .map((id) => profiles.find((profile) => profile.id === id)?.name)
       .filter((name): name is string => Boolean(name))
     return profileNames.length ? profileNames : ['未匹配 API']
-  }
-
-  const syncProviderImageQuotasWithTotal = (
-    value: Record<string, string | number> | null | undefined,
-    totalQuota: number | null,
-    providerIds: string[],
-    preferredProviderProfileId?: string | null,
-  ) => {
-    const normalized = normalizeProviderImageQuotaPatch(value)
-    if (!normalized || providerIds.length === 0) {
-      return {
-        providerImageQuotas: normalized,
-        imageQuota: totalQuota,
-      }
-    }
-
-    if (totalQuota == null) {
-      return {
-        providerImageQuotas: normalized,
-        imageQuota: sumProviderImageQuotas(normalized),
-      }
-    }
-
-    const nextProviderImageQuotas = Object.fromEntries(
-      providerIds.map((providerProfileId) => [providerProfileId, normalized[providerProfileId] ?? 0]),
-    )
-    const currentTotal = Object.values(nextProviderImageQuotas).reduce((sum, quota) => sum + quota, 0)
-    let delta = totalQuota - currentTotal
-    const orderedProviderIds = [
-      ...(preferredProviderProfileId && providerIds.includes(preferredProviderProfileId) ? [preferredProviderProfileId] : []),
-      ...providerIds.filter((providerProfileId) => providerProfileId !== preferredProviderProfileId),
-    ]
-
-    if (delta > 0) {
-      const targetProviderProfileId = orderedProviderIds[0]
-      if (targetProviderProfileId) {
-        nextProviderImageQuotas[targetProviderProfileId] += delta
-      }
-    } else if (delta < 0) {
-      let remainingToSubtract = Math.abs(delta)
-      for (const providerProfileId of orderedProviderIds) {
-        if (remainingToSubtract <= 0) break
-        const currentQuota = nextProviderImageQuotas[providerProfileId] ?? 0
-        const subtractAmount = Math.min(currentQuota, remainingToSubtract)
-        nextProviderImageQuotas[providerProfileId] = currentQuota - subtractAmount
-        remainingToSubtract -= subtractAmount
-      }
-    }
-
-    const filteredEntries = Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota >= 0)
-    const nextNormalized = filteredEntries.length ? Object.fromEntries(filteredEntries) : null
-    return {
-      providerImageQuotas: nextNormalized,
-      imageQuota: filteredEntries.reduce((sum, [, quota]) => sum + quota, 0),
-    }
   }
 
   const loadSettings = async () => {
@@ -597,17 +560,22 @@ export default function SettingsModal() {
   }
 
   const handleCreateUsageCode = async () => {
-    const rawQuota = newCodeQuota.trim() ? Number(newCodeQuota) : null
-    const rawVideoQuota = newCodeVideoQuota.trim() ? Number(newCodeVideoQuota) : null
-    const createQuotaEditorProfiles = getQuotaEditorProfiles(newCodeAllowedProviderProfileIds)
-    const createProviderIds = createQuotaEditorProfiles.map((profile) => profile.id)
-    const syncedCreateQuotas = syncProviderImageQuotasWithTotal(
-      newCodeProviderImageQuotas,
-      rawQuota,
-      createProviderIds,
-      createProviderIds[0] ?? null,
-    )
-    const quota = syncedCreateQuotas.imageQuota
+    const rawQuota = calculateQuotaExpression(newCodeQuota, 0)
+    const rawVideoQuota = calculateQuotaExpression(newCodeVideoQuota, 0)
+    const providerImageQuotas = calculateQuotaMap(newCodeProviderImageQuotas)
+    if (rawQuota === undefined) {
+      useStore.getState().showToast('图片额度表达式无效', 'error')
+      return
+    }
+    if (rawVideoQuota === undefined) {
+      useStore.getState().showToast('视频额度表达式无效', 'error')
+      return
+    }
+    if (providerImageQuotas == null && Object.values(newCodeProviderImageQuotas).some((value) => value.trim() !== '')) {
+      useStore.getState().showToast('端点图片额度表达式无效', 'error')
+      return
+    }
+    const quota = providerImageQuotas ? null : rawQuota
     if (quota != null && (!Number.isInteger(quota) || quota < 0)) {
       useStore.getState().showToast('图片额度需要是非负整数', 'error')
       return
@@ -616,7 +584,6 @@ export default function SettingsModal() {
       useStore.getState().showToast('视频额度需要是非负整数', 'error')
       return
     }
-    const providerImageQuotas = syncedCreateQuotas.providerImageQuotas
     if (providerImageQuotas && Object.values(providerImageQuotas).some((item) => !Number.isInteger(item) || item < 0)) {
       useStore.getState().showToast('端点图片额度需要是非负整数', 'error')
       return
@@ -668,46 +635,35 @@ export default function SettingsModal() {
     }
   }
 
-  const handleAdjustUsageCodeQuota = async (
-    codeId: string,
-    action: 'increase' | 'decrease',
-    credits: number,
-    providerProfileId?: string | null,
-  ) => {
-    try {
-      const updated = await adjustBackendUsageCodeQuota(codeId, {
-        action,
-        credits,
-        providerProfileId: providerProfileId ?? null,
-      })
-      setUsageCodes((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
-    } catch (err) {
-      useStore.getState().showToast(
-        `调整额度失败：${err instanceof Error ? err.message : String(err)}`,
-        'error',
-      )
-    }
-  }
-
-  const handleSubmitProviderRemaining = async (
+  const handleSubmitProviderQuota = async (
     code: BackendUsageCode,
     providerProfileId: string,
+    quotaType: 'image' | 'video',
   ) => {
-    const draftValue = usageCodeProviderRemainingDrafts[code.id]?.[providerProfileId]
+    const draftState = quotaType === 'video' ? usageCodeProviderVideoQuotaDrafts : usageCodeProviderImageQuotaDrafts
+    const setDraftState = quotaType === 'video' ? setUsageCodeProviderVideoQuotaDrafts : setUsageCodeProviderImageQuotaDrafts
+    const draftValue = draftState[code.id]?.[providerProfileId]
     if (draftValue === undefined) return
 
     const trimmedValue = draftValue.trim()
-    const currentRemaining = code.providerRemainingImageCredits?.[providerProfileId] ?? null
-    const currentDisplayValue = currentRemaining == null ? '' : String(currentRemaining)
+    const currentQuota = quotaType === 'video'
+      ? code.providerVideoQuotas?.[providerProfileId] ?? null
+      : code.providerImageQuotas?.[providerProfileId] ?? null
+    const currentDisplayValue = currentQuota == null ? '' : String(currentQuota)
     if (trimmedValue === currentDisplayValue) return
 
     if (trimmedValue === '') {
-      const nextProviderImageQuotas = { ...(code.providerImageQuotas ?? {}) }
-      delete nextProviderImageQuotas[providerProfileId]
-      await handleUpdateUsageCode(code.id, {
-        providerImageQuotas: Object.keys(nextProviderImageQuotas).length ? nextProviderImageQuotas : null,
-      })
-      setUsageCodeProviderRemainingDrafts((prev) => ({
+      const nextProviderQuotas = {
+        ...(quotaType === 'video' ? code.providerVideoQuotas ?? {} : code.providerImageQuotas ?? {}),
+      }
+      delete nextProviderQuotas[providerProfileId]
+      await handleUpdateUsageCode(
+        code.id,
+        quotaType === 'video'
+          ? { providerVideoQuotas: Object.keys(nextProviderQuotas).length ? nextProviderQuotas : null }
+          : { providerImageQuotas: Object.keys(nextProviderQuotas).length ? nextProviderQuotas : null },
+      )
+      setDraftState((prev) => ({
         ...prev,
         [code.id]: {
           ...(prev[code.id] ?? {}),
@@ -717,10 +673,10 @@ export default function SettingsModal() {
       return
     }
 
-    const nextRemaining = Number(trimmedValue)
-    if (!Number.isInteger(nextRemaining) || nextRemaining < 0) {
-      useStore.getState().showToast('端点剩余额度需要是非负整数', 'error')
-      setUsageCodeProviderRemainingDrafts((prev) => ({
+    const nextQuota = calculateQuotaExpression(trimmedValue, currentQuota ?? 0)
+    if (nextQuota == null) {
+      useStore.getState().showToast(`端点${quotaType === 'video' ? '视频' : '图片'}额度表达式无效`, 'error')
+      setDraftState((prev) => ({
         ...prev,
         [code.id]: {
           ...(prev[code.id] ?? {}),
@@ -730,34 +686,60 @@ export default function SettingsModal() {
       return
     }
 
-    if (currentRemaining == null) {
-      if (nextRemaining === 0) {
-        setUsageCodeProviderRemainingDrafts((prev) => ({
-          ...prev,
-          [code.id]: {
-            ...(prev[code.id] ?? {}),
-            [providerProfileId]: '',
-          },
-        }))
-        return
-      }
-      await handleAdjustUsageCodeQuota(
-        code.id,
-        'increase',
-        nextRemaining,
-        providerProfileId,
-      )
+    const nextProviderQuotas = {
+      ...(quotaType === 'video' ? code.providerVideoQuotas ?? {} : code.providerImageQuotas ?? {}),
+      [providerProfileId]: nextQuota,
+    }
+    await handleUpdateUsageCode(
+      code.id,
+      quotaType === 'video'
+        ? { providerVideoQuotas: nextProviderQuotas }
+        : { providerImageQuotas: nextProviderQuotas },
+    )
+    setDraftState((prev) => ({
+      ...prev,
+      [code.id]: {
+        ...(prev[code.id] ?? {}),
+        [providerProfileId]: String(nextQuota),
+      },
+    }))
+  }
+
+  const handleSubmitTotalQuota = async (
+    code: BackendUsageCode,
+    quotaType: 'image' | 'video',
+  ) => {
+    const draftState = quotaType === 'video' ? usageCodeVideoTotalDrafts : usageCodeImageTotalDrafts
+    const setDraftState = quotaType === 'video' ? setUsageCodeVideoTotalDrafts : setUsageCodeImageTotalDrafts
+    const draftValue = draftState[code.id]
+    if (draftValue === undefined) return
+
+    const trimmedValue = draftValue.trim()
+    const currentRemaining = quotaType === 'video'
+      ? code.remainingVideoCredits
+      : code.remainingImageCredits
+    const currentDisplayValue = currentRemaining == null ? '' : String(currentRemaining)
+    if (trimmedValue === currentDisplayValue) return
+
+    if (trimmedValue === '') {
+      await handleUpdateUsageCode(code.id, quotaType === 'video'
+        ? { videoQuota: null, providerVideoQuotas: null }
+        : { imageQuota: null, providerImageQuotas: null })
+      setDraftState((prev) => ({ ...prev, [code.id]: '' }))
       return
     }
 
-    if (nextRemaining === currentRemaining) return
+    const nextRemaining = calculateQuotaExpression(trimmedValue, currentRemaining ?? 0)
+    if (nextRemaining == null) {
+      useStore.getState().showToast(`${quotaType === 'video' ? '视频' : '图片'}额度表达式无效`, 'error')
+      setDraftState((prev) => ({ ...prev, [code.id]: currentDisplayValue }))
+      return
+    }
 
-    await handleAdjustUsageCodeQuota(
-      code.id,
-      nextRemaining > currentRemaining ? 'increase' : 'decrease',
-      Math.abs(nextRemaining - currentRemaining),
-      providerProfileId,
-    )
+    await handleUpdateUsageCode(code.id, quotaType === 'video'
+      ? { videoQuota: code.usedVideoCredits + nextRemaining, providerVideoQuotas: null }
+      : { imageQuota: code.usedImageCredits + nextRemaining, providerImageQuotas: null })
+    setDraftState((prev) => ({ ...prev, [code.id]: String(nextRemaining) }))
   }
 
   const handleDeleteUsageCode = (code: BackendUsageCode) => {
@@ -865,7 +847,15 @@ export default function SettingsModal() {
                   value={draft.providerProfileId ?? providerOptions.find((option) => option.isDefault)?.id ?? ''}
                   onChange={(value) => updateDraft({ providerProfileId: String(value) })}
                   options={providerOptions.map((option) => ({
-                    label: `${option.isDefault ? '默认 · ' : ''}${option.name}`,
+                    label: (
+                      <ProviderProfileTag
+                        name={option.name}
+                        colorKey={option.id}
+                        tagColor={option.tagColor}
+                        apiMode={option.apiMode}
+                        isDefault={option.isDefault}
+                      />
+                    ),
                     value: option.id,
                   }))}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
@@ -949,7 +939,15 @@ export default function SettingsModal() {
                   }}
                   options={[
                     ...profiles.map((profile) => ({
-                      label: `${profile.isDefault ? '默认 · ' : ''}${profile.apiMode === 'videos' ? '视频 · ' : '图片 · '}${profile.name}`,
+                      label: (
+                        <ProviderProfileTag
+                          name={profile.name}
+                          colorKey={profile.id}
+                          tagColor={profile.tagColor}
+                          apiMode={profile.apiMode}
+                          isDefault={profile.isDefault}
+                        />
+                      ),
                       value: profile.id,
                     })),
                     { label: '新增 API 配置', value: '__new__' },
@@ -1157,17 +1155,37 @@ export default function SettingsModal() {
                   <input
                     value={newCodeQuota}
                     onChange={(event) => setNewCodeQuota(event.target.value)}
+                    onBlur={() => {
+                      const quota = calculateQuotaExpression(newCodeQuota, 0)
+                      if (quota === undefined) {
+                        useStore.getState().showToast('图片额度表达式无效', 'error')
+                        return
+                      }
+                      setNewCodeQuota(quota == null ? '' : String(quota))
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
                     placeholder="图片额度"
-                    type="number"
-                    min={0}
+                    inputMode="numeric"
                     className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                   />
                   <input
                     value={newCodeVideoQuota}
                     onChange={(event) => setNewCodeVideoQuota(event.target.value)}
+                    onBlur={() => {
+                      const quota = calculateQuotaExpression(newCodeVideoQuota, 0)
+                      if (quota === undefined) {
+                        useStore.getState().showToast('视频额度表达式无效', 'error')
+                        return
+                      }
+                      setNewCodeVideoQuota(quota == null ? '' : String(quota))
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
                     placeholder="视频额度"
-                    type="number"
-                    min={0}
+                    inputMode="numeric"
                     className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                   />
                   <button
@@ -1230,7 +1248,7 @@ export default function SettingsModal() {
                         </span>
                       </div>
                       <div className="space-y-2">
-                        {getQuotaEditorProfiles(newCodeAllowedProviderProfileIds).map((profile) => (
+                        {getQuotaEditorProfiles(newCodeAllowedProviderProfileIds, 'image').map((profile) => (
                           <label key={profile.id} className="flex items-center gap-3">
                             <span className="w-24 shrink-0 truncate text-xs text-gray-500 dark:text-gray-400">
                               {profile.name}
@@ -1244,11 +1262,22 @@ export default function SettingsModal() {
                                   [profile.id]: value,
                                 }
                                 setNewCodeProviderImageQuotas(nextProviderImageQuotas)
-                                const normalized = normalizeProviderImageQuotaPatch(nextProviderImageQuotas)
-                                setNewCodeQuota(normalized ? String(sumProviderImageQuotas(normalized)) : '')
                               }}
-                              type="number"
-                              min={0}
+                              onBlur={() => {
+                                const quota = calculateQuotaExpression(newCodeProviderImageQuotas[profile.id] ?? '', 0)
+                                if (quota === undefined) {
+                                  useStore.getState().showToast('端点图片额度表达式无效', 'error')
+                                  return
+                                }
+                                setNewCodeProviderImageQuotas((prev) => ({
+                                  ...prev,
+                                  [profile.id]: quota == null ? '' : String(quota),
+                                }))
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') event.currentTarget.blur()
+                              }}
+                              inputMode="numeric"
                               placeholder={newCodeProviderImageQuotas[profile.id] == null ? '继承总额度' : '0 表示禁用'}
                               className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
@@ -1271,7 +1300,10 @@ export default function SettingsModal() {
                   className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                 />
                 {filteredUsageCodes.map((code) => {
-                  const quotaEditorProfiles = getQuotaEditorProfiles(code.allowedProviderProfileIds)
+                  const imageQuotaEditorProfiles = getQuotaEditorProfiles(code.allowedProviderProfileIds, 'image')
+                  const videoQuotaEditorProfiles = getQuotaEditorProfiles(code.allowedProviderProfileIds, 'video')
+                  const hasImageProviderQuotas = Boolean(code.providerImageQuotas && Object.keys(code.providerImageQuotas).length)
+                  const hasVideoProviderQuotas = Boolean(code.providerVideoQuotas && Object.keys(code.providerVideoQuotas).length)
                   const isExpanded = expandedUsageCodeIds.includes(code.id)
                   return (
                     <div
@@ -1302,7 +1334,7 @@ export default function SettingsModal() {
                                 className="w-full rounded-lg bg-transparent pr-2 text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
                               />
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 图片剩余 {formatQuotaValue(code.remainingImageCredits)} · 视频剩余 {formatQuotaValue(code.remainingVideoCredits)}
+                                任务 {code.taskCount} · 总已生成图片 {code.outputImageCount} · 图片{code.providerImageQuotas && Object.keys(code.providerImageQuotas).length ? '按端点配置' : `剩余 ${formatQuotaValue(code.remainingImageCredits)}`} · 视频{code.providerVideoQuotas && Object.keys(code.providerVideoQuotas).length ? '按端点配置' : `剩余 ${formatQuotaValue(code.remainingVideoCredits)}`}
                               </p>
                               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                                 最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
@@ -1396,88 +1428,71 @@ export default function SettingsModal() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                   <span className="block text-xs text-gray-500 dark:text-gray-400">图片总额度</span>
                                   <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-                                    当前：{formatQuotaValue(code.remainingImageCredits)}
+                                    {hasImageProviderQuotas ? '当前：按端点配置' : `当前：${formatQuotaValue(code.remainingImageCredits)}`}
                                   </span>
                                 </div>
                                 <input
-                                  value={code.imageQuota == null ? '' : String(code.imageQuota)}
-                                  onChange={(event) => {
-                                    const value = event.target.value.trim()
-                                    const nextImageQuota = value === '' ? null : Math.max(0, Number(value) || 0)
-                                    setUsageCodes((prev) => prev.map((item) => item.id === code.id ? {
-                                      ...item,
-                                      imageQuota: nextImageQuota,
-                                      remainingImageCredits: nextImageQuota == null
-                                        ? null
-                                        : Math.max(0, nextImageQuota - item.usedImageCredits),
-                                    } : item))
+                                  value={hasImageProviderQuotas ? '' : usageCodeImageTotalDrafts[code.id] ?? (code.remainingImageCredits == null ? '' : String(code.remainingImageCredits))}
+                                  disabled={hasImageProviderQuotas}
+                                  onChange={(event) => setUsageCodeImageTotalDrafts((prev) => ({
+                                    ...prev,
+                                    [code.id]: event.target.value,
+                                  }))}
+                                  onBlur={() => void handleSubmitTotalQuota(code, 'image')}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') event.currentTarget.blur()
                                   }}
-                                  onBlur={(event) => {
-                                    const value = event.target.value.trim()
-                                    if (value === '') {
-                                      void handleUpdateUsageCode(code.id, { imageQuota: null })
-                                      return
-                                    }
-                                    const nextImageQuota = Number(value)
-                                    if (!Number.isInteger(nextImageQuota) || nextImageQuota < 0) {
-                                      useStore.getState().showToast('图片额度需要是非负整数', 'error')
-                                      return
-                                    }
-                                    void handleUpdateUsageCode(code.id, { imageQuota: nextImageQuota })
-                                  }}
-                                  type="number"
-                                  min={0}
-                                  placeholder="留空表示不限，0 表示禁用"
-                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                  inputMode="numeric"
+                                  placeholder={hasImageProviderQuotas ? '已按各图片端点单独配置' : '留空表示不限，0 表示禁用'}
+                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/[0.08] dark:bg-white/[0.03]"
                                 />
                               </div>
-                              {quotaEditorProfiles.length > 0 && (
+                              {imageQuotaEditorProfiles.length > 0 && (
                                 <div className="mt-3">
                                   <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="block text-xs text-gray-500 dark:text-gray-400">端点图片额度</span>
                                     <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-                                      总剩余：{formatQuotaValue(code.remainingImageCredits)}
+                                      {hasImageProviderQuotas ? '当前：单独配置' : `当前：共享总额度 ${formatQuotaValue(code.remainingImageCredits)}`}
                                     </span>
                                   </div>
                                   <div className="space-y-2">
-                                    {quotaEditorProfiles.map((profile) => {
+                                    {imageQuotaEditorProfiles.map((profile) => {
                                       const hasProviderLimit = code.providerImageQuotas?.[profile.id] != null
-                                      const providerQuotaValue = usageCodeProviderRemainingDrafts[code.id]?.[profile.id]
-                                        ?? (!hasProviderLimit || code.providerRemainingImageCredits?.[profile.id] == null
+                                      const providerQuotaValue = usageCodeProviderImageQuotaDrafts[code.id]?.[profile.id]
+                                        ?? (!hasProviderLimit || code.providerImageQuotas?.[profile.id] == null
                                           ? ''
-                                          : String(code.providerRemainingImageCredits[profile.id]))
-                                      const providerRemaining = hasProviderLimit
-                                        ? code.providerRemainingImageCredits?.[profile.id] ?? null
-                                        : null
+                                          : String(code.providerImageQuotas[profile.id]))
                                       return (
                                         <label key={profile.id} className="block">
                                           <div className="mb-1 flex items-center justify-between gap-3">
                                             <span className="truncate text-xs text-gray-500 dark:text-gray-400">{profile.name}</span>
                                             <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-                                              {hasProviderLimit ? `单独限制：${formatQuotaValue(providerRemaining)}` : `继承总额度：${formatQuotaValue(code.remainingImageCredits)}`}
+                                              {hasProviderLimit ? `单独额度：${formatQuotaValue(code.providerImageQuotas?.[profile.id] ?? null)}` : `根据图片总额度：${formatQuotaValue(code.remainingImageCredits)}`}
                                             </span>
                                           </div>
                                           <input
                                             value={providerQuotaValue}
-                                            onChange={(event) => setUsageCodeProviderRemainingDrafts((prev) => ({
+                                            onChange={(event) => setUsageCodeProviderImageQuotaDrafts((prev) => ({
                                               ...prev,
                                               [code.id]: {
                                                 ...(prev[code.id] ?? {}),
                                                 [profile.id]: event.target.value,
                                               },
                                             }))}
-                                            onBlur={() => void handleSubmitProviderRemaining(code, profile.id)}
-                                            type="number"
-                                            min={0}
+                                            onBlur={() => void handleSubmitProviderQuota(code, profile.id, 'image')}
+                                            onKeyDown={(event) => {
+                                              if (event.key === 'Enter') event.currentTarget.blur()
+                                            }}
+                                            inputMode="numeric"
                                             className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
-                                            placeholder="留空继承总额度，0 表示禁用"
+                                            placeholder="留空表示根据图片总额度，0 表示禁用"
                                           />
                                         </label>
                                       )
                                     })}
                                   </div>
                                   <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                                    填写端点额度后，该 API 使用自己的剩余量。留空时，该 API 共享总图片额度。
+                                    一旦填写任一图片端点额度，图片总额度即失效。清空全部图片端点额度后，可重新使用图片总额度。
                                   </p>
                                 </div>
                               )}
@@ -1485,48 +1500,94 @@ export default function SettingsModal() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                   <span className="block text-xs text-gray-500 dark:text-gray-400">视频总额度</span>
                                   <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
-                                    当前：{formatQuotaValue(code.remainingVideoCredits)}
+                                    {hasVideoProviderQuotas ? '当前：按端点配置' : `当前：${formatQuotaValue(code.remainingVideoCredits)}`}
                                   </span>
                                 </div>
                                 <input
-                                  value={code.videoQuota == null ? '' : String(code.videoQuota)}
-                                  onChange={(event) => {
-                                    const value = event.target.value.trim()
-                                    const nextVideoQuota = value === '' ? null : Math.max(0, Number(value) || 0)
-                                    setUsageCodes((prev) => prev.map((item) => item.id === code.id ? {
-                                      ...item,
-                                      videoQuota: nextVideoQuota,
-                                      remainingVideoCredits: nextVideoQuota == null
-                                        ? null
-                                        : Math.max(0, nextVideoQuota - item.usedVideoCredits),
-                                    } : item))
+                                  value={hasVideoProviderQuotas ? '' : usageCodeVideoTotalDrafts[code.id] ?? (code.remainingVideoCredits == null ? '' : String(code.remainingVideoCredits))}
+                                  disabled={hasVideoProviderQuotas}
+                                  onChange={(event) => setUsageCodeVideoTotalDrafts((prev) => ({
+                                    ...prev,
+                                    [code.id]: event.target.value,
+                                  }))}
+                                  onBlur={() => void handleSubmitTotalQuota(code, 'video')}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') event.currentTarget.blur()
                                   }}
-                                  onBlur={(event) => {
-                                    const value = event.target.value.trim()
-                                    if (value === '') {
-                                      void handleUpdateUsageCode(code.id, { videoQuota: null })
-                                      return
-                                    }
-                                    const nextVideoQuota = Number(value)
-                                  if (!Number.isInteger(nextVideoQuota) || nextVideoQuota < 0) {
-                                      useStore.getState().showToast('视频额度需要是非负整数', 'error')
-                                      return
-                                    }
-                                    void handleUpdateUsageCode(code.id, { videoQuota: nextVideoQuota })
-                                  }}
-                                  type="number"
-                                  min={0}
-                                  placeholder="留空表示不限，0 表示禁用"
-                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                  inputMode="numeric"
+                                  placeholder={hasVideoProviderQuotas ? '已按各视频端点单独配置' : '留空表示不限，0 表示禁用'}
+                                  className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:border-white/[0.08] dark:bg-white/[0.03]"
                                 />
                               </div>
+                              {videoQuotaEditorProfiles.length > 0 && (
+                                <div className="mt-3">
+                                  <div className="mb-2 flex items-center justify-between gap-3">
+                                    <span className="block text-xs text-gray-500 dark:text-gray-400">端点视频额度</span>
+                                    <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                      {hasVideoProviderQuotas ? '当前：单独配置' : `当前：共享总额度 ${formatQuotaValue(code.remainingVideoCredits)}`}
+                                    </span>
+                                  </div>
+                                  <div className="space-y-2">
+                                    {videoQuotaEditorProfiles.map((profile) => {
+                                      const hasProviderLimit = code.providerVideoQuotas?.[profile.id] != null
+                                      const providerQuotaValue = usageCodeProviderVideoQuotaDrafts[code.id]?.[profile.id]
+                                        ?? (!hasProviderLimit || code.providerVideoQuotas?.[profile.id] == null
+                                          ? ''
+                                          : String(code.providerVideoQuotas[profile.id]))
+                                      return (
+                                        <label key={profile.id} className="block">
+                                          <div className="mb-1 flex items-center justify-between gap-3">
+                                            <span className="truncate text-xs text-gray-500 dark:text-gray-400">{profile.name}</span>
+                                            <span className="shrink-0 text-[11px] text-gray-400 dark:text-gray-500">
+                                              {hasProviderLimit ? `单独额度：${formatQuotaValue(code.providerVideoQuotas?.[profile.id] ?? null)}` : `根据视频总额度：${formatQuotaValue(code.remainingVideoCredits)}`}
+                                            </span>
+                                          </div>
+                                          <input
+                                            value={providerQuotaValue}
+                                            onChange={(event) => setUsageCodeProviderVideoQuotaDrafts((prev) => ({
+                                              ...prev,
+                                              [code.id]: {
+                                                ...(prev[code.id] ?? {}),
+                                                [profile.id]: event.target.value,
+                                              },
+                                            }))}
+                                            onBlur={() => void handleSubmitProviderQuota(code, profile.id, 'video')}
+                                            onKeyDown={(event) => {
+                                              if (event.key === 'Enter') event.currentTarget.blur()
+                                            }}
+                                            inputMode="numeric"
+                                            className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                            placeholder="留空表示根据视频总额度，0 表示禁用"
+                                          />
+                                        </label>
+                                      )
+                                    })}
+                                  </div>
+                                  <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                                    一旦填写任一视频端点额度，视频总额度即失效。清空全部视频端点额度后，可重新使用视频总额度。
+                                  </p>
+                                </div>
+                              )}
                               {code.activityEvents.length > 0 && (
                                 <div className="mt-4">
                                   <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">行为记录</span>
                                   <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200/70 bg-white/40 p-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
                                     {code.activityEvents.map((event) => (
                                       <div key={event.id} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
-                                        <div className="text-gray-800 dark:text-gray-100">{event.label}</div>
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div className="min-w-0 flex-1 text-gray-800 dark:text-gray-100">{event.label}</div>
+                                          {event.providerProfileName && (
+                                            <ProviderProfileTag
+                                              name={event.providerProfileName}
+                                              colorKey={event.providerProfileId ?? event.providerProfileName}
+                                              tagColor={event.providerProfileTagColor}
+                                              text={formatActivityEventTagText(event) ?? event.providerProfileName}
+                                              includeMode={false}
+                                              includeDefault={false}
+                                              className="max-w-[8.5rem] shrink-0"
+                                            />
+                                          )}
+                                        </div>
                                         <div className="mt-1 text-gray-400 dark:text-gray-500">
                                           {new Date(event.createdAt).toLocaleString('zh-CN')}
                                           {event.taskId ? ` · 任务 ${event.taskId}` : ''}

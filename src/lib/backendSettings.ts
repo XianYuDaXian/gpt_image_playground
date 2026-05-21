@@ -25,6 +25,7 @@ export interface BackendRuntimeSettings {
 export interface BackendProviderProfile {
   id: string
   name: string
+  tagColor?: string | null
   baseUrl: string
   apiKey?: string
   apiKeyMasked?: string | null
@@ -44,6 +45,7 @@ export interface BackendProviderProfile {
 export interface BackendProviderOption {
   id: string
   name: string
+  tagColor?: string | null
   apiMode: AppSettings['apiMode']
   model: string
   timeoutSeconds: number
@@ -89,6 +91,8 @@ export interface BackendUsageCode {
     reason: string | null
     providerProfileId: string | null
     providerProfileName: string | null
+    providerProfileTagColor?: string | null
+    providerProfileApiMode?: AppSettings['apiMode'] | null
     createdAt: string
     label: string
   }>
@@ -97,6 +101,11 @@ export interface BackendUsageCode {
     taskId: string | null
     createdAt: string
     label: string
+    eventType?: string | null
+    credits?: number | null
+    providerProfileId?: string | null
+    providerProfileName?: string | null
+    providerProfileTagColor?: string | null
   }>
   createdAt: string
   updatedAt: string

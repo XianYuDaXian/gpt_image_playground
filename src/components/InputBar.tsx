@@ -20,6 +20,7 @@ import { useHintTooltip } from '../hooks/useHintTooltip'
 import { useKeyboardVisible } from '../hooks/useKeyboardVisible'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
+import ProviderProfileTag from './ProviderProfileTag'
 import SizePickerModal from './SizePickerModal'
 import VideoAspectModal from './VideoAspectModal'
 
@@ -542,17 +543,19 @@ export default function InputBar() {
     }
     const hasSplitQuota = availableCodes.some((code) => (
       taskMode === 'video'
-        ? code.providerVideoQuotas?.[providerProfileId] != null
-        : code.providerImageQuotas?.[providerProfileId] != null
+        ? Boolean(code.providerVideoQuotas)
+        : Boolean(code.providerImageQuotas)
     ))
     if (hasSplitQuota) {
       const hasUnlimited = availableCodes.some((code) => {
         if (taskMode === 'video') {
+          if (code.providerVideoQuotas) return false
           if (code.providerVideoQuotas?.[providerProfileId] != null) {
             return code.providerRemainingVideoCredits?.[providerProfileId] == null
           }
           return code.remainingVideoCredits == null
         }
+        if (code.providerImageQuotas) return false
         if (code.providerImageQuotas?.[providerProfileId] != null) {
           return code.providerRemainingImageCredits?.[providerProfileId] == null
         }
@@ -562,14 +565,10 @@ export default function InputBar() {
         ? null
         : availableCodes.reduce((sum, code) => {
             if (taskMode === 'video') {
-              if (code.providerVideoQuotas?.[providerProfileId] != null) {
-                return sum + (code.providerRemainingVideoCredits?.[providerProfileId] ?? 0)
-              }
+              if (code.providerVideoQuotas) return sum + (code.providerRemainingVideoCredits?.[providerProfileId] ?? 0)
               return sum + (code.remainingVideoCredits ?? 0)
             }
-            if (code.providerImageQuotas?.[providerProfileId] != null) {
-              return sum + (code.providerRemainingImageCredits?.[providerProfileId] ?? 0)
-            }
+            if (code.providerImageQuotas) return sum + (code.providerRemainingImageCredits?.[providerProfileId] ?? 0)
             return sum + (code.remainingImageCredits ?? 0)
           }, 0)
       return {
@@ -594,8 +593,10 @@ export default function InputBar() {
     allowedProviderProfileIds?: string[] | null
     remainingImageCredits: number | null
     providerRemainingImageCredits?: Record<string, number> | null
+    providerImageQuotas?: Record<string, number> | null
     remainingVideoCredits?: number | null
     providerRemainingVideoCredits?: Record<string, number> | null
+    providerVideoQuotas?: Record<string, number> | null
   }) => {
     if (
       activeProviderProfileId
@@ -612,8 +613,8 @@ export default function InputBar() {
       return true
     }
     const providerRemaining = taskMode === 'video'
-      ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
-      : code.providerRemainingImageCredits?.[activeProviderProfileId]
+      ? code.providerVideoQuotas ? code.providerRemainingVideoCredits?.[activeProviderProfileId] ?? 0 : code.providerRemainingVideoCredits?.[activeProviderProfileId]
+      : code.providerImageQuotas ? code.providerRemainingImageCredits?.[activeProviderProfileId] ?? 0 : code.providerRemainingImageCredits?.[activeProviderProfileId]
     return providerRemaining == null || providerRemaining >= quotaCost
   }, [activeProviderProfileId, quotaCost, taskMode])
 
@@ -621,8 +622,10 @@ export default function InputBar() {
     allowedProviderProfileIds?: string[] | null
     remainingImageCredits: number | null
     providerRemainingImageCredits?: Record<string, number> | null
+    providerImageQuotas?: Record<string, number> | null
     remainingVideoCredits?: number | null
     providerRemainingVideoCredits?: Record<string, number> | null
+    providerVideoQuotas?: Record<string, number> | null
   }) => {
     if (
       activeProviderProfileId
@@ -640,8 +643,8 @@ export default function InputBar() {
       return '当前使用码额度不足'
     }
     const providerRemaining = taskMode === 'video'
-      ? code.providerRemainingVideoCredits?.[activeProviderProfileId]
-      : code.providerRemainingImageCredits?.[activeProviderProfileId]
+      ? code.providerVideoQuotas ? code.providerRemainingVideoCredits?.[activeProviderProfileId] ?? 0 : code.providerRemainingVideoCredits?.[activeProviderProfileId]
+      : code.providerImageQuotas ? code.providerRemainingImageCredits?.[activeProviderProfileId] ?? 0 : code.providerRemainingImageCredits?.[activeProviderProfileId]
     if (providerRemaining != null && providerRemaining < quotaCost) {
       return `${activeProviderOption?.name ?? '当前端点'}额度不足，剩余 ${providerRemaining} ${unit}`
     }
@@ -1235,7 +1238,15 @@ export default function InputBar() {
             applyProviderOption(nextOption)
           }}
           options={modeProviderOptions.map((option) => ({
-            label: option.name,
+            label: (
+              <ProviderProfileTag
+                name={option.name}
+                colorKey={option.id}
+                tagColor={option.tagColor}
+                includeMode={false}
+                includeDefault={false}
+              />
+            ),
             value: option.id,
           }))}
           className="h-10 rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"

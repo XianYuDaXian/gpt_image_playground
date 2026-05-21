@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
@@ -6,6 +7,7 @@ import type { TaskEventRecord } from './eventBus.js'
 export interface ProviderProfileRecord {
   id: string
   name: string
+  tagColor: string | null
   baseUrl: string
   apiKeyEncrypted: string
   model: string
@@ -100,6 +102,8 @@ export interface UsageQuotaEventRecord {
   reason: string | null
   providerProfileId: string | null
   providerProfileName: string | null
+  providerProfileTagColor: string | null
+  providerProfileApiMode: 'images' | 'responses' | 'videos' | null
   createdAt: string
 }
 
@@ -188,6 +192,42 @@ function stringifyProviderImageQuotaMap(value: Record<string, number> | null | u
   return JSON.stringify(Object.fromEntries(entries))
 }
 
+function quotaMapsEqual(
+  left: Record<string, number> | null | undefined,
+  right: Record<string, number> | null | undefined,
+) {
+  const leftEntries = Object.entries(left ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  const rightEntries = Object.entries(right ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  if (leftEntries.length !== rightEntries.length) return false
+  return leftEntries.every(([key, value], index) => {
+    const [rightKey, rightValue] = rightEntries[index] ?? []
+    return key === rightKey && value === rightValue
+  })
+}
+
+function sumQuotaMap(value: Record<string, number> | null | undefined) {
+  return Object.values(value ?? {}).reduce((sum, quota) => sum + quota, 0)
+}
+
+const PROVIDER_TAG_COLORS = [
+  'rose',
+  'orange',
+  'amber',
+  'lime',
+  'emerald',
+  'cyan',
+  'sky',
+  'blue',
+  'violet',
+  'fuchsia',
+] as const
+
+type ProviderTagColor = (typeof PROVIDER_TAG_COLORS)[number]
+
+function isProviderTagColor(value: string | null | undefined): value is ProviderTagColor {
+  return PROVIDER_TAG_COLORS.includes(value as ProviderTagColor)
+}
+
 function selectUsageCodeFields() {
   return `
           id,
@@ -249,6 +289,7 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS provider_profiles (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        tag_color TEXT,
         base_url TEXT NOT NULL,
         api_key_encrypted TEXT NOT NULL,
         model TEXT NOT NULL,
@@ -441,6 +482,10 @@ export class AppDatabase {
     if (!profileColumnNames.has('xai_image_2k_enabled')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0')
     }
+    if (!profileColumnNames.has('tag_color')) {
+      this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN tag_color TEXT")
+    }
+    this.assignMissingProviderTagColors()
     const usageCodeColumns = this.sqlite.prepare('PRAGMA table_info(usage_codes)').all() as Array<{ name: string }>
     const usageCodeColumnNames = new Set(usageCodeColumns.map((column) => column.name))
     if (!usageCodeColumnNames.has('code_encrypted')) {
@@ -491,12 +536,71 @@ export class AppDatabase {
     }
   }
 
+  private assignMissingProviderTagColors() {
+    const rows = this.sqlite.prepare(`
+      SELECT id, tag_color as tagColor
+      FROM provider_profiles
+      ORDER BY created_at ASC, id ASC
+    `).all() as Array<{ id: string; tagColor: string | null }>
+    if (!rows.length) return
+    const usedCounts = new Map<ProviderTagColor, number>()
+    for (const color of PROVIDER_TAG_COLORS) {
+      usedCounts.set(color, 0)
+    }
+    for (const row of rows) {
+      if (!isProviderTagColor(row.tagColor)) continue
+      usedCounts.set(row.tagColor, (usedCounts.get(row.tagColor) ?? 0) + 1)
+    }
+    const update = this.sqlite.prepare(`
+      UPDATE provider_profiles
+      SET tag_color = ?, updated_at = ?
+      WHERE id = ?
+    `)
+    const now = new Date().toISOString()
+    for (const row of rows) {
+      if (isProviderTagColor(row.tagColor)) continue
+      const minCount = Math.min(...PROVIDER_TAG_COLORS.map((color) => usedCounts.get(color) ?? 0))
+      const candidates = PROVIDER_TAG_COLORS.filter((color) => (usedCounts.get(color) ?? 0) === minCount)
+      const color = candidates[crypto.randomInt(candidates.length)] ?? PROVIDER_TAG_COLORS[0]
+      update.run(color, now, row.id)
+      usedCounts.set(color, (usedCounts.get(color) ?? 0) + 1)
+    }
+  }
+
+  private resolveProviderTagColor(inputColor: string | null | undefined, providerProfileId: string) {
+    if (isProviderTagColor(inputColor)) return inputColor
+    const current = this.sqlite.prepare(`
+      SELECT tag_color as tagColor
+      FROM provider_profiles
+      WHERE id = ?
+      LIMIT 1
+    `).get(providerProfileId) as { tagColor: string | null } | undefined
+    if (isProviderTagColor(current?.tagColor)) return current.tagColor
+    const rows = this.sqlite.prepare(`
+      SELECT tag_color as tagColor
+      FROM provider_profiles
+      WHERE id <> ?
+    `).all(providerProfileId) as Array<{ tagColor: string | null }>
+    const usedCounts = new Map<ProviderTagColor, number>()
+    for (const color of PROVIDER_TAG_COLORS) {
+      usedCounts.set(color, 0)
+    }
+    for (const row of rows) {
+      if (!isProviderTagColor(row.tagColor)) continue
+      usedCounts.set(row.tagColor, (usedCounts.get(row.tagColor) ?? 0) + 1)
+    }
+    const minCount = Math.min(...PROVIDER_TAG_COLORS.map((color) => usedCounts.get(color) ?? 0))
+    const candidates = PROVIDER_TAG_COLORS.filter((color) => (usedCounts.get(color) ?? 0) === minCount)
+    return candidates[crypto.randomInt(candidates.length)] ?? PROVIDER_TAG_COLORS[0]
+  }
+
   listProviderProfiles() {
     return this.sqlite
       .prepare(`
         SELECT
           id,
           name,
+          tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
@@ -521,6 +625,7 @@ export class AppDatabase {
         SELECT
           id,
           name,
+          tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
@@ -545,6 +650,7 @@ export class AppDatabase {
         SELECT
           id,
           name,
+          tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
@@ -567,6 +673,7 @@ export class AppDatabase {
   upsertProviderProfile(input: {
     id: string
     name: string
+    tagColor?: string | null
     baseUrl: string
     apiKeyEncrypted: string
     model: string
@@ -588,6 +695,7 @@ export class AppDatabase {
         INSERT INTO provider_profiles (
           id,
           name,
+          tag_color,
           base_url,
           api_key_encrypted,
           model,
@@ -604,6 +712,7 @@ export class AppDatabase {
         VALUES (
           @id,
           @name,
+          @tagColor,
           @baseUrl,
           @apiKeyEncrypted,
           @model,
@@ -619,6 +728,7 @@ export class AppDatabase {
         )
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
+          tag_color = excluded.tag_color,
           base_url = excluded.base_url,
           api_key_encrypted = excluded.api_key_encrypted,
           model = excluded.model,
@@ -632,6 +742,7 @@ export class AppDatabase {
           updated_at = excluded.updated_at
       `).run({
         ...input,
+        tagColor: this.resolveProviderTagColor(input.tagColor, input.id),
         codexCli: input.codexCli ? 1 : 0,
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
@@ -815,8 +926,26 @@ ${selectUsageCodeFields()}
     const current = this.getUsageCode(input.id)
     if (!current) return null
     const now = new Date().toISOString()
-    const nextImageQuota = input.imageQuota === undefined ? current.imageQuota : input.imageQuota
-    const nextVideoQuota = input.videoQuota === undefined ? current.videoQuota : input.videoQuota
+    const nextProviderImageQuotas = input.imageQuota !== undefined
+      ? null
+      : input.providerImageQuotas === undefined
+        ? current.providerImageQuotas
+        : input.providerImageQuotas
+    const nextImageQuota = input.imageQuota !== undefined
+      ? input.imageQuota
+      : input.providerImageQuotas !== undefined
+        ? null
+        : current.imageQuota
+    const nextProviderVideoQuotas = input.videoQuota !== undefined
+      ? null
+      : input.providerVideoQuotas === undefined
+        ? current.providerVideoQuotas
+        : input.providerVideoQuotas
+    const nextVideoQuota = input.videoQuota !== undefined
+      ? input.videoQuota
+      : input.providerVideoQuotas !== undefined
+        ? null
+        : current.videoQuota
     this.sqlite.prepare(`
       UPDATE usage_codes
       SET
@@ -836,13 +965,9 @@ ${selectUsageCodeFields()}
         : stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
       input.isEnabled == null ? current.isEnabled : input.isEnabled ? 1 : 0,
       nextImageQuota,
-      input.providerImageQuotas === undefined
-        ? stringifyProviderImageQuotaMap(current.providerImageQuotas)
-        : stringifyProviderImageQuotaMap(input.providerImageQuotas),
+      stringifyProviderImageQuotaMap(nextProviderImageQuotas),
       nextVideoQuota,
-      input.providerVideoQuotas === undefined
-        ? stringifyProviderImageQuotaMap(current.providerVideoQuotas)
-        : stringifyProviderImageQuotaMap(input.providerVideoQuotas),
+      stringifyProviderImageQuotaMap(nextProviderVideoQuotas),
       now,
       input.id,
     )
@@ -852,13 +977,32 @@ ${selectUsageCodeFields()}
       && nextImageQuota != null
       && current.imageQuota !== nextImageQuota
     ) {
-      this.insertUsageQuotaEvent({
-        usageCodeId: input.id,
-        eventType: nextImageQuota > current.imageQuota ? 'admin_increase' : 'admin_decrease',
-        credits: Math.abs(nextImageQuota - current.imageQuota),
-        reason: 'admin_adjust_total',
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.id,
+          eventType: nextImageQuota > current.imageQuota ? 'admin_increase' : 'admin_decrease',
+          credits: Math.abs(nextImageQuota - current.imageQuota),
+          reason: 'admin_adjust_total',
         createdAt: now,
       })
+    }
+    if (input.providerImageQuotas !== undefined && !quotaMapsEqual(current.providerImageQuotas, nextProviderImageQuotas)) {
+      const changedProviderIds = Array.from(new Set([
+        ...Object.keys(current.providerImageQuotas ?? {}),
+        ...Object.keys(nextProviderImageQuotas ?? {}),
+      ]))
+      for (const providerProfileId of changedProviderIds) {
+        const previousQuota = current.providerImageQuotas?.[providerProfileId] ?? 0
+        const nextQuota = nextProviderImageQuotas?.[providerProfileId] ?? 0
+        if (previousQuota === nextQuota) continue
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.id,
+          eventType: nextQuota > previousQuota ? 'admin_increase' : 'admin_decrease',
+          credits: Math.abs(nextQuota - previousQuota),
+          reason: 'admin_adjust_provider',
+          providerProfileId,
+          createdAt: now,
+        })
+      }
     }
     if (
       input.videoQuota !== undefined
@@ -866,13 +1010,32 @@ ${selectUsageCodeFields()}
       && nextVideoQuota != null
       && current.videoQuota !== nextVideoQuota
     ) {
-      this.insertUsageQuotaEvent({
-        usageCodeId: input.id,
-        eventType: nextVideoQuota > current.videoQuota ? 'video_admin_increase' : 'video_admin_decrease',
-        credits: Math.abs(nextVideoQuota - current.videoQuota),
-        reason: 'admin_adjust_total',
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.id,
+          eventType: nextVideoQuota > current.videoQuota ? 'video_admin_increase' : 'video_admin_decrease',
+          credits: Math.abs(nextVideoQuota - current.videoQuota),
+          reason: 'admin_adjust_total',
         createdAt: now,
       })
+    }
+    if (input.providerVideoQuotas !== undefined && !quotaMapsEqual(current.providerVideoQuotas, nextProviderVideoQuotas)) {
+      const changedProviderIds = Array.from(new Set([
+        ...Object.keys(current.providerVideoQuotas ?? {}),
+        ...Object.keys(nextProviderVideoQuotas ?? {}),
+      ]))
+      for (const providerProfileId of changedProviderIds) {
+        const previousQuota = current.providerVideoQuotas?.[providerProfileId] ?? 0
+        const nextQuota = nextProviderVideoQuotas?.[providerProfileId] ?? 0
+        if (previousQuota === nextQuota) continue
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.id,
+          eventType: nextQuota > previousQuota ? 'video_admin_increase' : 'video_admin_decrease',
+          credits: Math.abs(nextQuota - previousQuota),
+          reason: 'admin_adjust_provider',
+          providerProfileId,
+          createdAt: now,
+        })
+      }
     }
     return this.getUsageCode(input.id)
   }
@@ -1038,6 +1201,8 @@ ${selectUsageCodeFields()}
           usage_quota_events.reason,
           usage_quota_events.provider_profile_id as providerProfileId,
           provider_profiles.name as providerProfileName,
+          provider_profiles.tag_color as providerProfileTagColor,
+          provider_profiles.api_mode as providerProfileApiMode,
           usage_quota_events.created_at as createdAt
         FROM usage_quota_events
         LEFT JOIN provider_profiles ON provider_profiles.id = usage_quota_events.provider_profile_id
@@ -1220,7 +1385,9 @@ ${selectUsageCodeFields()}
       if (remaining != null && remaining < input.credits) {
         throw new Error(`使用码剩余图片额度不足，当前剩余 ${Math.max(0, remaining)} 张`)
       }
-      const providerQuota = code.providerImageQuotas?.[input.providerProfileId] ?? null
+      const providerQuota = code.providerImageQuotas
+        ? code.providerImageQuotas[input.providerProfileId] ?? 0
+        : null
       const providerUsedCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
       const providerRemaining = providerQuota == null
         ? null
@@ -1360,7 +1527,9 @@ ${selectUsageCodeFields()}
       if (remaining != null && remaining < input.credits) {
         throw new Error(`使用码剩余视频额度不足，当前剩余 ${Math.max(0, remaining)} 次`)
       }
-      const providerQuota = code.providerVideoQuotas?.[input.providerProfileId] ?? null
+      const providerQuota = code.providerVideoQuotas
+        ? code.providerVideoQuotas[input.providerProfileId] ?? 0
+        : null
       const providerUsedCredits = code.providerUsedVideoCredits?.[input.providerProfileId] ?? 0
       const providerRemaining = providerQuota == null
         ? null
@@ -1574,12 +1743,9 @@ ${selectUsageCodeFields()}
         if (code.imageQuota == null) {
           throw new Error('不限量使用码不能直接增减总额度')
         }
-        const prevQuota = code.imageQuota
-        const prevRemaining = Math.max(0, prevQuota - code.usedImageCredits)
         const nextQuota = input.action === 'increase'
           ? code.imageQuota + input.credits
           : Math.max(code.usedImageCredits, code.imageQuota - input.credits)
-        const nextRemaining = Math.max(0, nextQuota - code.usedImageCredits)
         this.sqlite.prepare(`
           UPDATE usage_codes
           SET image_quota = ?, updated_at = ?
@@ -1589,26 +1755,21 @@ ${selectUsageCodeFields()}
           usageCodeId: input.usageCodeId,
           eventType: input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
           credits: input.credits,
-          reason: `总额度 ${prevQuota} -> ${nextQuota}；总剩余 ${prevRemaining} -> ${nextRemaining}`,
+          reason: 'admin_adjust_total',
           createdAt: now,
         })
       } else {
         const providerUsedImageCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
         const nextProviderImageQuotas = { ...(code.providerImageQuotas ?? {}) }
         const currentProviderQuota = nextProviderImageQuotas[input.providerProfileId] ?? providerUsedImageCredits
-        const prevImageQuota = code.imageQuota ?? 0
-        const prevTotalRemaining = Math.max(0, prevImageQuota - code.usedImageCredits)
-        const prevProviderRemaining = Math.max(0, currentProviderQuota - providerUsedImageCredits)
         const nextProviderQuota = input.action === 'increase'
           ? currentProviderQuota + input.credits
           : Math.max(providerUsedImageCredits, currentProviderQuota - input.credits)
-        const nextProviderRemaining = Math.max(0, nextProviderQuota - providerUsedImageCredits)
         nextProviderImageQuotas[input.providerProfileId] = nextProviderQuota
         const normalizedProviderImageQuotas = Object.fromEntries(
           Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota > 0),
         )
         const nextImageQuota = Object.values(normalizedProviderImageQuotas).reduce((sum, quota) => sum + quota, 0)
-        const nextTotalRemaining = Math.max(0, nextImageQuota - code.usedImageCredits)
         this.sqlite.prepare(`
           UPDATE usage_codes
           SET image_quota = ?,
@@ -1625,7 +1786,7 @@ ${selectUsageCodeFields()}
           usageCodeId: input.usageCodeId,
           eventType: input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
           credits: input.credits,
-          reason: `端点额度 ${currentProviderQuota} -> ${nextProviderQuota}；端点剩余 ${prevProviderRemaining} -> ${nextProviderRemaining}；总额度 ${prevImageQuota} -> ${nextImageQuota}；总剩余 ${prevTotalRemaining} -> ${nextTotalRemaining}`,
+          reason: 'admin_adjust_provider',
           providerProfileId: input.providerProfileId,
           createdAt: now,
         })

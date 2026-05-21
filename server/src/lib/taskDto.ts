@@ -64,7 +64,7 @@ export function serializeTaskRecord(
   options: {
     appSecret?: string
     exposeUsageCodeAlias?: boolean
-    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'model'> | null
+    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'model' | 'tagColor'> | null
   } = {},
 ) {
   const inputImages = images.filter((image) => image.kind === 'input')
@@ -85,6 +85,7 @@ export function serializeTaskRecord(
     params: JSON.parse(task.paramsJson),
     providerProfileId: task.providerProfileId,
     providerProfileName: options.providerProfile?.name ?? null,
+    providerProfileTagColor: options.providerProfile?.tagColor ?? null,
     providerProfileModel: options.providerProfile?.model ?? null,
     inputImageIds: inputImages.map((image) => image.id),
     outputImages: outputImages.map((image) => image.id),

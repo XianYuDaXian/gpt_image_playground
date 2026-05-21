@@ -160,25 +160,27 @@ const usageCodeAdjustSchema = z.object({
   providerProfileId: z.string().min(1).nullable().optional(),
 })
 
-function formatQuotaEventReason(reason: string | null | undefined) {
-  if (reason === 'admin_adjust_total') return '总额度'
-  if (reason === 'admin_adjust_provider') return '端点额度'
-  return reason
-}
-
-function formatQuotaEventLabel(event: { eventType: string; providerProfileName: string | null; credits: number; reason?: string | null }) {
-  const providerLabel = event.providerProfileName ? ` · ${event.providerProfileName}` : ''
-  const reason = formatQuotaEventReason(event.reason)
-  const reasonLabel = reason ? ` · ${reason}` : ''
-  if (event.eventType === 'reserve') return `任务占用 ${event.credits} 张${providerLabel}${reasonLabel}`
-  if (event.eventType === 'refund') return `额度退回 ${event.credits} 张${providerLabel}${reasonLabel}`
-  if (event.eventType === 'video_reserve') return `视频任务占用 ${event.credits} 次${providerLabel}${reasonLabel}`
-  if (event.eventType === 'video_refund') return `视频额度退回 ${event.credits} 次${providerLabel}${reasonLabel}`
-  if (event.eventType === 'video_admin_increase') return `管理员增加视频额度 ${event.credits} 次${providerLabel}${reasonLabel}`
-  if (event.eventType === 'video_admin_decrease') return `管理员减少视频额度 ${event.credits} 次${providerLabel}${reasonLabel}`
-  if (event.eventType === 'admin_increase') return `管理员增加 ${event.credits} 张${providerLabel}${reasonLabel}`
-  if (event.eventType === 'admin_decrease') return `管理员减少 ${event.credits} 张${providerLabel}${reasonLabel}`
-  return `${event.eventType} ${event.credits} 张${providerLabel}${reasonLabel}`
+function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | null }) {
+  const isVideoProvider = event.providerProfileApiMode === 'videos'
+  if (event.reason === 'admin_adjust_total') {
+    if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') {
+      return '管理员调整视频总额度'
+    }
+    return '管理员调整图片总额度'
+  }
+  if (event.reason === 'admin_adjust_provider') {
+    if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease' || isVideoProvider) {
+      return '管理员调整视频端点额度'
+    }
+    return '管理员调整图片端点额度'
+  }
+  if (event.eventType === 'reserve') return '使用码用户提交图片任务'
+  if (event.eventType === 'refund') return '图片额度退回'
+  if (event.eventType === 'video_reserve') return '使用码用户提交视频任务'
+  if (event.eventType === 'video_refund') return '视频额度退回'
+  if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') return '管理员调整视频额度'
+  if (event.eventType === 'admin_increase' || event.eventType === 'admin_decrease') return '管理员调整图片额度'
+  return event.eventType
 }
 
 function formatUsageCodeAccessLabel(app: Parameters<FastifyPluginAsync>[0], providerIds: string[] | null | undefined) {
@@ -213,6 +215,7 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
   return {
     id: profile.id,
     name: profile.name,
+    tagColor: profile.tagColor,
     baseUrl: profile.baseUrl,
     apiKey: includeApiKey ? apiKey : '',
     apiKeyMasked,
@@ -234,6 +237,7 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
   return {
     id: profile.id,
     name: profile.name,
+    tagColor: profile.tagColor,
     apiMode: profile.apiMode,
     model: profile.model,
     timeoutSeconds: profile.timeoutSeconds,
@@ -246,6 +250,14 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
 }
 
 function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageCodeStatsRecord) {
+  const quotaEvents = app.db.listUsageQuotaEvents(code.id, 50)
+  const activityLogs = app.db.listUsageCodeActivityLogs(code.id, 50)
+  const reservedTaskIds = new Set(
+    quotaEvents
+      .filter((event) => event.eventType === 'reserve' || event.eventType === 'video_reserve')
+      .map((event) => event.taskId)
+      .filter((taskId): taskId is string => Boolean(taskId)),
+  )
   const providerRemainingImageCredits = code.providerImageQuotas
     ? Object.fromEntries(
         Object.entries(code.providerImageQuotas).map(([providerProfileId, quota]) => [
@@ -254,9 +266,11 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
         ]),
       )
     : null
-  const remainingImageCredits = code.imageQuota == null
-    ? null
-    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const remainingImageCredits = code.providerImageQuotas
+    ? Object.values(providerRemainingImageCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
+    : code.imageQuota == null
+      ? null
+      : Math.max(0, code.imageQuota - code.usedImageCredits)
   const providerRemainingVideoCredits = code.providerVideoQuotas
     ? Object.fromEntries(
         Object.entries(code.providerVideoQuotas).map(([providerProfileId, quota]) => [
@@ -265,9 +279,11 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
         ]),
       )
     : null
-  const remainingVideoCredits = code.videoQuota == null
-    ? null
-    : Math.max(0, code.videoQuota - code.usedVideoCredits)
+  const remainingVideoCredits = code.providerVideoQuotas
+    ? Object.values(providerRemainingVideoCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
+    : code.videoQuota == null
+      ? null
+      : Math.max(0, code.videoQuota - code.usedVideoCredits)
   let codePlain: string | null = null
   if (code.codeEncrypted) {
     try {
@@ -297,22 +313,40 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     providerRemainingVideoCredits,
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
-    quotaEvents: app.db.listUsageQuotaEvents(code.id, 50).map((event) => ({
+    quotaEvents: quotaEvents.map((event) => ({
       ...event,
       label: formatQuotaEventLabel(event),
     })),
     activityEvents: [
-      ...app.db.listUsageQuotaEvents(code.id, 50).map((event) => ({
+      ...quotaEvents.map((event) => ({
         id: `quota-${event.id}`,
         taskId: event.taskId,
         createdAt: event.createdAt,
         label: formatQuotaEventLabel(event),
+        eventType: event.eventType,
+        credits: event.credits,
+        providerProfileId: event.providerProfileId,
+        providerProfileName: event.providerProfileName,
+        providerProfileTagColor: event.providerProfileTagColor,
       })),
-      ...app.db.listUsageCodeActivityLogs(code.id, 50).map((event) => ({
+      ...activityLogs
+        .filter((event) => {
+          if (event.eventType !== 'image_task_submitted' && event.eventType !== 'video_task_submitted') {
+            return true
+          }
+          if (!event.taskId) return true
+          return !reservedTaskIds.has(event.taskId)
+        })
+        .map((event) => ({
         id: `activity-${event.id}`,
         taskId: event.taskId,
         createdAt: event.createdAt,
         label: event.message,
+        eventType: event.eventType,
+        credits: null,
+        providerProfileId: null,
+        providerProfileName: null,
+        providerProfileTagColor: null,
       })),
     ]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())

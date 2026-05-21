@@ -107,6 +107,8 @@ function getUsageCodeDisplayValue(code: UsageCodeRecord, appSecret: string) {
 }
 
 export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
+  const hasProviderImageQuotas = Boolean(code.providerImageQuotas)
+  const hasProviderVideoQuotas = Boolean(code.providerVideoQuotas)
   const providerRemainingImageCredits = code.providerImageQuotas
     ? Object.fromEntries(
         Object.entries(code.providerImageQuotas).map(([providerProfileId, quota]) => [
@@ -115,9 +117,11 @@ export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
         ]),
       )
     : null
-  const remainingImageCredits = code.imageQuota == null
-    ? null
-    : Math.max(0, code.imageQuota - code.usedImageCredits)
+  const remainingImageCredits = hasProviderImageQuotas
+    ? Object.values(providerRemainingImageCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
+    : code.imageQuota == null
+      ? null
+      : Math.max(0, code.imageQuota - code.usedImageCredits)
   const providerRemainingVideoCredits = code.providerVideoQuotas
     ? Object.fromEntries(
         Object.entries(code.providerVideoQuotas).map(([providerProfileId, quota]) => [
@@ -126,9 +130,11 @@ export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
         ]),
       )
     : null
-  const remainingVideoCredits = code.videoQuota == null
-    ? null
-    : Math.max(0, code.videoQuota - code.usedVideoCredits)
+  const remainingVideoCredits = hasProviderVideoQuotas
+    ? Object.values(providerRemainingVideoCredits ?? {}).reduce((sum, remaining) => sum + remaining, 0)
+    : code.videoQuota == null
+      ? null
+      : Math.max(0, code.videoQuota - code.usedVideoCredits)
 
   return {
     id: code.id,

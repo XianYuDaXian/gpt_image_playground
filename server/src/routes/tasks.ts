@@ -280,16 +280,6 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       throw new Error('创建任务失败')
     }
 
-    if (auth.role === 'user' && selectedUsageCodeId) {
-      app.db.insertUsageCodeActivityLog({
-        usageCodeId: selectedUsageCodeId,
-        taskId,
-        actorKind: 'user',
-        eventType: taskType === 'video' ? 'video_task_submitted' : 'image_task_submitted',
-        message: `使用码用户提交${taskType === 'video' ? '视频' : '图片'}任务`,
-      })
-    }
-
     let maskImageId: string | null = null
     try {
       for (const file of pendingFiles) {

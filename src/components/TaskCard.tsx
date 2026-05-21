@@ -13,6 +13,7 @@ import {
 import { formatImageRatio } from '../lib/size'
 import { ParamValue } from '../lib/paramDisplay'
 import UsageCodeBadge from './UsageCodeBadge'
+import ProviderProfileTag from './ProviderProfileTag'
 
 interface Props {
   task: TaskRecord
@@ -667,12 +668,14 @@ export default function TaskCard({
                 </span>
               )}
               {taskSourceLabel && (
-                <span
-                  className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0"
-                  title={taskSourceLabel}
-                >
-                  {taskSourceLabel}
-                </span>
+                <ProviderProfileTag
+                  name={taskSourceLabel}
+                  colorKey={task.providerProfileId ?? taskSourceLabel}
+                  tagColor={task.providerProfileTagColor}
+                  includeMode={false}
+                  includeDefault={false}
+                  className="max-w-[7rem] flex-shrink-0 rounded px-1.5 py-0.5 text-xs leading-4"
+                />
               )}
               {taskModelLabel && (
                 <span
