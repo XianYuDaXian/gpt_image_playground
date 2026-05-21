@@ -33,7 +33,6 @@ export default function TaskCard({
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
-  const [coverSize, setCoverSize] = useState<string>('')
   const [now, setNow] = useState(Date.now())
   const [swipeOffset, setSwipeOffset] = useState(0)
   const [isSwiping, setIsSwiping] = useState(false)
@@ -43,6 +42,9 @@ export default function TaskCard({
   const authStatus = useStore((s) => s.authStatus)
   const loadedTaskImageIds = useStore((s) => s.loadedTaskImageIds)
   const markTaskImageLoaded = useStore((s) => s.markTaskImageLoaded)
+  const blurLoadedImages = useStore((s) => s.blurLoadedImages)
+  const taskImageBlurOverrides = useStore((s) => s.taskImageBlurOverrides)
+  const toggleTaskImageBlur = useStore((s) => s.toggleTaskImageBlur)
   const firstOutputImageId = task.outputImages?.[0]
   const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
   const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
@@ -51,6 +53,7 @@ export default function TaskCard({
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
   const horizontalSwipeRef = useRef(false)
+  const swipeLockRef = useRef<'horizontal' | 'vertical' | null>(null)
   const longPressTimerRef = useRef<number | null>(null)
   const longPressTriggeredRef = useRef(false)
 
@@ -71,10 +74,11 @@ export default function TaskCard({
     }
     touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
     horizontalSwipeRef.current = false
+    swipeLockRef.current = null
     longPressTriggeredRef.current = false
     setSwipeStartedSelected(Boolean(isSelected))
     setSwipeActionActive(false)
-    setIsSwiping(true)
+    setIsSwiping(false)
 
     const target = e.target as HTMLElement | null
     if (
@@ -87,6 +91,7 @@ export default function TaskCard({
         suppressClickUntilRef.current = Date.now() + 500
         touchStartRef.current = null
         horizontalSwipeRef.current = false
+        swipeLockRef.current = null
         setIsSwiping(false)
         setSwipeOffset(0)
         setSwipeActionActive(true)
@@ -103,19 +108,41 @@ export default function TaskCard({
     if (!touchStartRef.current) return
     const deltaX = e.touches[0].clientX - touchStartRef.current.x
     const deltaY = e.touches[0].clientY - touchStartRef.current.y
+    const absX = Math.abs(deltaX)
+    const absY = Math.abs(deltaY)
 
-    if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+    if (absX > 6 || absY > 6) {
       clearLongPressTimer()
     }
-    
-    // 如果主要是水平滑动
-    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+
+    if (!swipeLockRef.current) {
+      if (absY > 10 && absY > absX * 1.2) {
+        swipeLockRef.current = 'vertical'
+        horizontalSwipeRef.current = false
+        setIsSwiping(false)
+        setSwipeOffset(0)
+        setSwipeActionActive(false)
+        return
+      }
+
+      if (absX > 16 && absX > absY * 1.35) {
+        swipeLockRef.current = 'horizontal'
+        horizontalSwipeRef.current = true
+        setIsSwiping(true)
+      } else {
+        return
+      }
+    }
+
+    if (swipeLockRef.current === 'vertical') return
+
+    // 水平方向明确后才接管卡片侧滑，避免拦截页面上下滚动。
+    if (swipeLockRef.current === 'horizontal') {
       horizontalSwipeRef.current = true
       e.preventDefault()
-      // 限制滑动距离，例如最大 60px
       const boundedOffset = Math.max(-60, Math.min(60, deltaX))
       setSwipeOffset(boundedOffset)
-      setSwipeActionActive(Math.abs(deltaX) >= 40)
+      setSwipeActionActive(absX >= 40)
     }
   }
 
@@ -134,6 +161,13 @@ export default function TaskCard({
     if (!touchStartRef.current) return
     const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x
     touchStartRef.current = null
+    const lockedDirection = swipeLockRef.current
+    swipeLockRef.current = null
+    if (lockedDirection !== 'horizontal') {
+      horizontalSwipeRef.current = false
+      setSwipeActionActive(false)
+      return
+    }
     const isSwipeAction = horizontalSwipeRef.current && Math.abs(deltaX) > 40
     horizontalSwipeRef.current = false
     setSwipeActionActive(isSwipeAction)
@@ -156,6 +190,7 @@ export default function TaskCard({
     longPressTriggeredRef.current = false
     touchStartRef.current = null
     horizontalSwipeRef.current = false
+    swipeLockRef.current = null
     setIsSwiping(false)
     setSwipeOffset(0)
     setSwipeActionActive(false)
@@ -181,7 +216,6 @@ export default function TaskCard({
     let unsubscribe: (() => void) | undefined
 
     setCoverRatio('')
-    setCoverSize('')
     setThumbSrc('')
 
     const imageId = task.outputImages?.[0]
@@ -191,7 +225,6 @@ export default function TaskCard({
         setThumbSrc(thumbnail.dataUrl)
         if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
-          setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
         }
       })
 
@@ -200,7 +233,6 @@ export default function TaskCard({
         setThumbSrc(thumbnail.dataUrl)
         if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
-          setCoverSize(`${thumbnail.width}×${thumbnail.height}`)
         }
       })
 
@@ -223,7 +255,6 @@ export default function TaskCard({
   useEffect(() => {
     if (firstOutputSize?.width && firstOutputSize.height) {
       setCoverRatio(formatImageRatio(firstOutputSize.width, firstOutputSize.height))
-      setCoverSize(`${firstOutputSize.width}×${firstOutputSize.height}`)
     }
   }, [firstOutputSize?.height, firstOutputSize?.width])
 
@@ -238,7 +269,6 @@ export default function TaskCard({
     image.onload = () => {
       if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
         setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-        setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
       }
     }
     image.src = remoteUrl
@@ -256,13 +286,11 @@ export default function TaskCard({
     image.onload = () => {
       if (!cancelled && !firstOutputSize?.width && !firstOutputSize?.height && image.naturalWidth > 0 && image.naturalHeight > 0) {
         setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-        setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
       }
     }
     image.src = thumbSrc
     if (!firstOutputSize?.width && !firstOutputSize?.height && image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
       setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-      setCoverSize(`${image.naturalWidth}×${image.naturalHeight}`)
     }
 
     return () => {
@@ -293,6 +321,7 @@ export default function TaskCard({
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showDeferredPlaceholder =
     task.status === 'done' && hasOutputImage && Boolean(firstOutputImageId) && deferImageLoading && !firstOutputImageLoaded
+  const isCoverBlurred = Boolean(thumbSrc) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -363,11 +392,42 @@ export default function TaskCard({
       >
         {/* 选中时的角标 */}
       {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+        <div className="absolute top-2 right-9 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
           <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
         </div>
+      )}
+      {hasOutputImage && (
+        <button
+          type="button"
+          data-no-long-press
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            toggleTaskImageBlur(task.id)
+          }}
+          className={`absolute top-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-full border backdrop-blur transition ${
+            isCoverBlurred
+              ? 'border-blue-300/70 bg-blue-500/80 text-white'
+              : 'border-white/30 bg-black/40 text-white/80 hover:bg-black/55'
+          }`}
+          title={isCoverBlurred ? '取消模糊此图片' : '模糊此图片'}
+        >
+          {isCoverBlurred ? (
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          ) : (
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M3 3l18 18" />
+              <path d="M10.6 10.6A2 2 0 0012 14a2 2 0 001.4-.6" />
+              <path d="M9.9 5.2A10.6 10.6 0 0112 5c6.5 0 10 7 10 7a17.9 17.9 0 01-3.1 4.2" />
+              <path d="M6.1 6.7A18.1 18.1 0 002 12s3.5 7 10 7a10.8 10.8 0 004.7-1.1" />
+            </svg>
+          )}
+        </button>
       )}
       <div className="flex h-40">
         {/* 左侧图片区域 */}
@@ -378,7 +438,7 @@ export default function TaskCard({
                 src={thumbSrc}
                 data-image-id={task.outputImages[0]}
                 data-original-src={task.imageUrlsById?.[task.outputImages[0]]}
-                className="saveable-image w-full h-full object-cover"
+                className={`saveable-image w-full h-full object-cover transition duration-200 ${isCoverBlurred ? 'scale-[1.03] blur-md' : ''}`}
                 loading="lazy"
                 onLoad={(event) => {
                   if (task.outputImages[0]) {
@@ -471,9 +531,9 @@ export default function TaskCard({
               />
             </svg>
           )}
-          {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
+          {/* 运行中显示耗时，完成后显示封面图比例 */}
           <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
-            {task.status !== 'done' || !hasOutputImage || !coverRatio || !coverSize ? (
+            {task.status !== 'done' || !hasOutputImage || !coverRatio ? (
               <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -481,14 +541,9 @@ export default function TaskCard({
                 {duration}
               </span>
             ) : (
-              <>
-                <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
-                  {coverRatio}
-                </span>
-                <span className="bg-black/50 text-white/90 text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
-                  {coverSize}
-                </span>
-              </>
+              <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                {coverRatio}
+              </span>
             )}
           </div>
           {task.status === 'running' && hasOutputImage && task.currentStep && (

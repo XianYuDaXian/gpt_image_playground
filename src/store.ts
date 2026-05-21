@@ -64,6 +64,19 @@ function mergeLocalTaskFlags(serverTasks: TaskRecord[]) {
   return serverTasks
 }
 
+function getAutoLoadedCompletedImageIds(prevTasks: TaskRecord[], nextTasks: TaskRecord[]) {
+  const prevById = new Map(prevTasks.map((task) => [task.id, task]))
+  const imageIds: string[] = []
+
+  for (const task of nextTasks) {
+    const prevTask = prevById.get(task.id)
+    if (prevTask?.status !== 'running' || task.status !== 'done') continue
+    imageIds.push(...task.outputImages)
+  }
+
+  return imageIds
+}
+
 export function getCachedImage(id: string): string | undefined {
   const dataUrl = imageCache.get(id)
   if (dataUrl) {
@@ -258,6 +271,10 @@ interface AppState {
   setFilterArchived: (f: boolean) => void
   showUsageCodeTasksForAdmin: boolean
   setShowUsageCodeTasksForAdmin: (value: boolean) => void
+  blurLoadedImages: boolean
+  setBlurLoadedImages: (value: boolean) => void
+  taskImageBlurOverrides: Record<string, boolean>
+  toggleTaskImageBlur: (taskId: string) => void
   loadedTaskImageIds: string[]
   markTaskImageLoaded: (imageId: string) => void
 
@@ -459,7 +476,17 @@ export const useStore = create<AppState>()(
 
       // Tasks
       tasks: [],
-      setTasks: (tasks) => set({ tasks }),
+      setTasks: (tasks) => set((state) => {
+        const autoLoadedImageIds = getAutoLoadedCompletedImageIds(state.tasks, tasks)
+        if (!autoLoadedImageIds.length) return { tasks }
+
+        const loadedTaskImageIds = [...state.loadedTaskImageIds]
+        for (const imageId of autoLoadedImageIds) {
+          if (!loadedTaskImageIds.includes(imageId)) loadedTaskImageIds.push(imageId)
+        }
+
+        return { tasks, loadedTaskImageIds }
+      }),
 
       // Search & Filter
       searchQuery: '',
@@ -472,6 +499,15 @@ export const useStore = create<AppState>()(
       setFilterArchived: (filterArchived) => set({ filterArchived }),
       showUsageCodeTasksForAdmin: false,
       setShowUsageCodeTasksForAdmin: (showUsageCodeTasksForAdmin) => set({ showUsageCodeTasksForAdmin }),
+      blurLoadedImages: false,
+      setBlurLoadedImages: (blurLoadedImages) => set({ blurLoadedImages, taskImageBlurOverrides: {} }),
+      taskImageBlurOverrides: {},
+      toggleTaskImageBlur: (taskId) => set((s) => ({
+        taskImageBlurOverrides: {
+          ...s.taskImageBlurOverrides,
+          [taskId]: !(s.taskImageBlurOverrides[taskId] ?? s.blurLoadedImages),
+        },
+      })),
       loadedTaskImageIds: [],
       markTaskImageLoaded: (imageId) =>
         set((s) => (
@@ -538,6 +574,8 @@ export const useStore = create<AppState>()(
         dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
         themeMode: state.themeMode,
         showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+        blurLoadedImages: state.blurLoadedImages,
+        taskImageBlurOverrides: state.taskImageBlurOverrides,
         loadedTaskImageIds: state.loadedTaskImageIds,
       }),
     },

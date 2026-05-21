@@ -1119,6 +1119,37 @@ export class AppDatabase {
     return true
   }
 
+  private insertUsageQuotaEvent(input: {
+    usageCodeId: string
+    taskId?: string | null
+    eventType: string
+    credits: number
+    reason?: string | null
+    providerProfileId?: string | null
+    createdAt: string
+  }) {
+    this.sqlite.prepare(`
+      INSERT INTO usage_quota_events (
+        usage_code_id,
+        task_id,
+        event_type,
+        credits,
+        reason,
+        provider_profile_id,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.usageCodeId,
+      input.taskId ?? null,
+      input.eventType,
+      input.credits,
+      input.reason ?? null,
+      input.providerProfileId ?? null,
+      input.createdAt,
+    )
+  }
+
   adjustUsageCodeQuota(input: {
     usageCodeId: string
     action: 'increase' | 'decrease'
@@ -1142,26 +1173,41 @@ export class AppDatabase {
         if (code.imageQuota == null) {
           throw new Error('不限量使用码不能直接增减总额度')
         }
+        const prevQuota = code.imageQuota
+        const prevRemaining = Math.max(0, prevQuota - code.usedImageCredits)
         const nextQuota = input.action === 'increase'
           ? code.imageQuota + input.credits
           : Math.max(code.usedImageCredits, code.imageQuota - input.credits)
+        const nextRemaining = Math.max(0, nextQuota - code.usedImageCredits)
         this.sqlite.prepare(`
           UPDATE usage_codes
           SET image_quota = ?, updated_at = ?
           WHERE id = ?
         `).run(nextQuota, now, input.usageCodeId)
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.usageCodeId,
+          eventType: input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
+          credits: input.credits,
+          reason: `总额度 ${prevQuota} -> ${nextQuota}；总剩余 ${prevRemaining} -> ${nextRemaining}`,
+          createdAt: now,
+        })
       } else {
         const providerUsedImageCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
         const nextProviderImageQuotas = { ...(code.providerImageQuotas ?? {}) }
         const currentProviderQuota = nextProviderImageQuotas[input.providerProfileId] ?? providerUsedImageCredits
+        const prevImageQuota = code.imageQuota ?? 0
+        const prevTotalRemaining = Math.max(0, prevImageQuota - code.usedImageCredits)
+        const prevProviderRemaining = Math.max(0, currentProviderQuota - providerUsedImageCredits)
         const nextProviderQuota = input.action === 'increase'
           ? currentProviderQuota + input.credits
           : Math.max(providerUsedImageCredits, currentProviderQuota - input.credits)
+        const nextProviderRemaining = Math.max(0, nextProviderQuota - providerUsedImageCredits)
         nextProviderImageQuotas[input.providerProfileId] = nextProviderQuota
         const normalizedProviderImageQuotas = Object.fromEntries(
           Object.entries(nextProviderImageQuotas).filter(([, quota]) => quota > 0),
         )
         const nextImageQuota = Object.values(normalizedProviderImageQuotas).reduce((sum, quota) => sum + quota, 0)
+        const nextTotalRemaining = Math.max(0, nextImageQuota - code.usedImageCredits)
         this.sqlite.prepare(`
           UPDATE usage_codes
           SET image_quota = ?,
@@ -1174,27 +1220,15 @@ export class AppDatabase {
           now,
           input.usageCodeId,
         )
+        this.insertUsageQuotaEvent({
+          usageCodeId: input.usageCodeId,
+          eventType: input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
+          credits: input.credits,
+          reason: `端点额度 ${currentProviderQuota} -> ${nextProviderQuota}；端点剩余 ${prevProviderRemaining} -> ${nextProviderRemaining}；总额度 ${prevImageQuota} -> ${nextImageQuota}；总剩余 ${prevTotalRemaining} -> ${nextTotalRemaining}`,
+          providerProfileId: input.providerProfileId,
+          createdAt: now,
+        })
       }
-
-      this.sqlite.prepare(`
-        INSERT INTO usage_quota_events (
-          usage_code_id,
-          task_id,
-          event_type,
-          credits,
-          reason,
-          provider_profile_id,
-          created_at
-        )
-        VALUES (?, NULL, ?, ?, ?, ?, ?)
-      `).run(
-        input.usageCodeId,
-        input.action === 'increase' ? 'admin_increase' : 'admin_decrease',
-        input.credits,
-        input.providerProfileId ? 'admin_adjust_provider' : 'admin_adjust_total',
-        input.providerProfileId ?? null,
-        now,
-      )
 
       return this.getUsageCode(input.usageCodeId)
     })

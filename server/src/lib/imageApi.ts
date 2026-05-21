@@ -237,12 +237,12 @@ function buildGrokResolutionSize(aspectRatio: GrokAspectRatio, resolution: GrokR
 
 function mapSizeToGrokParams(size: string): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
   if (!size.trim() || size.trim() === 'auto') {
-    return { aspectRatio: 'auto' }
+    return { aspectRatio: 'auto', resolution: '1k' }
   }
 
   const parsed = parseImageSize(size)
   if (!parsed) {
-    return { aspectRatio: 'auto' }
+    return { aspectRatio: 'auto', resolution: '1k' }
   }
 
   const actualRatio = parsed.width / parsed.height
@@ -257,21 +257,9 @@ function mapSizeToGrokParams(size: string): { aspectRatio: GrokAspectRatio; reso
     })
     .sort((a, b) => a.delta - b.delta)[0]?.value ?? 'auto'
 
-  const candidate1k = buildGrokResolutionSize(aspectRatio, '1k')
-  const candidate2k = buildGrokResolutionSize(aspectRatio, '2k')
-  if (!candidate1k || !candidate2k) {
-    return { aspectRatio }
-  }
-
-  const score = (candidate: { width: number; height: number }) => {
-    const widthDelta = Math.abs(candidate.width - parsed.width) / Math.max(parsed.width, 1)
-    const heightDelta = Math.abs(candidate.height - parsed.height) / Math.max(parsed.height, 1)
-    return widthDelta + heightDelta
-  }
-
   return {
     aspectRatio,
-    resolution: score(candidate1k) <= score(candidate2k) ? '1k' : '2k',
+    resolution: '1k',
   }
 }
 

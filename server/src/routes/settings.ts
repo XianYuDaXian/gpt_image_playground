@@ -152,13 +152,21 @@ const usageCodeAdjustSchema = z.object({
   providerProfileId: z.string().min(1).nullable().optional(),
 })
 
-function formatQuotaEventLabel(event: { eventType: string; providerProfileName: string | null; credits: number }) {
+function formatQuotaEventReason(reason: string | null | undefined) {
+  if (reason === 'admin_adjust_total') return '总额度'
+  if (reason === 'admin_adjust_provider') return '端点额度'
+  return reason
+}
+
+function formatQuotaEventLabel(event: { eventType: string; providerProfileName: string | null; credits: number; reason?: string | null }) {
   const providerLabel = event.providerProfileName ? ` · ${event.providerProfileName}` : ''
-  if (event.eventType === 'reserve') return `任务占用 ${event.credits} 张${providerLabel}`
-  if (event.eventType === 'refund') return `额度退回 ${event.credits} 张${providerLabel}`
-  if (event.eventType === 'admin_increase') return `管理员增加 ${event.credits} 张${providerLabel}`
-  if (event.eventType === 'admin_decrease') return `管理员减少 ${event.credits} 张${providerLabel}`
-  return `${event.eventType} ${event.credits} 张${providerLabel}`
+  const reason = formatQuotaEventReason(event.reason)
+  const reasonLabel = reason ? ` · ${reason}` : ''
+  if (event.eventType === 'reserve') return `任务占用 ${event.credits} 张${providerLabel}${reasonLabel}`
+  if (event.eventType === 'refund') return `额度退回 ${event.credits} 张${providerLabel}${reasonLabel}`
+  if (event.eventType === 'admin_increase') return `管理员增加 ${event.credits} 张${providerLabel}${reasonLabel}`
+  if (event.eventType === 'admin_decrease') return `管理员减少 ${event.credits} 张${providerLabel}${reasonLabel}`
+  return `${event.eventType} ${event.credits} 张${providerLabel}${reasonLabel}`
 }
 
 function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {

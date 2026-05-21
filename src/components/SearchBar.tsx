@@ -13,6 +13,8 @@ export default function SearchBar() {
   const setFilterArchived = useStore((s) => s.setFilterArchived)
   const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
   const setShowUsageCodeTasksForAdmin = useStore((s) => s.setShowUsageCodeTasksForAdmin)
+  const blurLoadedImages = useStore((s) => s.blurLoadedImages)
+  const setBlurLoadedImages = useStore((s) => s.setBlurLoadedImages)
 
   return (
     <div className="mt-6 mb-4 flex flex-wrap gap-3">
@@ -52,6 +54,29 @@ export default function SearchBar() {
             <path d="M6 9v10a1 1 0 001 1h10a1 1 0 001-1V9" />
             <path d="M10 13h4" />
           </svg>
+        </button>
+        <button
+          onClick={() => setBlurLoadedImages(!blurLoadedImages)}
+          className={`p-2.5 rounded-xl border transition-all ${
+            blurLoadedImages
+              ? 'border-blue-400 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-300'
+              : 'border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-gray-400 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
+          }`}
+          title={blurLoadedImages ? '取消模糊已加载图片' : '模糊已加载图片'}
+        >
+          {blurLoadedImages ? (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M3 3l18 18" />
+              <path d="M10.6 10.6A2 2 0 0012 14a2 2 0 001.4-.6" />
+              <path d="M9.9 5.2A10.6 10.6 0 0112 5c6.5 0 10 7 10 7a17.9 17.9 0 01-3.1 4.2" />
+              <path d="M6.1 6.7A18.1 18.1 0 002 12s3.5 7 10 7a10.8 10.8 0 004.7-1.1" />
+            </svg>
+          )}
         </button>
         {authStatus?.role === 'admin' && (
           <button

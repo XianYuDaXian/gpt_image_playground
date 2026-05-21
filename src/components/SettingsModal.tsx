@@ -697,11 +697,22 @@ export default function SettingsModal() {
     }
 
     if (currentRemaining == null) {
-      const nextProviderImageQuotas = {
-        ...(code.providerImageQuotas ?? {}),
-        [providerProfileId]: (code.providerUsedImageCredits?.[providerProfileId] ?? 0) + nextRemaining,
+      if (nextRemaining === 0) {
+        setUsageCodeProviderRemainingDrafts((prev) => ({
+          ...prev,
+          [code.id]: {
+            ...(prev[code.id] ?? {}),
+            [providerProfileId]: '',
+          },
+        }))
+        return
       }
-      await handleUpdateUsageCode(code.id, { providerImageQuotas: nextProviderImageQuotas })
+      await handleAdjustUsageCodeQuota(
+        code.id,
+        'increase',
+        nextRemaining,
+        providerProfileId,
+      )
       return
     }
 
@@ -1014,7 +1025,7 @@ export default function SettingsModal() {
               <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <PreferenceRow
                   title="Grok API 兼容"
-                  description="启用后改用 xAI Images 接口的字段。尺寸会拆成独立的比例和分辨率。遮罩编辑不会提交到该接口。"
+                  description="启用后改用 xAI Images 接口的字段。尺寸只用于推导比例，分辨率固定为 1K。遮罩编辑不会提交到该接口。"
                   checked={profileDraft.grokApiCompat}
                   onChange={(checked) => updateProfileDraft({
                     grokApiCompat: checked,
