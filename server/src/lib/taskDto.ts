@@ -24,6 +24,21 @@ function buildImageUrlMap(images: TaskImageRecord[]) {
   }, {})
 }
 
+function buildVideoPosterUrlMap(images: TaskImageRecord[]) {
+  return images.reduce<Record<string, string>>((acc, image) => {
+    if (image.kind !== 'thumb' || !image.metadataJson) return acc
+    try {
+      const metadata = JSON.parse(image.metadataJson) as { videoId?: string | null }
+      if (metadata.videoId) {
+        acc[metadata.videoId] = buildMediaUrl(image.filePath)
+      }
+    } catch {
+      return acc
+    }
+    return acc
+  }, {})
+}
+
 function decryptUsageCode(task: TaskRecord, appSecret?: string) {
   if (!appSecret || !task.ownerUsageCodeCodeEncrypted) return null
   try {
@@ -94,6 +109,7 @@ export function serializeTaskRecord(
     maskTargetImageId: maskImage ? inputImages[0]?.id ?? null : null,
     imageUrlsById: buildImageUrlMap(images),
     mediaUrlsById: buildImageUrlMap(images),
+    videoPosterUrlsById: buildVideoPosterUrlMap(images),
     imageSizesById: buildImageSizeMap(images),
     videoMetadataById: buildVideoMetadataMap(outputVideos),
     status: toUiStatus(task.status),

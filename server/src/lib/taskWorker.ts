@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
 import { executeImageTask, writeOutputImage } from './imageApi.js'
-import { downloadVideoOutput, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
+import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
 
 export class TaskWorker {
@@ -19,6 +19,7 @@ export class TaskWorker {
       appSecret: string
       mediaDir: string
       outputsDir: string
+      thumbsDir: string
       maxConcurrentTasks: number
     },
   ) {
@@ -334,8 +335,9 @@ export class TaskWorker {
 
       const outputDir = path.join(this.config.outputsDir, taskId)
       const written = await downloadVideoOutput(outputDir, finalVideoUrl, finalDuration)
+      const outputVideoId = crypto.randomUUID()
       const saved = this.db.addTaskImage({
-        id: crypto.randomUUID(),
+        id: outputVideoId,
         taskId,
         kind: 'video_output',
         filePath: path.join('outputs', taskId, written.fileName),
@@ -345,6 +347,22 @@ export class TaskWorker {
         metadataJson: written.metadataJson,
       })
       if (!saved) return
+      try {
+        const posterDir = path.join(this.config.thumbsDir, taskId)
+        const poster = await generateVideoPoster(path.join(outputDir, written.fileName), posterDir)
+        this.db.addTaskImage({
+          id: crypto.randomUUID(),
+          taskId,
+          kind: 'thumb',
+          filePath: path.join('thumbs', taskId, poster.fileName),
+          mimeType: poster.mimeType,
+          bytes: poster.bytes,
+          sha256: poster.sha256,
+          metadataJson: JSON.stringify({ videoId: outputVideoId }),
+        })
+      } catch (error) {
+        console.warn('生成视频预览图失败', error)
+      }
 
       this.db.updateTaskProgress({
         id: taskId,

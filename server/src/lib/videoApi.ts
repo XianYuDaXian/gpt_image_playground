@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { spawn } from 'node:child_process'
 import type { ProviderProfileRecord } from './db.js'
 
 export interface VideoTaskParams {
@@ -138,5 +139,49 @@ export async function downloadVideoOutput(outputDir: string, videoUrl: string, d
     mimeType: 'video/mp4',
     sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
     metadataJson: JSON.stringify({ duration: duration ?? null }),
+  }
+}
+
+function runFfmpeg(args: string[]) {
+  return new Promise<void>((resolve, reject) => {
+    const ffmpegPath = process.env.FFMPEG_PATH?.trim() || 'ffmpeg'
+    const child = spawn(ffmpegPath, args, { windowsHide: true })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => {
+      stderr += String(chunk)
+    })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+      reject(new Error(stderr.trim() || `ffmpeg 退出码 ${code}`))
+    })
+  })
+}
+
+export async function generateVideoPoster(inputPath: string, posterDir: string) {
+  const fileName = 'output-1.jpg'
+  const outputPath = path.join(posterDir, fileName)
+  await fs.mkdir(posterDir, { recursive: true })
+  await runFfmpeg([
+    '-y',
+    '-ss',
+    '0.1',
+    '-i',
+    inputPath,
+    '-frames:v',
+    '1',
+    '-q:v',
+    '3',
+    outputPath,
+  ])
+  const buffer = await fs.readFile(outputPath)
+  return {
+    fileName,
+    bytes: buffer.byteLength,
+    mimeType: 'image/jpeg',
+    sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
   }
 }

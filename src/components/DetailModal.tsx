@@ -67,6 +67,11 @@ export default function DetailModal() {
     ])]
     const initial: Record<string, string> = {}
     for (const id of ids) {
+      const posterUrl = task.outputVideos?.includes(id) ? task.videoPosterUrlsById?.[id] : undefined
+      if (posterUrl) {
+        initial[id] = posterUrl
+        continue
+      }
       const remoteUrl = task.imageUrlsById?.[id]
       if (remoteUrl) {
         initial[id] = remoteUrl
@@ -85,11 +90,13 @@ export default function DetailModal() {
     }
 
     for (const videoId of task.outputVideos || []) {
-      ensureMediaThumbnailCached(videoId).then((thumbnail) => {
-        if (!cancelled && thumbnail?.dataUrl) {
-          setImageSrcs((prev) => ({ ...prev, [videoId]: prev[videoId] || thumbnail.dataUrl }))
-        }
-      })
+      if (!task.videoPosterUrlsById?.[videoId]) {
+        ensureMediaThumbnailCached(videoId).then((thumbnail) => {
+          if (!cancelled && thumbnail?.dataUrl) {
+            setImageSrcs((prev) => ({ ...prev, [videoId]: prev[videoId] || thumbnail.dataUrl }))
+          }
+        })
+      }
 
       ensureTaskVideoAvailable(videoId).then((url) => {
         if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
@@ -114,7 +121,9 @@ export default function DetailModal() {
   const currentOutputVideoSrc = currentOutputVideoId
     ? videoSrcs[currentOutputVideoId] || task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
     : ''
-  const currentOutputVideoPoster = currentOutputVideoId ? imageSrcs[currentOutputVideoId] || '' : ''
+  const currentOutputVideoPoster = currentOutputVideoId
+    ? imageSrcs[currentOutputVideoId] || task?.videoPosterUrlsById?.[currentOutputVideoId] || ''
+    : ''
   const maskTargetId = task?.maskTargetImageId || null
   const maskTargetSrc = maskTargetId ? imageSrcs[maskTargetId] || '' : ''
   const maskSrc = task?.maskImageId ? imageSrcs[task.maskImageId] || '' : ''

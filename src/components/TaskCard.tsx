@@ -54,6 +54,7 @@ export default function TaskCard({
   const firstOutputVideoRemoteUrl = firstOutputVideoId
     ? task.mediaUrlsById?.[firstOutputVideoId] || task.imageUrlsById?.[firstOutputVideoId] || ''
     : ''
+  const firstOutputVideoPosterUrl = firstOutputVideoId ? task.videoPosterUrlsById?.[firstOutputVideoId] || '' : ''
   const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
   const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
   const shouldLoadImage = Boolean(firstOutputImageId) && (!deferImageLoading || firstOutputImageLoaded)
@@ -227,7 +228,10 @@ export default function TaskCard({
     setThumbSrc('')
     setVideoSrc('')
 
-    const mediaId = task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
+    const mediaId = task.taskType === 'video' && firstOutputVideoPosterUrl ? null : task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
+    if (firstOutputVideoPosterUrl) {
+      setThumbSrc(firstOutputVideoPosterUrl)
+    }
     if (mediaId && (task.taskType === 'video' || shouldLoadImage)) {
       unsubscribe = subscribeMediaThumbnail(mediaId, (thumbnail) => {
         if (cancelled) return
@@ -278,6 +282,7 @@ export default function TaskCard({
     firstOutputSize?.height,
     firstOutputSize?.width,
     firstOutputVideoId,
+    firstOutputVideoPosterUrl,
     firstOutputVideoRemoteUrl,
     shouldLoadImage,
     task.imageUrlsById,
@@ -483,6 +488,7 @@ export default function TaskCard({
             <>
               <video
                 src={videoPreviewSrc}
+                poster={firstOutputVideoPosterUrl || undefined}
                 className="h-full w-full object-cover"
                 muted
                 playsInline

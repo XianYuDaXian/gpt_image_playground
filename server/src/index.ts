@@ -47,6 +47,7 @@ app.decorate('taskWorker', new TaskWorker(app.db, app.taskEvents, {
   appSecret: appConfig.appSecret,
   mediaDir: appConfig.mediaDir,
   outputsDir: appConfig.outputsDir,
+  thumbsDir: appConfig.thumbsDir,
   maxConcurrentTasks: app.db.getDistributionSettings().maxConcurrentTasks,
 }))
 

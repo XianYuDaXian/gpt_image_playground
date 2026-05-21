@@ -50,6 +50,10 @@ ENV HOST=0.0.0.0
 ENV DATA_DIR=/app/data
 ENV WEB_DIST_DIR=/app/dist
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY --from=server-prod-deps /app/server/node_modules /app/server/node_modules
 COPY --from=server-build /app/server/dist /app/server/dist
 COPY --from=server-build /app/server/package.json /app/server/package.json

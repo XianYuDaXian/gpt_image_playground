@@ -128,6 +128,7 @@ export interface TaskRecord {
   outputVideos?: string[]
   imageUrlsById?: Record<string, string>
   mediaUrlsById?: Record<string, string>
+  videoPosterUrlsById?: Record<string, string>
   imageSizesById?: Record<string, { width: number | null; height: number | null }>
   videoMetadataById?: Record<string, { duration?: number | null }>
   status: TaskStatus
