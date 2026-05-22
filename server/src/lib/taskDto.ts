@@ -108,11 +108,20 @@ export function serializeTaskRecord(
     : task.ownerLabel
   const ownerUsageCodeProviderImageQuotas = parseQuotaMap(task.ownerUsageCodeProviderImageQuotasJson)
   const ownerUsageCodeProviderUsedImageCredits = parseQuotaMap(task.ownerUsageCodeProviderUsedImageCreditsJson)
+  const ownerUsageCodeProviderVideoQuotas = parseQuotaMap(task.ownerUsageCodeProviderVideoQuotasJson)
+  const ownerUsageCodeProviderUsedVideoCredits = parseQuotaMap(task.ownerUsageCodeProviderUsedVideoCreditsJson)
   const currentProviderRemainingImageCredits = task.providerProfileId && ownerUsageCodeProviderImageQuotas
     ? Math.max(
       0,
       (ownerUsageCodeProviderImageQuotas[task.providerProfileId] ?? 0)
       - (ownerUsageCodeProviderUsedImageCredits?.[task.providerProfileId] ?? 0),
+    )
+    : null
+  const currentProviderRemainingVideoCredits = task.providerProfileId && ownerUsageCodeProviderVideoQuotas
+    ? Math.max(
+      0,
+      (ownerUsageCodeProviderVideoQuotas[task.providerProfileId] ?? 0)
+      - (ownerUsageCodeProviderUsedVideoCredits?.[task.providerProfileId] ?? 0),
     )
     : null
 
@@ -155,6 +164,11 @@ export function serializeTaskRecord(
           remainingImageCredits: task.ownerUsageCodeImageQuota == null
             ? null
             : Math.max(0, task.ownerUsageCodeImageQuota - (task.ownerUsageCodeUsedImageCredits ?? 0)),
+          videoQuota: task.ownerUsageCodeVideoQuota,
+          usedVideoCredits: task.ownerUsageCodeUsedVideoCredits ?? 0,
+          remainingVideoCredits: task.ownerUsageCodeVideoQuota == null
+            ? null
+            : Math.max(0, task.ownerUsageCodeVideoQuota - (task.ownerUsageCodeUsedVideoCredits ?? 0)),
           taskCount: task.ownerUsageCodeTaskCount ?? 0,
           outputImageCount: task.ownerUsageCodeOutputImageCount ?? 0,
           providerOutputImageCount: task.ownerUsageCodeProviderOutputImageCount ?? 0,
@@ -162,6 +176,13 @@ export function serializeTaskRecord(
             task.ownerUsageCodeImageQuota == null
               ? null
               : Math.max(0, task.ownerUsageCodeImageQuota - (task.ownerUsageCodeUsedImageCredits ?? 0))
+          ),
+          outputVideoCount: task.ownerUsageCodeOutputVideoCount ?? 0,
+          providerOutputVideoCount: task.ownerUsageCodeProviderOutputVideoCount ?? 0,
+          currentProviderRemainingVideoCredits: currentProviderRemainingVideoCredits ?? (
+            task.ownerUsageCodeVideoQuota == null
+              ? null
+              : Math.max(0, task.ownerUsageCodeVideoQuota - (task.ownerUsageCodeUsedVideoCredits ?? 0))
           ),
         }
       : null,

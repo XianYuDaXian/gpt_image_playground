@@ -377,7 +377,7 @@ export default function SettingsModal() {
           id: runtimeSettings.id ?? 'default',
           name: runtimeSettings.name ?? '默认节点',
           baseUrl: runtimeSettings.baseUrl,
-          apiKey: '',
+          apiKey: runtimeSettings.apiKey,
           apiKeyMasked: runtimeSettings.apiKeyMasked ?? null,
           apiKeyConfigured: runtimeSettings.apiKeyConfigured,
           model: runtimeSettings.model,
@@ -404,7 +404,7 @@ export default function SettingsModal() {
     })
     const defaultProfile = visibleProfiles.find((profile) => profile.isDefault) ?? visibleProfiles[0]
     if (defaultProfile) {
-      setProfileDraft({ ...defaultProfile, apiKey: '' })
+      setProfileDraft(defaultProfile)
     } else {
       setProfileDraft(createEmptyProfile())
     }
@@ -1024,7 +1024,7 @@ export default function SettingsModal() {
                       return
                     }
                     const profile = profiles.find((item) => item.id === value)
-                    if (profile) setProfileDraft({ ...profile, apiKey: '' })
+                    if (profile) setProfileDraft(profile)
                   }}
                   options={[
                     ...profiles.map((profile) => ({

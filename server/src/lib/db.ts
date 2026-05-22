@@ -46,9 +46,15 @@ export interface TaskRecord {
   ownerUsageCodeUsedImageCredits: number | null
   ownerUsageCodeProviderImageQuotasJson: string | null
   ownerUsageCodeProviderUsedImageCreditsJson: string | null
+  ownerUsageCodeVideoQuota: number | null
+  ownerUsageCodeUsedVideoCredits: number | null
+  ownerUsageCodeProviderVideoQuotasJson: string | null
+  ownerUsageCodeProviderUsedVideoCreditsJson: string | null
   ownerUsageCodeTaskCount: number | null
   ownerUsageCodeOutputImageCount: number | null
   ownerUsageCodeProviderOutputImageCount: number | null
+  ownerUsageCodeOutputVideoCount: number | null
+  ownerUsageCodeProviderOutputVideoCount: number | null
   reservedImageCredits: number
   createdAt: string
   updatedAt: string
@@ -539,6 +545,18 @@ export class AppDatabase {
     }
     if (!usageCodeColumnNames.has('provider_used_video_credits_json')) {
       this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN provider_used_video_credits_json TEXT')
+    }
+    if (!usageCodeColumnNames.has('output_video_count')) {
+      this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN output_video_count INTEGER NOT NULL DEFAULT 0')
+      this.sqlite.exec(`
+        UPDATE usage_codes
+        SET output_video_count = COALESCE((
+          SELECT COUNT(task_images.id)
+          FROM tasks owner_tasks
+          INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'video_output'
+          WHERE owner_tasks.owner_usage_code_id = usage_codes.id
+        ), 0)
+      `)
     }
     const taskImageColumns = this.sqlite.prepare('PRAGMA table_info(task_images)').all() as Array<{ name: string }>
     const taskImageColumnNames = new Set(taskImageColumns.map((column) => column.name))
@@ -1943,7 +1961,12 @@ ${selectUsageCodeFields()}
       usage_codes.used_image_credits as ownerUsageCodeUsedImageCredits,
       usage_codes.provider_image_quotas_json as ownerUsageCodeProviderImageQuotasJson,
       usage_codes.provider_used_image_credits_json as ownerUsageCodeProviderUsedImageCreditsJson,
+      usage_codes.video_quota as ownerUsageCodeVideoQuota,
+      usage_codes.used_video_credits as ownerUsageCodeUsedVideoCredits,
+      usage_codes.provider_video_quotas_json as ownerUsageCodeProviderVideoQuotasJson,
+      usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson,
       usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
+      usage_codes.output_video_count as ownerUsageCodeOutputVideoCount,
       (
         SELECT COUNT(*)
         FROM tasks owner_tasks
@@ -1957,6 +1980,14 @@ ${selectUsageCodeFields()}
         WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
           AND owner_tasks.provider_profile_id = tasks.provider_profile_id
       ) as ownerUsageCodeProviderOutputImageCount
+      ,
+      (
+        SELECT COUNT(task_images.id)
+        FROM tasks owner_tasks
+        INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'video_output'
+        WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
+          AND owner_tasks.provider_profile_id = tasks.provider_profile_id
+      ) as ownerUsageCodeProviderOutputVideoCount
     `
   }
 

@@ -595,7 +595,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/api/admin/provider-profiles', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    return app.db.listProviderProfiles().map((profile) => serializeProfile(app, profile))
+    return app.db.listProviderProfiles().map((profile) => serializeProfile(app, profile, true))
   })
 
   app.get('/api/admin/provider-profiles/default', async (request, reply) => {
@@ -606,7 +606,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: '默认 provider profile 不存在' }
     }
 
-    return serializeProfile(app, profile)
+    return serializeProfile(app, profile, true)
   })
 
   app.put('/api/admin/provider-profiles/default', async (request, reply) => {
