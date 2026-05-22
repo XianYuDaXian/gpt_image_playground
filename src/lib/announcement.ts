@@ -2,6 +2,7 @@ import type { BackendReminderItem } from './backendSettings'
 
 const REMINDER_SHOW_STATE_KEY = 'gpt-image-playground-reminder-show-state'
 const REMINDER_COMPLETED_STATE_KEY = 'gpt-image-playground-reminder-completed-state'
+export const REMINDER_COMPLETED_STATE_CHANGED_EVENT = 'gpt-image-playground-reminder-completed-state-changed'
 
 interface ReminderShowState {
   shownSlotKeys: string[]
@@ -49,8 +50,13 @@ function writeJson(key: string, value: unknown) {
   localStorage.setItem(key, JSON.stringify(value))
 }
 
+function notifyCompletedStateChanged() {
+  window.dispatchEvent(new Event(REMINDER_COMPLETED_STATE_CHANGED_EVENT))
+}
+
 function getReminderVersionKey(item: BackendReminderItem) {
-  return `${item.id}:${item.updatedAt ?? item.endAt}`
+  const endAtTime = new Date(item.endAt).getTime()
+  return `${item.id}:${Number.isFinite(endAtTime) ? endAtTime : item.endAt}`
 }
 
 function getScheduleDayKey(now: Date, startTime: string, endTime: string) {
@@ -76,6 +82,7 @@ function getCompletedState() {
 export function clearAnnouncementLocalState() {
   localStorage.removeItem(REMINDER_SHOW_STATE_KEY)
   localStorage.removeItem(REMINDER_COMPLETED_STATE_KEY)
+  notifyCompletedStateChanged()
 }
 
 export function isReminderCompleted(item: BackendReminderItem, now = new Date()) {
@@ -150,6 +157,12 @@ export function hasUnreadCompletedReminders(items: BackendReminderItem[], now = 
   return items.some((item) => isReminderCompleted(item, now) && !seenSet.has(getReminderVersionKey(item)))
 }
 
+export function isCompletedReminderUnread(item: BackendReminderItem, now = new Date()) {
+  const completedState = getCompletedState()
+  const seenSet = new Set(completedState.seenKeys)
+  return isReminderCompleted(item, now) && !seenSet.has(getReminderVersionKey(item))
+}
+
 export function markCompletedRemindersSeen(items: BackendReminderItem[], now = new Date()) {
   const completedState = getCompletedState()
   const seenSet = new Set(completedState.seenKeys)
@@ -160,4 +173,15 @@ export function markCompletedRemindersSeen(items: BackendReminderItem[], now = n
   writeJson(REMINDER_COMPLETED_STATE_KEY, {
     seenKeys: Array.from(seenSet),
   })
+  notifyCompletedStateChanged()
+}
+
+export function markCompletedReminderSeen(item: BackendReminderItem) {
+  const completedState = getCompletedState()
+  const seenSet = new Set(completedState.seenKeys)
+  seenSet.add(getReminderVersionKey(item))
+  writeJson(REMINDER_COMPLETED_STATE_KEY, {
+    seenKeys: Array.from(seenSet),
+  })
+  notifyCompletedStateChanged()
 }

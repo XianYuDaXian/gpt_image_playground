@@ -1151,6 +1151,7 @@ export default function InputBar() {
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
       if (document.body.dataset.referenceEditorActive === '1') return
+      if (document.body.dataset.settingsModalActive === '1') return
       const items = e.clipboardData?.items
       if (!items) return
       const imageFiles: File[] = []

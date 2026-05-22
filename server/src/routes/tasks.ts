@@ -94,6 +94,18 @@ function buildSizeSearchText(width: number, height: number) {
   return [`${width}x${height}`, `${width}×${height}`, formatImageRatio(width, height)].join(' ')
 }
 
+function buildOwnerSearchText(
+  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
+  role: 'admin' | 'user',
+) {
+  const ownerTerms = [task.ownerUsageCode?.code]
+  if (role === 'admin') {
+    ownerTerms.push(task.ownerLabel)
+    ownerTerms.push(task.ownerUsageCode?.name)
+  }
+  return ownerTerms.filter(Boolean).join(' ')
+}
+
 function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never, query: string, role: 'admin' | 'user') {
   const q = normalizeSearchText(query.trim())
   if (!q) return true
@@ -106,11 +118,7 @@ function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends i
     })
     .join(' ')
 
-  const ownerSearchText = [
-    task.ownerUsageCode?.code,
-    role === 'admin' ? task.ownerLabel : null,
-    role === 'admin' ? task.ownerUsageCode?.name : null,
-  ].filter(Boolean).join(' ')
+  const ownerSearchText = buildOwnerSearchText(task, role)
 
   const searchText = [
     task.prompt,

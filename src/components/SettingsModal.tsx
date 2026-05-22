@@ -24,6 +24,7 @@ import {
   type BackendProviderProfile,
   type BackendUsageCode,
 } from '../lib/backendSettings'
+import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
 import {
   fetchAdminBackupImportCandidates,
   exportBackendBackup,
@@ -85,6 +86,7 @@ function createEmptyReminder(): BackendReminderItem {
     title: '数据备份提醒',
     message: '',
     imageDataUrl: null,
+    imageDataUrls: [],
     maxDailyShows: 1,
     startAt: toLocalDateTimeInputValue(now),
     endAt: toLocalDateTimeInputValue(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
@@ -94,8 +96,14 @@ function createEmptyReminder(): BackendReminderItem {
 }
 
 function normalizeReminderForEditor(item: BackendReminderItem): BackendReminderItem {
+  const imageDataUrls = Array.from(new Set([
+    ...(item.imageDataUrls ?? []).map((value) => value.trim()).filter(Boolean),
+    item.imageDataUrl?.trim() ?? '',
+  ].filter(Boolean)))
   return {
     ...item,
+    imageDataUrl: imageDataUrls[0] ?? null,
+    imageDataUrls,
     startAt: item.startAt.length > 16 ? toLocalDateTimeInputValue(new Date(item.startAt)) : item.startAt,
     endAt: item.endAt.length > 16 ? toLocalDateTimeInputValue(new Date(item.endAt)) : item.endAt,
   }
@@ -213,6 +221,7 @@ export default function SettingsModal() {
   const [usageCodeProviderVideoQuotaDrafts, setUsageCodeProviderVideoQuotaDrafts] = useState<Record<string, Record<string, string>>>({})
   const [usageCodeSearchQuery, setUsageCodeSearchQuery] = useState('')
   const [expandedUsageCodeIds, setExpandedUsageCodeIds] = useState<string[]>([])
+  const [expandedReminderIds, setExpandedReminderIds] = useState<string[]>([])
   const [addCodeValue, setAddCodeValue] = useState('')
   const [activeTab, setActiveTab] = useState<SettingsTab>('habits')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -232,6 +241,32 @@ export default function SettingsModal() {
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
   const userUsageCodes = authStatus?.usageCodes ?? []
+  const hasUnreadEndedReminders = useMemo(
+    () => reminderDrafts.some((item) => isCompletedReminderUnread(item)),
+    [reminderDrafts, expandedReminderIds],
+  )
+  const orderedReminderDrafts = useMemo(() => {
+    const now = Date.now()
+    const activeSavedItems = reminderDrafts
+      .filter((item) => (item.createdAt || item.updatedAt) && new Date(item.endAt).getTime() > now)
+      .sort((left, right) => new Date(right.updatedAt ?? right.startAt).getTime() - new Date(left.updatedAt ?? left.startAt).getTime())
+    const endedSavedItems = reminderDrafts
+      .filter((item) => (item.createdAt || item.updatedAt) && new Date(item.endAt).getTime() <= now)
+      .sort((left, right) => new Date(right.updatedAt ?? right.startAt).getTime() - new Date(left.updatedAt ?? left.startAt).getTime())
+    const newDraftItems = reminderDrafts
+      .filter((item) => !item.createdAt && !item.updatedAt)
+      .sort((left, right) => new Date(left.startAt).getTime() - new Date(right.startAt).getTime())
+
+    return [...activeSavedItems, ...endedSavedItems, ...newDraftItems]
+  }, [reminderDrafts])
+
+  useEffect(() => {
+    if (!showSettings) return
+    document.body.dataset.settingsModalActive = '1'
+    return () => {
+      delete document.body.dataset.settingsModalActive
+    }
+  }, [showSettings])
   const filteredUsageCodes = useMemo(() => {
     const query = usageCodeSearchQuery.trim().toLowerCase()
     if (!query) return usageCodes
@@ -301,6 +336,12 @@ export default function SettingsModal() {
       reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
       reader.readAsDataURL(file)
     })
+
+  const readReminderImageFiles = async (files: File[]) => {
+    const imageFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, 16)
+    if (!imageFiles.length) throw new Error('请选择图片文件')
+    return Promise.all(imageFiles.map((file) => readFileAsDataUrl(file)))
+  }
 
   const formatActivityEventTagText = (event: BackendUsageCode['activityEvents'][number]) => {
     if (!event.providerProfileName || event.credits == null) return null
@@ -485,6 +526,12 @@ export default function SettingsModal() {
     setProviderOptions(nextProviderOptions)
     setDistribution(nextDistribution)
     setReminderDrafts(nextReminders.map(normalizeReminderForEditor))
+    setExpandedReminderIds((prev) => {
+      const previous = new Set(prev)
+      return nextReminders
+        .filter((item) => new Date(item.endAt).getTime() > Date.now() || previous.has(item.id))
+        .map((item) => item.id)
+    })
     setUsageCodes(nextUsageCodes)
     setUsageCodeExportSummary(nextUsageCodeExportSummary)
     setExpandedUsageCodeIds((prev) => {
@@ -755,23 +802,68 @@ export default function SettingsModal() {
   }
 
   const handlePickReminderImage = async (reminderId: string, event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      useStore.getState().showToast('请选择图片文件', 'error')
-      return
-    }
+    if (!files.length) return
 
     try {
-      const dataUrl = await readFileAsDataUrl(file)
-      setReminderDrafts((prev) => prev.map((item) => item.id === reminderId ? { ...item, imageDataUrl: dataUrl } : item))
+      const dataUrls = await readReminderImageFiles(files)
+      setReminderDrafts((prev) => prev.map((item) => {
+        if (item.id !== reminderId) return item
+        const imageDataUrls = Array.from(new Set([...(item.imageDataUrls ?? []), ...dataUrls])).slice(0, 16)
+        return {
+          ...item,
+          imageDataUrl: imageDataUrls[0] ?? null,
+          imageDataUrls,
+        }
+      }))
     } catch (err) {
       useStore.getState().showToast(
         `读取提醒配图失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
     }
+  }
+
+  const handleReminderMessagePaste = async (reminderId: string, event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file instanceof File && file.type.startsWith('image/'))
+    if (!files.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.nativeEvent.stopImmediatePropagation?.()
+    try {
+      const dataUrls = await readReminderImageFiles(files)
+      setReminderDrafts((prev) => prev.map((item) => {
+        if (item.id !== reminderId) return item
+        const imageDataUrls = Array.from(new Set([...(item.imageDataUrls ?? []), ...dataUrls])).slice(0, 16)
+        return {
+          ...item,
+          imageDataUrl: imageDataUrls[0] ?? null,
+          imageDataUrls,
+        }
+      }))
+      useStore.getState().showToast(`已添加 ${dataUrls.length} 张提醒配图`, 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `粘贴提醒配图失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleRemoveReminderImage = (reminderId: string, index: number) => {
+    setReminderDrafts((prev) => prev.map((item) => {
+      if (item.id !== reminderId) return item
+      const imageDataUrls = (item.imageDataUrls ?? []).filter((_, currentIndex) => currentIndex !== index)
+      return {
+        ...item,
+        imageDataUrl: imageDataUrls[0] ?? null,
+        imageDataUrls,
+      }
+    }))
   }
 
   const handleCreateReminder = () => {
@@ -784,6 +876,22 @@ export default function SettingsModal() {
 
   const handleDeleteReminder = (reminderId: string) => {
     setReminderDrafts((prev) => prev.filter((item) => item.id !== reminderId))
+    setExpandedReminderIds((prev) => prev.filter((id) => id !== reminderId))
+  }
+
+  const toggleReminderExpanded = (reminderId: string) => {
+    const reminder = reminderDrafts.find((item) => item.id === reminderId)
+    const ended = reminder ? new Date(reminder.endAt).getTime() <= Date.now() : false
+    setExpandedReminderIds((prev) => {
+      const isExpanded = prev.includes(reminderId)
+      if (isExpanded) {
+        return prev.filter((id) => id !== reminderId)
+      }
+      if (ended && reminder) {
+        markCompletedReminderSeen(reminder)
+      }
+      return [...prev, reminderId]
+    })
   }
 
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1097,7 +1205,14 @@ export default function SettingsModal() {
         <div className="tiny-scrollbar flex gap-2 overflow-x-auto border-b border-gray-100 px-5 py-3 dark:border-white/[0.08]">
           {isAdmin && <button className={tabClass('habits')} onClick={() => setActiveTab('habits')}>习惯配置</button>}
           <button className={tabClass('api')} onClick={() => setActiveTab('api')}>API 配置</button>
-          {isAdmin && <button className={tabClass('distribution')} onClick={() => setActiveTab('distribution')}>分发管理</button>}
+          {isAdmin && (
+            <button className={tabClass('distribution')} onClick={() => setActiveTab('distribution')}>
+              分发管理
+              {hasUnreadEndedReminders && (
+                <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+              )}
+            </button>
+          )}
           {isAdmin && <button className={tabClass('data')} onClick={() => setActiveTab('data')}>数据管理</button>}
         </div>
 
@@ -1512,8 +1627,10 @@ export default function SettingsModal() {
                   </button>
                 </div>
                 <div className="space-y-3">
-                  {reminderDrafts.map((reminder) => {
+                  {orderedReminderDrafts.map((reminder) => {
                     const ended = new Date(reminder.endAt).getTime() <= Date.now()
+                    const expanded = expandedReminderIds.includes(reminder.id)
+                    const unreadEnded = isCompletedReminderUnread(reminder)
                     return (
                       <div
                         key={reminder.id}
@@ -1535,10 +1652,24 @@ export default function SettingsModal() {
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Switch
-                              checked={reminder.enabled}
-                              onChange={(checked) => handleUpdateReminder(reminder.id, { enabled: checked })}
-                            />
+                            {ended && (
+                              <button
+                                type="button"
+                                onClick={() => toggleReminderExpanded(reminder.id)}
+                                className="relative rounded-lg bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+                              >
+                                {expanded ? '收起' : '展开'}
+                                {unreadEnded && !expanded && (
+                                  <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" />
+                                )}
+                              </button>
+                            )}
+                            {!ended && (
+                              <Switch
+                                checked={reminder.enabled}
+                                onChange={(checked) => handleUpdateReminder(reminder.id, { enabled: checked })}
+                              />
+                            )}
                             <button
                               type="button"
                               onClick={() => handleDeleteReminder(reminder.id)}
@@ -1548,6 +1679,65 @@ export default function SettingsModal() {
                             </button>
                           </div>
                         </div>
+                        {ended && !expanded ? (
+                          <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                            <div className="font-medium text-gray-700 dark:text-gray-200">{reminder.title || '未命名事项'}</div>
+                            <div className="mt-1 break-words">
+                              {reminder.message.trim() || '无正文'}
+                            </div>
+                          </div>
+                        ) : ended ? (
+                          <div className="space-y-3">
+                            <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                              <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">事项标题</div>
+                              <div className="mt-1 text-sm font-medium text-gray-700 dark:text-gray-200">{reminder.title || '未命名事项'}</div>
+                            </div>
+                            <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-6 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                              <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">事项正文</div>
+                              <div className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-gray-200">{reminder.message.trim() || '无正文'}</div>
+                            </div>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                                <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">开始时间</div>
+                                <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.startAt.replace('T', ' ')}</div>
+                              </div>
+                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                                <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">结束时间</div>
+                                <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.endAt.replace('T', ' ')}</div>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                                <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">每天提醒次数</div>
+                                <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.maxDailyShows}</div>
+                              </div>
+                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                                <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">日内开始</div>
+                                <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.startTime}</div>
+                              </div>
+                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                                <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">日内结束</div>
+                                <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.endTime}</div>
+                              </div>
+                            </div>
+                            {reminder.imageDataUrls?.length ? (
+                              <div className="space-y-2">
+                                <span className="block text-xs text-gray-500 dark:text-gray-400">事项配图</span>
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                  {reminder.imageDataUrls.map((imageDataUrl, imageIndex) => (
+                                    <img
+                                      key={`${reminder.id}-readonly-image-${imageIndex}`}
+                                      src={imageDataUrl}
+                                      alt={`${reminder.title || '事项配图'} ${imageIndex + 1}`}
+                                      className="max-h-36 w-full rounded-2xl object-contain"
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <>
                         <label className="block">
                           <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事项标题</span>
                           <input
@@ -1562,8 +1752,9 @@ export default function SettingsModal() {
                           <textarea
                             value={reminder.message}
                             onChange={(event) => handleUpdateReminder(reminder.id, { message: event.target.value })}
+                            onPaste={(event) => void handleReminderMessagePaste(reminder.id, event)}
                             rows={4}
-                            placeholder="请先导出图片和视频，再准备后续清理。"
+                            placeholder="请先导出图片和视频，再准备后续清理。可直接粘贴多张图片。"
                             className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                           />
                         </label>
@@ -1625,26 +1816,41 @@ export default function SettingsModal() {
                           <input
                             type="file"
                             accept="image/*"
+                            multiple
                             onChange={(event) => void handlePickReminderImage(reminder.id, event)}
                             className="block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-medium file:text-blue-600 hover:file:bg-blue-100 dark:text-gray-400 dark:file:bg-blue-500/10 dark:file:text-blue-300 dark:hover:file:bg-blue-500/20"
                           />
-                          {reminder.imageDataUrl ? (
+                          <div className="text-[11px] text-gray-400 dark:text-gray-500">
+                            支持选择或粘贴多张图片。最多保留 16 张。
+                          </div>
+                          {reminder.imageDataUrls?.length ? (
                             <div className="space-y-2">
-                              <img
-                                src={reminder.imageDataUrl}
-                                alt={reminder.title || '事项配图'}
-                                className="max-h-48 w-full rounded-2xl object-cover"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleUpdateReminder(reminder.id, { imageDataUrl: null })}
-                                className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-100 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
-                              >
-                                移除配图
-                              </button>
+                              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                {reminder.imageDataUrls.map((imageDataUrl, imageIndex) => (
+                                  <div
+                                    key={`${reminder.id}-editable-image-${imageIndex}`}
+                                    className="relative overflow-hidden rounded-2xl border border-gray-200/70 bg-white/60 p-2 dark:border-white/[0.08] dark:bg-white/[0.03]"
+                                  >
+                                    <img
+                                      src={imageDataUrl}
+                                      alt={`${reminder.title || '事项配图'} ${imageIndex + 1}`}
+                                      className="max-h-32 w-full rounded-xl object-contain"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveReminderImage(reminder.id, imageIndex)}
+                                      className="absolute right-3 top-3 rounded-full bg-black/45 px-2 py-1 text-[11px] font-medium text-white transition hover:bg-black/65"
+                                    >
+                                      删除
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           ) : null}
                         </div>
+                          </>
+                        )}
                       </div>
                     )
                   })}

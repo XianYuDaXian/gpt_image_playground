@@ -281,7 +281,8 @@ const reminderItemSchema = z.object({
   enabled: z.boolean().default(false),
   title: z.string().trim().max(80).default('数据备份提醒'),
   message: z.string().trim().max(5000).default(''),
-  imageDataUrl: z.string().trim().nullable().default(null),
+  imageDataUrl: z.string().trim().nullable().optional().default(null),
+  imageDataUrls: z.array(z.string().trim().min(1)).max(16).optional().default([]),
   maxDailyShows: z.coerce.number().int().min(1).max(24).default(1),
   startAt: z.string().datetime(),
   endAt: z.string().datetime(),
@@ -296,6 +297,22 @@ const reminderItemSchema = z.object({
   message: '结束时间必须晚于开始时间',
   path: ['endAt'],
 })
+
+function normalizeReminderItem<T extends {
+  imageDataUrl?: string | null
+  imageDataUrls?: string[]
+}>(item: T) {
+  const imageDataUrls = Array.from(new Set([
+    ...(item.imageDataUrls ?? []).map((value) => value.trim()).filter(Boolean),
+    item.imageDataUrl?.trim() ?? '',
+  ].filter(Boolean)))
+
+  return {
+    ...item,
+    imageDataUrl: imageDataUrls[0] ?? null,
+    imageDataUrls,
+  }
+}
 
 const reminderListSchema = z.object({
   items: z.array(reminderItemSchema),
@@ -380,7 +397,7 @@ function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
 function getReminderItems(app: Parameters<FastifyPluginAsync>[0]) {
   const stored = app.db.getAppSetting('reminders')
   if (stored) {
-    return reminderListSchema.parse(stored).items
+    return reminderListSchema.parse(stored).items.map((item) => normalizeReminderItem(item))
   }
 
   const legacyAnnouncement = app.db.getAppSetting('announcement')
@@ -391,6 +408,7 @@ function getReminderItems(app: Parameters<FastifyPluginAsync>[0]) {
       title: (legacyAnnouncement as { title?: string }).title ?? '数据备份提醒',
       message: (legacyAnnouncement as { message?: string }).message ?? '',
       imageDataUrl: (legacyAnnouncement as { imageDataUrl?: string | null }).imageDataUrl ?? null,
+      imageDataUrls: (legacyAnnouncement as { imageDataUrls?: string[] | null }).imageDataUrls ?? [],
       maxDailyShows: (legacyAnnouncement as { maxDailyShows?: number }).maxDailyShows ?? 1,
       startAt: new Date().toISOString(),
       endAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
@@ -400,7 +418,7 @@ function getReminderItems(app: Parameters<FastifyPluginAsync>[0]) {
       updatedAt: (legacyAnnouncement as { updatedAt?: string }).updatedAt ?? new Date().toISOString(),
     })
     if (parsedLegacy.success) {
-      return [parsedLegacy.data]
+      return [normalizeReminderItem(parsedLegacy.data)]
     }
   }
 
@@ -1403,7 +1421,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const payload = reminderListSchema.parse(request.body)
     const now = new Date().toISOString()
     const items = payload.items.map((item) => ({
-      ...item,
+      ...normalizeReminderItem(item),
       createdAt: item.createdAt ?? now,
       updatedAt: now,
     }))

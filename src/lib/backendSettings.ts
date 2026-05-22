@@ -73,7 +73,8 @@ export interface BackendReminderItem {
   enabled: boolean
   title: string
   message: string
-  imageDataUrl: string | null
+  imageDataUrl?: string | null
+  imageDataUrls: string[]
   maxDailyShows: number
   startAt: string
   endAt: string
@@ -148,6 +149,19 @@ async function readResponseJson<T>(response: Response): Promise<T> {
   }
 
   return response.json() as Promise<T>
+}
+
+function normalizeReminderItem(item: BackendReminderItem): BackendReminderItem {
+  const imageDataUrls = Array.from(new Set([
+    ...(item.imageDataUrls ?? []).map((value) => value.trim()).filter(Boolean),
+    item.imageDataUrl?.trim() ?? '',
+  ].filter(Boolean)))
+
+  return {
+    ...item,
+    imageDataUrl: imageDataUrls[0] ?? null,
+    imageDataUrls,
+  }
 }
 
 export async function fetchBackendRuntimeSettings(): Promise<BackendRuntimeSettings | null> {
@@ -278,13 +292,13 @@ export async function fetchBackendDistribution(): Promise<BackendDistributionSet
 export async function fetchBackendReminders(): Promise<BackendReminderItem[]> {
   const response = await fetch('/api/reminders', { cache: 'no-store' })
   const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
-  return payload.items
+  return payload.items.map(normalizeReminderItem)
 }
 
 export async function fetchAdminBackendReminders(): Promise<BackendReminderItem[]> {
   const response = await fetch('/api/admin/reminders', { cache: 'no-store' })
   const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
-  return payload.items
+  return payload.items.map(normalizeReminderItem)
 }
 
 export async function saveBackendReminders(items: BackendReminderItem[]): Promise<BackendReminderItem[]> {
@@ -294,7 +308,7 @@ export async function saveBackendReminders(items: BackendReminderItem[]): Promis
     body: JSON.stringify({ items }),
   })
   const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
-  return payload.items
+  return payload.items.map(normalizeReminderItem)
 }
 
 export async function saveBackendDistribution(settings: BackendDistributionSettings): Promise<BackendDistributionSettings> {

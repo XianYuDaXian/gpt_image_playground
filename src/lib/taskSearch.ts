@@ -45,6 +45,15 @@ function buildSizeSearchText(width: number, height: number) {
   ].join(' ')
 }
 
+function buildOwnerSearchText(task: TaskRecord, role: AuthRole | null | undefined) {
+  const ownerTerms = [task.ownerUsageCode?.code]
+  if (role === 'admin') {
+    ownerTerms.push(task.ownerLabel)
+    ownerTerms.push(task.ownerUsageCode?.name)
+  }
+  return ownerTerms.filter(Boolean).join(' ')
+}
+
 export function matchesTaskSearch(task: TaskRecord, query: string, role: AuthRole | null | undefined) {
   const q = normalizeSearchText(query.trim())
   if (!q) return true
@@ -65,11 +74,7 @@ export function matchesTaskSearch(task: TaskRecord, query: string, role: AuthRol
     })
     .join(' ')
 
-  const ownerSearchText = [
-    task.ownerUsageCode?.code,
-    role === 'admin' ? task.ownerLabel : null,
-    role === 'admin' ? task.ownerUsageCode?.name : null,
-  ].filter(Boolean).join(' ')
+  const ownerSearchText = buildOwnerSearchText(task, role)
 
   const searchText = [
     task.prompt,

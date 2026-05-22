@@ -3,7 +3,7 @@ import { logout, useStore } from '../store'
 import { cycleThemeMode, getThemeModeLabel } from '../lib/theme'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { fetchAdminBackendReminders } from '../lib/backendSettings'
-import { hasUnreadCompletedReminders, markCompletedRemindersSeen } from '../lib/announcement'
+import { hasUnreadCompletedReminders, REMINDER_COMPLETED_STATE_CHANGED_EVENT } from '../lib/announcement'
 import HelpModal from './HelpModal'
 
 export default function Header() {
@@ -48,14 +48,17 @@ export default function Header() {
     const timer = window.setInterval(() => {
       setHasUnreadReminderDot(hasUnreadCompletedReminders(adminReminders))
     }, 60 * 1000)
-    return () => window.clearInterval(timer)
+    const handleCompletedStateChanged = () => {
+      setHasUnreadReminderDot(hasUnreadCompletedReminders(adminReminders))
+    }
+    window.addEventListener(REMINDER_COMPLETED_STATE_CHANGED_EVENT, handleCompletedStateChanged)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener(REMINDER_COMPLETED_STATE_CHANGED_EVENT, handleCompletedStateChanged)
+    }
   }, [authStatus?.role, adminReminders])
 
   const openSettings = () => {
-    if (authStatus?.role === 'admin' && adminReminders.length) {
-      markCompletedRemindersSeen(adminReminders)
-      setHasUnreadReminderDot(false)
-    }
     setShowSettings(true)
   }
 
