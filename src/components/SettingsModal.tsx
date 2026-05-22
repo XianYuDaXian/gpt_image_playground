@@ -230,6 +230,108 @@ export default function SettingsModal() {
       .filter((profile): profile is BackendProviderProfile => Boolean(profile))
   }
 
+  const findProfileByName = (name: string) => profiles.find((profile) => profile.name === name) ?? null
+
+  const parseUsageCodeAccessLabel = (label: string) => {
+    const normalizedLabel = label.trim()
+    if (!normalizedLabel) return { kind: 'none' as const, names: [] as string[] }
+    if (normalizedLabel === '全部 API') return { kind: 'all' as const, names: [] as string[] }
+    if (normalizedLabel === '未匹配 API') return { kind: 'unknown' as const, names: [] as string[] }
+    return {
+      kind: 'profiles' as const,
+      names: normalizedLabel.split('、').map((item) => item.trim()).filter(Boolean),
+    }
+  }
+
+  const getUsageCodeAccessTagItems = (label: string) => {
+    const parsed = parseUsageCodeAccessLabel(label)
+    if (parsed.kind === 'all') {
+      return [{
+        key: 'all',
+        name: '全部 API',
+        colorKey: 'all-api',
+        tagColor: null,
+      }]
+    }
+    if (parsed.kind === 'unknown') {
+      return [{
+        key: 'unknown',
+        name: '未匹配 API',
+        colorKey: 'unknown-api',
+        tagColor: null,
+      }]
+    }
+    return parsed.names.map((name) => {
+      const profile = findProfileByName(name)
+      return {
+        key: profile?.id ?? name,
+        name,
+        colorKey: profile?.id ?? name,
+        tagColor: profile?.tagColor ?? null,
+      }
+    })
+  }
+
+  const parseUsageCodeAccessActivity = (event: BackendUsageCode['activityEvents'][number]) => {
+    if (event.eventType === 'usage_code_created') {
+      const match = event.label.match(/可用 API：(.+)$/)
+      if (!match) return null
+      return {
+        kind: 'created' as const,
+        enabledLabel: match[1]?.trim() ?? '',
+        disabledLabel: '',
+      }
+    }
+    if (event.eventType === 'usage_code_allowed_apis_changed') {
+      const match = event.label.match(/^管理员调整可用 API：(.+?) -> (.+)$/)
+      if (!match) return null
+      const previousLabel = match[1]?.trim() ?? ''
+      const nextLabel = match[2]?.trim() ?? ''
+      const previous = parseUsageCodeAccessLabel(previousLabel)
+      const next = parseUsageCodeAccessLabel(nextLabel)
+      const nextNameSet = new Set(next.names)
+      let disabledNames: string[] = []
+      if (previous.kind === 'profiles') {
+        disabledNames = previous.names.filter((name) => !nextNameSet.has(name))
+      } else if (previous.kind === 'all' && next.kind !== 'all') {
+        disabledNames = profiles
+          .map((profile) => profile.name)
+          .filter((name) => !nextNameSet.has(name))
+      }
+      return {
+        kind: 'changed' as const,
+        enabledLabel: nextLabel,
+        disabledLabel: disabledNames.join('、'),
+      }
+    }
+    return null
+  }
+
+  const renderUsageCodeAccessTags = (label: string, disabled = false) => {
+    const items = getUsageCodeAccessTagItems(label)
+    if (!items.length) {
+      return (
+        <span className="text-xs text-gray-400 dark:text-gray-500">
+          无
+        </span>
+      )
+    }
+    return items.map((item) => (
+      <ProviderProfileTag
+        key={`${disabled ? 'off' : 'on'}-${item.key}-${item.name}`}
+        name={item.name}
+        text={item.name}
+        colorKey={item.colorKey}
+        tagColor={item.tagColor}
+        includeMode={false}
+        includeDefault={false}
+        disabled={disabled}
+        crossed={disabled}
+        className="max-w-[10rem]"
+      />
+    ))
+  }
+
   const loadSettings = async () => {
     const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
@@ -262,6 +364,7 @@ export default function SettingsModal() {
             persistInputOnRestart: runtimeSettings.persistInputOnRestart,
             reuseTaskApiProfileTemporarily: runtimeSettings.reuseTaskApiProfileTemporarily,
             alwaysShowRetryButton: runtimeSettings.alwaysShowRetryButton,
+            showUsageCodeAliasOnTaskCard: runtimeSettings.showUsageCodeAliasOnTaskCard,
           }
         : {}),
     }
@@ -420,6 +523,7 @@ export default function SettingsModal() {
         persistInputOnRestart: draft.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: draft.reuseTaskApiProfileTemporarily,
         alwaysShowRetryButton: draft.alwaysShowRetryButton,
+        showUsageCodeAliasOnTaskCard: draft.showUsageCodeAliasOnTaskCard,
       })
 
       const nextSettings: Partial<AppSettings> = {
@@ -441,6 +545,7 @@ export default function SettingsModal() {
         persistInputOnRestart: savedPreferences.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: savedPreferences.reuseTaskApiProfileTemporarily,
         alwaysShowRetryButton: savedPreferences.alwaysShowRetryButton,
+        showUsageCodeAliasOnTaskCard: savedPreferences.showUsageCodeAliasOnTaskCard,
       }
 
       setSettings(nextSettings)
@@ -809,6 +914,12 @@ export default function SettingsModal() {
                 description="当前后端版本会保存该习惯配置。重试入口会在任务卡片清理时接入。"
                 checked={draft.alwaysShowRetryButton}
                 onChange={(checked) => updateDraft({ alwaysShowRetryButton: checked })}
+              />
+              <PreferenceRow
+                title="任务卡片中的使用码显示别名"
+                description="只影响管理员查看任务卡片和详情时的使用码按钮文本。普通用户仍显示使用码本身。"
+                checked={draft.showUsageCodeAliasOnTaskCard}
+                onChange={(checked) => updateDraft({ showUsageCodeAliasOnTaskCard: checked })}
               />
             </div>
           )}
@@ -1189,13 +1300,19 @@ export default function SettingsModal() {
                               key={profile.id}
                               type="button"
                               onClick={() => setNewCodeAllowedProviderProfileIds(nextIds.length ? nextIds : [])}
-                              className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                                selected
-                                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
-                                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
-                              }`}
+                              className="transition"
                             >
-                              {profile.name}
+                              <ProviderProfileTag
+                                name={profile.name}
+                                colorKey={profile.id}
+                                tagColor={profile.tagColor}
+                                apiMode={profile.apiMode}
+                                includeMode={false}
+                                includeDefault={false}
+                                disabled={!selected}
+                                crossed={!selected}
+                                className={`max-w-[10rem] ${selected ? '' : 'hover:opacity-60'}`}
+                              />
                             </button>
                           )
                         })}
@@ -1414,13 +1531,19 @@ export default function SettingsModal() {
                                           key={profile.id}
                                           type="button"
                                           onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: nextIds.length ? nextIds : [] })}
-                                          className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                                            selected
-                                              ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
-                                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
-                                          }`}
+                                          className="transition"
                                         >
-                                          {profile.name}
+                                          <ProviderProfileTag
+                                            name={profile.name}
+                                            colorKey={profile.id}
+                                            tagColor={profile.tagColor}
+                                            apiMode={profile.apiMode}
+                                            includeMode={false}
+                                            includeDefault={false}
+                                            disabled={!selected}
+                                            crossed={!selected}
+                                            className={`max-w-[10rem] ${selected ? '' : 'hover:opacity-60'}`}
+                                          />
                                         </button>
                                       )
                                     })}
@@ -1520,28 +1643,51 @@ export default function SettingsModal() {
                                 <div className="mt-4">
                                   <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">行为记录</span>
                                   <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200/70 bg-white/40 p-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
-                                    {code.activityEvents.map((event) => (
-                                      <div key={event.id} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
-                                        <div className="flex items-start justify-between gap-3">
-                                          <div className="min-w-0 flex-1 text-gray-800 dark:text-gray-100">{event.label}</div>
-                                          {event.providerProfileName && (
-                                            <ProviderProfileTag
-                                              name={event.providerProfileName}
-                                              colorKey={event.providerProfileId ?? event.providerProfileName}
-                                              tagColor={event.providerProfileTagColor}
-                                              text={formatActivityEventTagText(event) ?? event.providerProfileName}
-                                              includeMode={false}
-                                              includeDefault={false}
-                                              className="max-w-[8.5rem] shrink-0"
-                                            />
-                                          )}
+                                    {code.activityEvents.map((event) => {
+                                      const accessActivity = parseUsageCodeAccessActivity(event)
+                                      return (
+                                        <div key={event.id} className="rounded-lg bg-white/70 px-3 py-2 text-xs dark:bg-white/[0.04]">
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0 flex-1 text-gray-800 dark:text-gray-100">
+                                              {accessActivity ? (
+                                                <div className="space-y-2">
+                                                  <div>{accessActivity.kind === 'created' ? '管理员创建使用码' : '管理员调整可用 API'}</div>
+                                                  <div className="space-y-1">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                      <span className="text-[11px] text-gray-400 dark:text-gray-500">启用</span>
+                                                      {renderUsageCodeAccessTags(accessActivity.enabledLabel)}
+                                                    </div>
+                                                    {accessActivity.disabledLabel && (
+                                                      <div className="flex flex-wrap items-center gap-2">
+                                                        <span className="text-[11px] text-gray-400 dark:text-gray-500">禁用</span>
+                                                        {renderUsageCodeAccessTags(accessActivity.disabledLabel, true)}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              ) : (
+                                                event.label
+                                              )}
+                                            </div>
+                                            {!accessActivity && event.providerProfileName && (
+                                              <ProviderProfileTag
+                                                name={event.providerProfileName}
+                                                colorKey={event.providerProfileId ?? event.providerProfileName}
+                                                tagColor={event.providerProfileTagColor}
+                                                text={formatActivityEventTagText(event) ?? event.providerProfileName}
+                                                includeMode={false}
+                                                includeDefault={false}
+                                                className="max-w-[8.5rem] shrink-0"
+                                              />
+                                            )}
+                                          </div>
+                                          <div className="mt-1 text-gray-400 dark:text-gray-500">
+                                            {new Date(event.createdAt).toLocaleString('zh-CN')}
+                                            {event.taskId ? ` · 任务 ${event.taskId}` : ''}
+                                          </div>
                                         </div>
-                                        <div className="mt-1 text-gray-400 dark:text-gray-500">
-                                          {new Date(event.createdAt).toLocaleString('zh-CN')}
-                                          {event.taskId ? ` · 任务 ${event.taskId}` : ''}
-                                        </div>
-                                      </div>
-                                    ))}
+                                      )
+                                    })}
                                   </div>
                                 </div>
                               )}

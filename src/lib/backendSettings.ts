@@ -21,6 +21,7 @@ export interface BackendRuntimeSettings {
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  showUsageCodeAliasOnTaskCard: boolean
   source?: 'env' | 'database'
 }
 
@@ -159,6 +160,7 @@ export async function saveBackendRuntimeSettings(settings: {
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  showUsageCodeAliasOnTaskCard: boolean
 }): Promise<BackendRuntimeSettings> {
   const response = await fetch('/api/runtime-settings', {
     method: 'PUT',
@@ -179,12 +181,14 @@ export async function saveBackendRuntimePreferences(settings: {
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  showUsageCodeAliasOnTaskCard: boolean
 }): Promise<Pick<
   BackendRuntimeSettings,
   | 'clearInputAfterSubmit'
   | 'persistInputOnRestart'
   | 'reuseTaskApiProfileTemporarily'
   | 'alwaysShowRetryButton'
+  | 'showUsageCodeAliasOnTaskCard'
 >> {
   const response = await fetch('/api/runtime-preferences', {
     method: 'PUT',

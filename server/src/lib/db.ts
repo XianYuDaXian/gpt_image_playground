@@ -44,6 +44,8 @@ export interface TaskRecord {
   ownerUsageCodeLastUsedAt: string | null
   ownerUsageCodeImageQuota: number | null
   ownerUsageCodeUsedImageCredits: number | null
+  ownerUsageCodeProviderImageQuotasJson: string | null
+  ownerUsageCodeProviderUsedImageCreditsJson: string | null
   ownerUsageCodeTaskCount: number | null
   ownerUsageCodeOutputImageCount: number | null
   ownerUsageCodeProviderOutputImageCount: number | null
@@ -1939,6 +1941,8 @@ ${selectUsageCodeFields()}
       usage_codes.last_used_at as ownerUsageCodeLastUsedAt,
       usage_codes.image_quota as ownerUsageCodeImageQuota,
       usage_codes.used_image_credits as ownerUsageCodeUsedImageCredits,
+      usage_codes.provider_image_quotas_json as ownerUsageCodeProviderImageQuotasJson,
+      usage_codes.provider_used_image_credits_json as ownerUsageCodeProviderUsedImageCreditsJson,
       usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
       (
         SELECT COUNT(*)

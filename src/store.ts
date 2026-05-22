@@ -425,6 +425,8 @@ export const useStore = create<AppState>()(
             s.reuseTaskApiProfileTemporarily ?? st.settings.reuseTaskApiProfileTemporarily ?? DEFAULT_SETTINGS.reuseTaskApiProfileTemporarily,
           alwaysShowRetryButton:
             s.alwaysShowRetryButton ?? st.settings.alwaysShowRetryButton ?? DEFAULT_SETTINGS.alwaysShowRetryButton,
+          showUsageCodeAliasOnTaskCard:
+            s.showUsageCodeAliasOnTaskCard ?? st.settings.showUsageCodeAliasOnTaskCard ?? DEFAULT_SETTINGS.showUsageCodeAliasOnTaskCard,
           apiKeyMasked:
             s.apiKeyMasked === undefined
               ? st.settings.apiKeyMasked ?? DEFAULT_SETTINGS.apiKeyMasked
@@ -810,6 +812,7 @@ export async function initStore() {
         persistInputOnRestart: runtimeSettings.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: runtimeSettings.reuseTaskApiProfileTemporarily,
         alwaysShowRetryButton: runtimeSettings.alwaysShowRetryButton,
+        showUsageCodeAliasOnTaskCard: runtimeSettings.showUsageCodeAliasOnTaskCard,
       })
     }
   } catch (err) {

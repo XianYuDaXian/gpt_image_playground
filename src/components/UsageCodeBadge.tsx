@@ -8,10 +8,14 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 0, top: 0 })
   const authStatus = useStore((state) => state.authStatus)
+  const showUsageCodeAliasOnTaskCard = useStore((state) => state.settings.showUsageCodeAliasOnTaskCard)
   const buttonRef = useRef<HTMLButtonElement>(null)
   if (!task.ownerLabel) return null
 
-  const codeText = task.ownerUsageCode?.code ?? task.ownerLabel
+  const showAlias = authStatus?.role === 'admin' && showUsageCodeAliasOnTaskCard
+  const codeText = showAlias
+    ? (task.ownerUsageCode?.name ?? task.ownerLabel)
+    : (task.ownerUsageCode?.code ?? task.ownerLabel)
   const detail = formatUsageCodeTooltip(task, { showAlias: authStatus?.role === 'admin' })
   const updatePosition = () => {
     const rect = buttonRef.current?.getBoundingClientRect()

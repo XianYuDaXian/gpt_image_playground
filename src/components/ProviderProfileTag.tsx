@@ -59,13 +59,21 @@ export default function ProviderProfileTag(props: {
   includeDefault?: boolean
   text?: string
   className?: string
+  disabled?: boolean
+  crossed?: boolean
 }) {
   const text = props.text ?? formatProviderProfileTagText(props)
   return (
     <span
       title={text}
-      className={`inline-flex min-w-0 max-w-full items-center rounded-full px-2.5 py-1 text-xs font-medium leading-4 ${getProviderProfileTagClass(props.colorKey, props.tagColor)} ${props.className ?? ''}`}
+      className={`relative inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-full px-2.5 py-1 text-xs font-medium leading-4 ${getProviderProfileTagClass(props.colorKey, props.tagColor)} ${props.disabled ? 'opacity-45 saturate-50' : ''} ${props.className ?? ''}`}
     >
+      {(props.crossed ?? props.disabled) && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-1 top-1/2 h-px -rotate-[18deg] bg-current/80"
+        />
+      )}
       <span className="block max-w-full truncate">{text}</span>
     </span>
   )

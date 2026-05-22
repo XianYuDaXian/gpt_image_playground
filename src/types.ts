@@ -22,6 +22,7 @@ export interface AppSettings {
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
+  showUsageCodeAliasOnTaskCard: boolean
   updatedAt?: number
 }
 
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   persistInputOnRestart: true,
   reuseTaskApiProfileTemporarily: false,
   alwaysShowRetryButton: false,
+  showUsageCodeAliasOnTaskCard: false,
 }
 
 // ===== 任务参数 =====
@@ -151,6 +153,7 @@ export interface TaskRecord {
     taskCount: number
     outputImageCount: number
     providerOutputImageCount: number
+    currentProviderRemainingImageCredits: number | null
   } | null
   reservedImageCredits?: number
   createdAt: number

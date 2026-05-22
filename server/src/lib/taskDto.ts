@@ -48,6 +48,20 @@ function decryptUsageCode(task: TaskRecord, appSecret?: string) {
   }
 }
 
+function parseQuotaMap(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    return Object.entries(parsed).reduce<Record<string, number>>((acc, [key, item]) => {
+      const nextValue = Number(item)
+      if (Number.isFinite(nextValue)) acc[key] = nextValue
+      return acc
+    }, {})
+  } catch {
+    return null
+  }
+}
+
 function buildVideoMetadataMap(images: TaskImageRecord[]) {
   return images.reduce<Record<string, { duration?: number | null }>>((acc, image) => {
     if (!image.metadataJson) {
@@ -92,6 +106,15 @@ export function serializeTaskRecord(
   const ownerLabel = task.ownerKind === 'usage_code'
     ? options.exposeUsageCodeAlias ? task.ownerLabel : usageCodePlain ?? '使用码'
     : task.ownerLabel
+  const ownerUsageCodeProviderImageQuotas = parseQuotaMap(task.ownerUsageCodeProviderImageQuotasJson)
+  const ownerUsageCodeProviderUsedImageCredits = parseQuotaMap(task.ownerUsageCodeProviderUsedImageCreditsJson)
+  const currentProviderRemainingImageCredits = task.providerProfileId && ownerUsageCodeProviderImageQuotas
+    ? Math.max(
+      0,
+      (ownerUsageCodeProviderImageQuotas[task.providerProfileId] ?? 0)
+      - (ownerUsageCodeProviderUsedImageCredits?.[task.providerProfileId] ?? 0),
+    )
+    : null
 
   return {
     id: task.id,
@@ -123,7 +146,7 @@ export function serializeTaskRecord(
     ownerUsageCode: task.ownerKind === 'usage_code' && task.ownerUsageCodeId
       ? {
           id: task.ownerUsageCodeId,
-          name: ownerLabel,
+          name: task.ownerLabel,
           code: usageCodePlain,
           createdAt: task.ownerUsageCodeCreatedAt,
           lastUsedAt: task.ownerUsageCodeLastUsedAt,
@@ -135,6 +158,11 @@ export function serializeTaskRecord(
           taskCount: task.ownerUsageCodeTaskCount ?? 0,
           outputImageCount: task.ownerUsageCodeOutputImageCount ?? 0,
           providerOutputImageCount: task.ownerUsageCodeProviderOutputImageCount ?? 0,
+          currentProviderRemainingImageCredits: currentProviderRemainingImageCredits ?? (
+            task.ownerUsageCodeImageQuota == null
+              ? null
+              : Math.max(0, task.ownerUsageCodeImageQuota - (task.ownerUsageCodeUsedImageCredits ?? 0))
+          ),
         }
       : null,
     reservedImageCredits: task.reservedImageCredits,

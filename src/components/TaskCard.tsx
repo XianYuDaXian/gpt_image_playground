@@ -336,8 +336,9 @@ export default function TaskCard({
   const hasOutputVideo = Boolean(task.outputVideos?.length)
   const isVideoTask = task.taskType === 'video'
   const videoParams = isVideoTask ? task.params as VideoTaskParams : null
+  const isUsageCodeUser = authStatus?.role === 'user'
   const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
-  const taskModelLabel = task.providerProfileModel ?? null
+  const taskModelLabel = isUsageCodeUser ? null : (task.providerProfileModel ?? null)
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showDeferredPlaceholder =

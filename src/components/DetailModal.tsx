@@ -43,6 +43,7 @@ export default function DetailModal() {
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
     [tasks, detailTaskId],
   )
+  const isUsageCodeUser = authStatus?.role === 'user'
 
   useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
 
@@ -711,7 +712,7 @@ export default function DetailModal() {
                   <span className="font-medium break-all">{task.ownerUsageCode.providerOutputImageCount} 张</span>
                 </div>
               )}
-              {task.providerProfileModel && (
+              {task.providerProfileModel && !isUsageCodeUser && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
                   <span className="text-gray-400 dark:text-gray-500">模型</span>
                   <br />

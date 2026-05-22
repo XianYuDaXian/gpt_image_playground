@@ -51,6 +51,7 @@ const runtimeSettingsSchemaBase = z.object({
   persistInputOnRestart: z.boolean().default(true),
   reuseTaskApiProfileTemporarily: z.boolean().default(false),
   alwaysShowRetryButton: z.boolean().default(false),
+  showUsageCodeAliasOnTaskCard: z.boolean().default(false),
 })
 
 const runtimeSettingsSchema = runtimeSettingsSchemaBase.refine((value) => !(value.codexCli && value.grokApiCompat), {
@@ -63,6 +64,7 @@ const runtimePreferencesSchema = z.object({
   persistInputOnRestart: z.boolean().default(true),
   reuseTaskApiProfileTemporarily: z.boolean().default(false),
   alwaysShowRetryButton: z.boolean().default(false),
+  showUsageCodeAliasOnTaskCard: z.boolean().default(false),
 })
 
 const backupTaskSchema = z.object({
@@ -196,6 +198,7 @@ function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
     persistInputOnRestart: runtime?.persistInputOnRestart !== false,
     reuseTaskApiProfileTemporarily: Boolean(runtime?.reuseTaskApiProfileTemporarily),
     alwaysShowRetryButton: Boolean(runtime?.alwaysShowRetryButton),
+    showUsageCodeAliasOnTaskCard: Boolean(runtime?.showUsageCodeAliasOnTaskCard),
   }
 }
 
@@ -260,20 +263,35 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
       .map((event) => event.taskId)
       .filter((taskId): taskId is string => Boolean(taskId)),
   )
+  const allowedProviderProfileIdSet = code.allowedProviderProfileIds?.length
+    ? new Set(code.allowedProviderProfileIds)
+    : null
   const providerRemainingImageCredits = Object.fromEntries(
     Object.entries(code.providerImageQuotas ?? {}).map(([providerProfileId, quota]) => [
       providerProfileId,
       Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
     ]),
   )
-  const remainingImageCredits = Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
+  const remainingImageCredits = Object.entries(providerRemainingImageCredits).reduce(
+    (sum, [providerProfileId, remaining]) => {
+      if (allowedProviderProfileIdSet && !allowedProviderProfileIdSet.has(providerProfileId)) return sum
+      return sum + remaining
+    },
+    0,
+  )
   const providerRemainingVideoCredits = Object.fromEntries(
     Object.entries(code.providerVideoQuotas ?? {}).map(([providerProfileId, quota]) => [
       providerProfileId,
       Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
     ]),
   )
-  const remainingVideoCredits = Object.values(providerRemainingVideoCredits).reduce((sum, remaining) => sum + remaining, 0)
+  const remainingVideoCredits = Object.entries(providerRemainingVideoCredits).reduce(
+    (sum, [providerProfileId, remaining]) => {
+      if (allowedProviderProfileIdSet && !allowedProviderProfileIdSet.has(providerProfileId)) return sum
+      return sum + remaining
+    },
+    0,
+  )
   let codePlain: string | null = null
   if (code.codeEncrypted) {
     try {
@@ -525,6 +543,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
       alwaysShowRetryButton: payload.alwaysShowRetryButton,
+      showUsageCodeAliasOnTaskCard: payload.showUsageCodeAliasOnTaskCard,
     })
 
     if (!profile) {
@@ -551,6 +570,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
       alwaysShowRetryButton: payload.alwaysShowRetryButton,
+      showUsageCodeAliasOnTaskCard: payload.showUsageCodeAliasOnTaskCard,
       source: 'database',
     }
   })
@@ -772,13 +792,23 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         code,
         codeRecoverable: true,
         isEnabled: Boolean(usageCode.isEnabled),
-        remainingImageCredits: Object.values(usageCode.providerImageQuotas ?? {}).reduce((sum, quota) => sum + quota, 0),
+        remainingImageCredits: Object.entries(usageCode.providerImageQuotas ?? {}).reduce((sum, [providerProfileId, quota]) => {
+          if (usageCode.allowedProviderProfileIds?.length && !usageCode.allowedProviderProfileIds.includes(providerProfileId)) {
+            return sum
+          }
+          return sum + quota
+        }, 0),
         providerImageQuotas: usageCode.providerImageQuotas ?? null,
         providerUsedImageCredits: usageCode.providerUsedImageCredits ?? null,
         providerRemainingImageCredits: usageCode.providerImageQuotas ?? {},
         videoQuota: usageCode.videoQuota,
         usedVideoCredits: usageCode.usedVideoCredits,
-        remainingVideoCredits: Object.values(usageCode.providerVideoQuotas ?? {}).reduce((sum, quota) => sum + quota, 0),
+        remainingVideoCredits: Object.entries(usageCode.providerVideoQuotas ?? {}).reduce((sum, [providerProfileId, quota]) => {
+          if (usageCode.allowedProviderProfileIds?.length && !usageCode.allowedProviderProfileIds.includes(providerProfileId)) {
+            return sum
+          }
+          return sum + quota
+        }, 0),
         providerVideoQuotas: usageCode.providerVideoQuotas ?? null,
         providerUsedVideoCredits: usageCode.providerUsedVideoCredits ?? null,
         providerRemainingVideoCredits: usageCode.providerVideoQuotas ?? {},

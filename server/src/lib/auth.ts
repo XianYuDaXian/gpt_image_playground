@@ -107,20 +107,35 @@ function getUsageCodeDisplayValue(code: UsageCodeRecord, appSecret: string) {
 }
 
 export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
+  const allowedProviderProfileIdSet = code.allowedProviderProfileIds?.length
+    ? new Set(code.allowedProviderProfileIds)
+    : null
   const providerRemainingImageCredits = Object.fromEntries(
     Object.entries(code.providerImageQuotas ?? {}).map(([providerProfileId, quota]) => [
       providerProfileId,
       Math.max(0, quota - (code.providerUsedImageCredits?.[providerProfileId] ?? 0)),
     ]),
   )
-  const remainingImageCredits = Object.values(providerRemainingImageCredits).reduce((sum, remaining) => sum + remaining, 0)
+  const remainingImageCredits = Object.entries(providerRemainingImageCredits).reduce(
+    (sum, [providerProfileId, remaining]) => {
+      if (allowedProviderProfileIdSet && !allowedProviderProfileIdSet.has(providerProfileId)) return sum
+      return sum + remaining
+    },
+    0,
+  )
   const providerRemainingVideoCredits = Object.fromEntries(
     Object.entries(code.providerVideoQuotas ?? {}).map(([providerProfileId, quota]) => [
       providerProfileId,
       Math.max(0, quota - (code.providerUsedVideoCredits?.[providerProfileId] ?? 0)),
     ]),
   )
-  const remainingVideoCredits = Object.values(providerRemainingVideoCredits).reduce((sum, remaining) => sum + remaining, 0)
+  const remainingVideoCredits = Object.entries(providerRemainingVideoCredits).reduce(
+    (sum, [providerProfileId, remaining]) => {
+      if (allowedProviderProfileIdSet && !allowedProviderProfileIdSet.has(providerProfileId)) return sum
+      return sum + remaining
+    },
+    0,
+  )
 
   return {
     id: code.id,
