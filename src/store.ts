@@ -797,12 +797,13 @@ export async function initStore() {
   try {
     const runtimeSettings = await fetchBackendRuntimeSettings()
     if (runtimeSettings) {
+      const currentSettings = useStore.getState().settings
       useStore.getState().setSettings({
         baseUrl: runtimeSettings.baseUrl,
         apiKey: runtimeSettings.apiKey,
         apiKeyMasked: runtimeSettings.apiKeyMasked ?? null,
         apiKeyConfigured: runtimeSettings.apiKeyConfigured,
-        providerProfileId: runtimeSettings.id ?? null,
+        providerProfileId: currentSettings.providerProfileId ?? runtimeSettings.id ?? null,
         model: runtimeSettings.model,
         apiMode: runtimeSettings.apiMode,
         timeout: runtimeSettings.timeoutSeconds,

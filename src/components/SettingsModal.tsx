@@ -25,10 +25,13 @@ import {
   type BackendUsageCode,
 } from '../lib/backendSettings'
 import {
+  fetchAdminBackupImportCandidates,
   exportBackendBackup,
   exportUsageCodeMediaArchive,
   fetchUsageCodeMediaExportSummary,
   importBackendBackup,
+  importBackendBackupFromServer,
+  type AdminBackupImportCandidate,
   type UsageCodeMediaExportSummary,
 } from '../lib/backendBackup'
 import { addSessionUsageCode } from '../lib/backendAuth'
@@ -219,6 +222,8 @@ export default function SettingsModal() {
   const [isClearingRemote, setIsClearingRemote] = useState(false)
   const [isSavingReminders, setIsSavingReminders] = useState(false)
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
+  const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
+  const [showImportCandidates, setShowImportCandidates] = useState(false)
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
@@ -279,6 +284,15 @@ export default function SettingsModal() {
     }
     return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
   }
+
+  const formatLocalDateTime = (value: string) =>
+    new Date(value).toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
 
   const readFileAsDataUrl = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -479,9 +493,11 @@ export default function SettingsModal() {
         .filter((code) => existing.has(code.id))
         .map((code) => code.id)
     })
-    const defaultProfile = visibleProfiles.find((profile) => profile.isDefault) ?? visibleProfiles[0]
-    if (defaultProfile) {
-      setProfileDraft(defaultProfile)
+    const selectedProfile = visibleProfiles.find((profile) => profile.id === nextDraft.providerProfileId)
+      ?? visibleProfiles.find((profile) => profile.isDefault)
+      ?? visibleProfiles[0]
+    if (selectedProfile) {
+      setProfileDraft(selectedProfile)
     } else {
       setProfileDraft(createEmptyProfile())
     }
@@ -579,7 +595,7 @@ export default function SettingsModal() {
       responseFormatB64Json: profileDraft.apiMode === 'videos' ? false : profileDraft.responseFormatB64Json,
       videoMaxResolution: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat ? profileDraft.videoMaxResolution ?? '480p' : '480p',
       videoMaxDuration: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat ? profileDraft.videoMaxDuration ?? 6 : 6,
-      isDefault: true,
+      isDefault: Boolean(profileDraft.isDefault),
     }
 
     if (!normalizedProfile.id && !normalizedProfile.apiKey?.trim()) {
@@ -688,8 +704,8 @@ export default function SettingsModal() {
   const handleExportBackup = async () => {
     setIsExporting(true)
     try {
-      await exportBackendBackup()
-      useStore.getState().showToast('备份包已保存到本地', 'success')
+      const result = await exportBackendBackup()
+      useStore.getState().showToast(`备份已保存到服务器：${result.filePath}`, 'success')
     } catch (err) {
       useStore.getState().showToast(
         `导出备份失败：${err instanceof Error ? err.message : String(err)}`,
@@ -781,13 +797,55 @@ export default function SettingsModal() {
       await clearAllData({ silent: true })
       await refreshFromBackend()
       await loadSettings()
+      setShowImportCandidates(false)
       useStore.getState().showToast(
-        `导入完成：${result.importedTasks} 条任务，${result.importedImages} 张图片`,
+        `导入完成：${result.importedTasks} 条任务，${result.importedImages} 个媒体文件`,
         'success',
       )
     } catch (err) {
       useStore.getState().showToast(
         `导入备份失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  const handleLoadImportCandidates = async () => {
+    setIsImporting(true)
+    try {
+      const result = await fetchAdminBackupImportCandidates()
+      setImportCandidates(result.items)
+      setShowImportCandidates(true)
+      if (!result.items.length) {
+        useStore.getState().showToast('未发现服务器备份包，可以上传本地备份', 'info')
+      }
+    } catch (err) {
+      useStore.getState().showToast(
+        `读取备份列表失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
+  const handleImportServerBackup = async (archivePath: string) => {
+    setIsImporting(true)
+    try {
+      const result = await importBackendBackupFromServer(archivePath)
+      await clearAllData({ silent: true })
+      await refreshFromBackend()
+      await loadSettings()
+      setShowImportCandidates(false)
+      useStore.getState().showToast(
+        `恢复完成：${result.importedTasks} 条任务，${result.importedImages} 个媒体文件`,
+        'success',
+      )
+    } catch (err) {
+      useStore.getState().showToast(
+        `恢复备份失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
     } finally {
@@ -1403,7 +1461,7 @@ export default function SettingsModal() {
                   disabled={isSaving}
                   className="rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSaving ? '保存中...' : '保存并设为默认'}
+                  {isSaving ? '保存中...' : '保存'}
                 </button>
               </div>
             </div>
@@ -2070,17 +2128,65 @@ export default function SettingsModal() {
                   disabled={isExporting || isImporting || isClearingRemote}
                   className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-4 py-2.5 text-sm text-gray-700 transition hover:bg-gray-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
                 >
-                  {isExporting ? '打包中...' : '打包保存到本地'}
+                  {isExporting ? '打包中...' : '生成服务器备份包'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => importInputRef.current?.click()}
+                  onClick={() => void handleLoadImportCandidates()}
                   disabled={isImporting || isExporting || isClearingRemote}
                   className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-4 py-2.5 text-sm text-gray-700 transition hover:bg-gray-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
                 >
-                  {isImporting ? '导入中...' : '导入本地备份'}
+                  {isImporting ? '读取中...' : '选择并恢复备份'}
                 </button>
               </div>
+              <div className="rounded-xl border border-dashed border-gray-200/80 bg-white/40 px-3 py-2 text-xs leading-5 text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-400">
+                备份会直接保存到服务器本地目录。完成后会提示文件路径。恢复时会先把压缩包上传到服务器目录，再从该文件执行恢复。
+              </div>
+              {showImportCandidates && (
+                <div className="space-y-3 rounded-xl border border-gray-200/80 bg-white/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100">可导入的服务器备份包</div>
+                    <button
+                      type="button"
+                      onClick={() => importInputRef.current?.click()}
+                      disabled={isImporting || isExporting || isClearingRemote}
+                      className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      上传本地备份
+                    </button>
+                  </div>
+                  {importCandidates.length ? (
+                    <div className="space-y-2">
+                      {importCandidates.map((item) => (
+                        <div
+                          key={item.filePath}
+                          className="rounded-lg border border-gray-200/70 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                        >
+                          <div className="break-all text-sm font-medium text-gray-800 dark:text-gray-100">{item.fileName}</div>
+                          <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                            <div>修改时间：{formatLocalDateTime(item.modifiedAt)}</div>
+                            <div>文件大小：{formatBytes(item.bytes)}</div>
+                          </div>
+                          <div className="mt-2 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => void handleImportServerBackup(item.filePath)}
+                              disabled={isImporting || isExporting || isClearingRemote}
+                              className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                            >
+                              {isImporting ? '恢复中...' : '从该文件恢复'}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      服务器备份目录中还没有可导入的压缩包。可以先上传本地备份。
+                    </div>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() =>

@@ -33,6 +33,8 @@ export const appConfig = {
   dataDir,
   webDistDir,
   dbPath: path.join(dataDir, 'app.db'),
+  backupsDir: path.join(dataDir, 'backups'),
+  backupImportsDir: path.join(dataDir, 'backups', 'imports'),
   mediaDir: path.join(dataDir, 'media'),
   uploadsDir: path.join(dataDir, 'media', 'uploads'),
   masksDir: path.join(dataDir, 'media', 'masks'),

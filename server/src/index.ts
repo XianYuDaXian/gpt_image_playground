@@ -26,11 +26,13 @@ declare module 'fastify' {
 
 const app = Fastify({
   logger: true,
-  bodyLimit: 512 * 1024 * 1024,
+  bodyLimit: 4 * 1024 * 1024 * 1024,
 })
 
 for (const dir of [
   appConfig.dataDir,
+  appConfig.backupsDir,
+  appConfig.backupImportsDir,
   appConfig.mediaDir,
   appConfig.uploadsDir,
   appConfig.masksDir,
@@ -97,7 +99,7 @@ await app.register(cors, {
 
 await app.register(multipart, {
   limits: {
-    fileSize: 512 * 1024 * 1024,
+    fileSize: 4 * 1024 * 1024 * 1024,
     files: 32,
   },
 })

@@ -21,6 +21,9 @@ export default function DetailModal() {
   const settings = useStore((s) => s.settings)
   const authStatus = useStore((s) => s.authStatus)
   const dismissedCodexCliPrompts = useStore((s) => s.dismissedCodexCliPrompts)
+  const blurLoadedImages = useStore((s) => s.blurLoadedImages)
+  const taskImageBlurOverrides = useStore((s) => s.taskImageBlurOverrides)
+  const toggleTaskImageBlur = useStore((s) => s.toggleTaskImageBlur)
 
   const [imageIndex, setImageIndex] = useState(0)
   const [imageSrcs, setImageSrcs] = useState<Record<string, string>>({})
@@ -225,6 +228,7 @@ export default function DetailModal() {
   const showPromptWarning = Boolean(currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
   const hasRenderedOutput = Boolean(isVideoTask ? currentOutputVideoSrc : outputLen > 0 && currentOutputImageSrc)
+  const isTaskBlurred = hasRenderedOutput && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -362,6 +366,7 @@ export default function DetailModal() {
                   src={currentOutputVideoSrc}
                   poster={currentOutputVideoPoster || undefined}
                   nativeControls={isIOS}
+                  blurred={isTaskBlurred}
                 />
               ) : (
               <img
@@ -369,7 +374,7 @@ export default function DetailModal() {
                 src={currentOutputImageSrc}
                 data-image-id={currentOutputImageId}
                 data-original-src={task.imageUrlsById?.[currentOutputImageId]}
-                className="saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer"
+                className={`saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer transition duration-200 ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
                 onLoad={() => {
                   const panel = imagePanelRef.current
                   const image = mainImageRef.current
@@ -390,6 +395,30 @@ export default function DetailModal() {
                 alt=""
               />
               )}
+              <button
+                type="button"
+                onClick={() => toggleTaskImageBlur(task.id)}
+                className={`absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur transition ${
+                  isTaskBlurred
+                    ? 'border-blue-300/70 bg-blue-500/80 text-white'
+                    : 'border-white/30 bg-black/40 text-white/80 hover:bg-black/55'
+                }`}
+                title={isTaskBlurred ? '解除当前任务模糊' : '模糊当前任务'}
+              >
+                {isTaskBlurred ? (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+                    <path d="M3 3l18 18" />
+                    <path d="M10.6 10.6A2 2 0 0012 14a2 2 0 001.4-.6" />
+                    <path d="M9.9 5.2A10.6 10.6 0 0112 5c6.5 0 10 7 10 7a17.9 17.9 0 01-3.1 4.2" />
+                    <path d="M6.1 6.7A18.1 18.1 0 002 12s3.5 7 10 7a10.8 10.8 0 004.7-1.1" />
+                  </svg>
+                )}
+              </button>
               <div className="absolute top-[15px] flex items-center gap-1.5" style={{ left: imageLabelLeft }}>
                 {isVideoTask ? (
                   <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
@@ -464,7 +493,12 @@ export default function DetailModal() {
                             aria-label={`查看第 ${index + 1} 张图片`}
                           >
                             {src ? (
-                              <img src={src} className="h-full w-full object-cover" alt="" draggable={false} />
+                              <img
+                                src={src}
+                                className={`h-full w-full object-cover transition duration-200 ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
+                                alt=""
+                                draggable={false}
+                              />
                             ) : (
                               <span className="flex h-full w-full items-center justify-center bg-white/10 text-[10px] text-white/60">
                                 {index + 1}
@@ -622,7 +656,7 @@ export default function DetailModal() {
                             src={displaySrc}
                             data-image-id={imgId}
                             data-original-src={task.imageUrlsById?.[imgId]}
-                            className="w-full h-full object-cover"
+                            className={`w-full h-full object-cover transition duration-200 ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
                             onLoad={(event) => {
                               const remoteUrl = task.imageUrlsById?.[imgId]
                               if (!remoteUrl) return

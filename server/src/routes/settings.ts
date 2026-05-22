@@ -1,13 +1,18 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createWriteStream } from 'node:fs'
+import { pipeline } from 'node:stream/promises'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { strFromU8, zipSync, unzipSync } from 'fflate'
+import { zipSync } from 'fflate'
+import type { CentralDirectory } from 'unzipper'
+import unzipper from 'unzipper'
 import { z } from 'zod'
 import {
   createSession,
   createPlainUsageCode,
   getAllowedProviderProfileIds,
+  getSessionToken,
   hashSecret,
   requireAdmin,
   requireAuth,
@@ -324,6 +329,12 @@ const usageCodeAdjustSchema = z.object({
   providerProfileId: z.string().min(1).nullable().optional(),
 })
 
+const RESTORED_ADMIN_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+const serverBackupImportSchema = z.object({
+  archivePath: z.string().min(1),
+})
+
 function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | null }) {
   const isVideoProvider = event.providerProfileApiMode === 'videos'
   if (event.reason === 'admin_adjust_total') {
@@ -418,6 +429,49 @@ function requireLanForDataManagement(request: FastifyRequest, reply: FastifyRepl
   if (isLanAddress(clientIp)) return
   reply.code(403)
   throw new Error('数据管理操作仅允许在本机或局域网内进行')
+}
+
+function resolveBackupArchivePath(app: Parameters<FastifyPluginAsync>[0], archivePath: string) {
+  const baseDir = path.resolve(app.config.backupsDir)
+  const resolvedPath = path.resolve(archivePath)
+  const relativePath = path.relative(baseDir, resolvedPath)
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('备份文件路径无效')
+  }
+  return resolvedPath
+}
+
+async function listBackupArchiveFiles(rootDir: string, currentDir = rootDir): Promise<Array<{
+  filePath: string
+  fileName: string
+  bytes: number
+  modifiedAt: string
+}>> {
+  const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => [])
+  const results: Array<{
+    filePath: string
+    fileName: string
+    bytes: number
+    modifiedAt: string
+  }> = []
+
+  for (const entry of entries) {
+    const absolutePath = path.join(currentDir, entry.name)
+    if (entry.isDirectory()) {
+      results.push(...await listBackupArchiveFiles(rootDir, absolutePath))
+      continue
+    }
+    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.zip') continue
+    const stat = await fs.stat(absolutePath)
+    results.push({
+      filePath: absolutePath,
+      fileName: path.relative(rootDir, absolutePath).replace(/\\/g, '/'),
+      bytes: stat.size,
+      modifiedAt: stat.mtime.toISOString(),
+    })
+  }
+
+  return results.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
 }
 
 function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
@@ -789,8 +843,10 @@ type ParsedAdminBackupPayload = {
 
 type ParsedAdminBackupImport = {
   kind: 'full' | 'legacy'
+  archivePath: string | null
   payload: ParsedAdminBackupPayload
-  files: Array<{ filePath: string; binary: Buffer }>
+  tempDir: string
+  files: Array<{ filePath: string; tempPath: string }>
 }
 
 function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
@@ -983,31 +1039,73 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
   }
 }
 
-async function parseBackupImportPayload(
+function normalizeArchiveRelativePath(input: string) {
+  const normalized = path.posix.normalize(String(input).replace(/\\/g, '/')).replace(/^\/+/, '')
+  if (!normalized || normalized === '.' || normalized.startsWith('../') || normalized.includes('/../')) {
+    throw new Error(`备份包含非法路径：${input}`)
+  }
+  return normalized
+}
+
+async function extractArchiveEntriesToTempDir(
+  directory: CentralDirectory,
+  targetDir: string,
+  requiredPaths: string[],
+) {
+  const normalizedPathMap = new Map(requiredPaths.map((item) => [normalizeArchiveRelativePath(item), item] as const))
+  const extractedFiles: Array<{ filePath: string; tempPath: string }> = []
+
+  for (const entry of directory.files) {
+    const normalizedEntryPath = normalizeArchiveRelativePath(entry.path)
+    if (normalizedEntryPath === 'manifest.json') continue
+    if (!normalizedPathMap.has(normalizedEntryPath)) continue
+    if (entry.type !== 'File') {
+      throw new Error(`备份文件条目无效：${entry.path}`)
+    }
+
+    const destination = path.join(targetDir, normalizedEntryPath)
+    await fs.mkdir(path.dirname(destination), { recursive: true })
+    await pipeline(entry.stream(), createWriteStream(destination))
+    extractedFiles.push({
+      filePath: normalizedEntryPath,
+      tempPath: destination,
+    })
+  }
+
+  for (const expectedPath of normalizedPathMap.keys()) {
+    const matched = extractedFiles.some((file) => file.filePath === expectedPath)
+    if (!matched) {
+      throw new Error(`备份缺少媒体文件：${expectedPath}`)
+    }
+  }
+
+  return extractedFiles
+}
+
+async function parseBackupArchiveFile(
   app: Parameters<FastifyPluginAsync>[0],
-  request: FastifyRequest,
+  archivePath: string,
 ): Promise<ParsedAdminBackupImport> {
-  const contentType = request.headers['content-type'] ?? ''
+  const tempDir = await fs.mkdtemp(path.join(app.config.dataDir, 'backup-import-'))
+  const directory = await unzipper.Open.file(archivePath)
+  const manifestEntry = directory.files.find((entry) => normalizeArchiveRelativePath(entry.path) === 'manifest.json')
+  if (!manifestEntry || manifestEntry.type !== 'File') {
+    throw new Error('备份文件缺少 manifest.json')
+  }
 
-  if (contentType.includes('multipart/form-data')) {
-    const file = await request.file()
-    if (!file) {
-      throw new Error('导入请求缺少备份文件')
-    }
-
-    const archiveBuffer = await file.toBuffer()
-    const zipFiles = unzipSync(new Uint8Array(archiveBuffer))
-    const manifestBytes = zipFiles['manifest.json']
-    if (!manifestBytes) {
-      throw new Error('备份文件缺少 manifest.json')
-    }
-
-    const parsedManifest = JSON.parse(strFromU8(manifestBytes))
-    if (parsedManifest?.kind === 'admin_full_backup' && parsedManifest?.version === 2) {
-      const manifest = fullBackupManifestSchema.parse(parsedManifest)
-      return {
-        kind: 'full' as const,
-        payload: {
+  const parsedManifest = JSON.parse((await manifestEntry.buffer()).toString('utf-8'))
+  if (parsedManifest?.kind === 'admin_full_backup' && parsedManifest?.version === 2) {
+    const manifest = fullBackupManifestSchema.parse(parsedManifest)
+    const extractedFiles = await extractArchiveEntriesToTempDir(
+      directory,
+      path.join(tempDir, 'files'),
+      manifest.taskImages.map((image) => image.filePath),
+    )
+    return {
+      kind: 'full' as const,
+      archivePath,
+      tempDir,
+      payload: {
           providerProfiles: manifest.providerProfiles.map((profile) => ({
             id: profile.id,
             name: profile.name,
@@ -1059,46 +1157,63 @@ async function parseBackupImportPayload(
           taskImages: manifest.taskImages,
           taskEvents: manifest.taskEvents,
         },
-        files: manifest.taskImages.map((image) => {
-          const bytes = zipFiles[image.filePath]
-          if (!bytes) {
-            throw new Error(`备份缺少媒体文件：${image.filePath}`)
-          }
-          return {
-            filePath: image.filePath,
-            binary: Buffer.from(bytes),
-          }
-        }),
-      }
-    }
-
-    const manifest = backupManifestSchema.parse(parsedManifest)
-    const legacyPayload = {
-      runtimeSettings: manifest.runtimeSettings,
-      tasks: manifest.tasks,
-      images: manifest.images.map((image) => {
-        const bytes = zipFiles[image.filePath]
-        if (!bytes) {
-          throw new Error(`备份缺少图片文件：${image.filePath}`)
-        }
-        return {
-          ...image,
-          binary: Buffer.from(bytes),
-        }
-      }),
-    }
-    return {
-      kind: 'legacy' as const,
-      payload: buildLegacyImportPayload(app, legacyPayload),
-      files: legacyPayload.images.map((image) => ({
-        filePath: image.filePath,
-        binary: image.binary,
-      })),
+      files: extractedFiles,
     }
   }
 
+  const manifest = backupManifestSchema.parse(parsedManifest)
+  const extractedFiles = await extractArchiveEntriesToTempDir(
+    directory,
+    path.join(tempDir, 'files'),
+    manifest.images.map((image) => image.filePath),
+  )
+  const legacyPayload: LegacyImportPayload = {
+    runtimeSettings: manifest.runtimeSettings,
+    tasks: manifest.tasks,
+    images: await Promise.all(manifest.images.map(async (image) => {
+      const normalizedPath = normalizeArchiveRelativePath(image.filePath)
+      const extracted = extractedFiles.find((file) => file.filePath === normalizedPath)
+      if (!extracted) {
+        throw new Error(`备份缺少图片文件：${image.filePath}`)
+      }
+      return {
+        ...image,
+        binary: await fs.readFile(extracted.tempPath),
+      }
+    })),
+  }
+  return {
+    kind: 'legacy' as const,
+    archivePath,
+    payload: buildLegacyImportPayload(app, legacyPayload),
+    tempDir,
+    files: extractedFiles,
+  }
+}
+
+async function parseBackupImportPayload(
+  app: Parameters<FastifyPluginAsync>[0],
+  request: FastifyRequest,
+): Promise<ParsedAdminBackupImport> {
+  const contentType = request.headers['content-type'] ?? ''
+
+  if (contentType.includes('multipart/form-data')) {
+    const file = await request.file()
+    if (!file) {
+      throw new Error('导入请求缺少备份文件')
+    }
+    const safeFileName = path.basename(file.filename || `backup-${Date.now()}.zip`).replace(/[^\w.-]+/g, '-')
+    const archivePath = path.join(app.config.backupImportsDir, `${Date.now()}-${safeFileName}`)
+    await fs.mkdir(app.config.backupImportsDir, { recursive: true })
+    await pipeline(file.file, createWriteStream(archivePath))
+    return parseBackupArchiveFile(app, archivePath)
+  }
+
   const payload = backupImportSchema.parse(request.body)
-  const legacyPayload = {
+  const tempDir = await fs.mkdtemp(path.join(app.config.dataDir, 'backup-import-'))
+  const filesDir = path.join(tempDir, 'files')
+  await fs.mkdir(filesDir, { recursive: true })
+  const legacyPayload: LegacyImportPayload = {
     runtimeSettings: payload.runtimeSettings,
     tasks: payload.tasks,
     images: payload.images.map((image) => {
@@ -1110,13 +1225,23 @@ async function parseBackupImportPayload(
       }
     }),
   }
+  const files: Array<{ filePath: string; tempPath: string }> = []
+  for (const image of legacyPayload.images) {
+    const normalizedPath = normalizeArchiveRelativePath(image.filePath)
+    const destination = path.join(filesDir, normalizedPath)
+    await fs.mkdir(path.dirname(destination), { recursive: true })
+    await fs.writeFile(destination, image.binary)
+    files.push({
+      filePath: normalizedPath,
+      tempPath: destination,
+    })
+  }
   return {
     kind: 'legacy' as const,
+    archivePath: null,
     payload: buildLegacyImportPayload(app, legacyPayload),
-    files: legacyPayload.images.map((image) => ({
-      filePath: image.filePath,
-      binary: image.binary,
-    })),
+    tempDir,
+    files,
   }
 }
 
@@ -1609,37 +1734,120 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true }
   })
 
+  app.get('/api/admin/data/import-candidates', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    return {
+      items: await listBackupArchiveFiles(app.config.backupsDir),
+    }
+  })
+
+  app.post('/api/admin/data/import-from-server', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    const payload = serverBackupImportSchema.parse(request.body)
+    const archivePath = resolveBackupArchivePath(app, payload.archivePath)
+    await fs.access(archivePath)
+    const parsed = await parseBackupArchiveFile(app, archivePath)
+    const currentSessionToken = getSessionToken(request)
+
+    try {
+      await fs.rm(app.config.mediaDir, { recursive: true, force: true })
+      await fs.mkdir(app.config.mediaDir, { recursive: true })
+      await fs.mkdir(app.config.uploadsDir, { recursive: true })
+      await fs.mkdir(app.config.masksDir, { recursive: true })
+      await fs.mkdir(app.config.outputsDir, { recursive: true })
+      await fs.mkdir(app.config.thumbsDir, { recursive: true })
+
+      for (const file of parsed.files) {
+        const absolutePath = path.join(app.config.mediaDir, file.filePath)
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+        await fs.copyFile(file.tempPath, absolutePath)
+      }
+
+      app.db.replaceFullBackup(parsed.payload)
+      if (currentSessionToken) {
+        const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
+        app.db.createAuthSession({
+          id: crypto.randomUUID(),
+          tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
+          role: 'admin',
+          usageCodeId: null,
+          expiresAt: expiresAt.toISOString(),
+        })
+        setSessionCookie(reply, currentSessionToken, expiresAt)
+      } else {
+        const nextSession = createSession(app, {
+          role: 'admin',
+          usageCodeId: null,
+        })
+        setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
+      }
+
+      return {
+        ok: true,
+        importedTasks: parsed.payload.tasks.length,
+        importedImages: parsed.payload.taskImages.length,
+        importedProviderProfiles: parsed.payload.providerProfiles.length,
+        importedUsageCodes: parsed.payload.usageCodes.length,
+      }
+    } finally {
+      await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
+    }
+  })
+
   app.post('/api/admin/data/import', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
     const parsed = await parseBackupImportPayload(app, request)
+    const currentSessionToken = getSessionToken(request)
 
-    await fs.rm(app.config.mediaDir, { recursive: true, force: true })
-    await fs.mkdir(app.config.mediaDir, { recursive: true })
-    await fs.mkdir(app.config.uploadsDir, { recursive: true })
-    await fs.mkdir(app.config.masksDir, { recursive: true })
-    await fs.mkdir(app.config.outputsDir, { recursive: true })
-    await fs.mkdir(app.config.thumbsDir, { recursive: true })
+    try {
+      await fs.rm(app.config.mediaDir, { recursive: true, force: true })
+      await fs.mkdir(app.config.mediaDir, { recursive: true })
+      await fs.mkdir(app.config.uploadsDir, { recursive: true })
+      await fs.mkdir(app.config.masksDir, { recursive: true })
+      await fs.mkdir(app.config.outputsDir, { recursive: true })
+      await fs.mkdir(app.config.thumbsDir, { recursive: true })
 
-    for (const file of parsed.files) {
-      const absolutePath = path.join(app.config.mediaDir, file.filePath)
-      await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-      await fs.writeFile(absolutePath, file.binary)
-    }
+      for (const file of parsed.files) {
+        const absolutePath = path.join(app.config.mediaDir, file.filePath)
+        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+        await fs.copyFile(file.tempPath, absolutePath)
+      }
 
-    app.db.replaceFullBackup(parsed.payload)
-    const nextSession = createSession(app, {
-      role: 'admin',
-      usageCodeId: null,
-    })
-    setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
+      app.db.replaceFullBackup(parsed.payload)
+      if (currentSessionToken) {
+        const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
+        app.db.createAuthSession({
+          id: crypto.randomUUID(),
+          tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
+          role: 'admin',
+          usageCodeId: null,
+          expiresAt: expiresAt.toISOString(),
+        })
+        setSessionCookie(reply, currentSessionToken, expiresAt)
+      } else {
+        const nextSession = createSession(app, {
+          role: 'admin',
+          usageCodeId: null,
+        })
+        setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
+      }
 
-    return {
-      ok: true,
-      importedTasks: parsed.payload.tasks.length,
-      importedImages: parsed.payload.taskImages.length,
-      importedProviderProfiles: parsed.payload.providerProfiles.length,
-      importedUsageCodes: parsed.payload.usageCodes.length,
+      return {
+        ok: true,
+        uploadedArchivePath: parsed.archivePath,
+        importedTasks: parsed.payload.tasks.length,
+        importedImages: parsed.payload.taskImages.length,
+        importedProviderProfiles: parsed.payload.providerProfiles.length,
+        importedUsageCodes: parsed.payload.usageCodes.length,
+      }
+    } finally {
+      await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
+      if (parsed.archivePath) {
+        await fs.rm(parsed.archivePath, { force: true }).catch(() => undefined)
+      }
     }
   })
 
@@ -1657,10 +1865,17 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const zipped = zipSync(zipFiles, { level: 6 })
+    await fs.mkdir(app.config.backupsDir, { recursive: true })
+    const filename = `gpt-image-playground-full-backup-${Date.now()}.zip`
+    const filePath = path.join(app.config.backupsDir, filename)
+    await fs.writeFile(filePath, Buffer.from(zipped))
     reply.header('Cache-Control', 'no-store')
-    reply.header('Content-Type', 'application/zip')
-    reply.header('Content-Disposition', `attachment; filename="gpt-image-playground-full-backup-${Date.now()}.zip"`)
-    return reply.send(Buffer.from(zipped))
+    return {
+      ok: true,
+      filePath,
+      filename,
+      bytes: zipped.byteLength,
+    }
   })
 
   app.get('/api/user/data/export-media/summary', async (request, reply) => {

@@ -4,6 +4,7 @@ interface VideoPlayerProps {
   src: string
   poster?: string
   nativeControls?: boolean
+  blurred?: boolean
 }
 
 function formatVideoTime(seconds: number) {
@@ -14,7 +15,7 @@ function formatVideoTime(seconds: number) {
   return `${minutes}:${String(remainSeconds).padStart(2, '0')}`
 }
 
-export default function VideoPlayer({ src, poster, nativeControls = false }: VideoPlayerProps) {
+export default function VideoPlayer({ src, poster, nativeControls = false, blurred = false }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const playerRef = useRef<HTMLDivElement>(null)
   const [duration, setDuration] = useState(0)
@@ -119,8 +120,9 @@ export default function VideoPlayer({ src, poster, nativeControls = false }: Vid
         playsInline
         controls={nativeControls}
         preload="metadata"
-        className={`detail-video-element${nativeControls ? ' detail-video-element-native' : ''}`}
+        className={`detail-video-element${nativeControls ? ' detail-video-element-native' : ''}${blurred ? ' blur-md scale-[1.02]' : ''}`}
       />
+      {blurred && <div className="pointer-events-none absolute inset-0 bg-black/20" />}
       {!nativeControls && (
         <div
           className="detail-video-controls"
