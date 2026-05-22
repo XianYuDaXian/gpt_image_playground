@@ -1,16 +1,63 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { logout, useStore } from '../store'
 import { cycleThemeMode, getThemeModeLabel } from '../lib/theme'
 import { useVersionCheck } from '../hooks/useVersionCheck'
+import { fetchAdminBackendReminders } from '../lib/backendSettings'
+import { hasUnreadCompletedReminders, markCompletedRemindersSeen } from '../lib/announcement'
 import HelpModal from './HelpModal'
 
 export default function Header() {
   const setShowSettings = useStore((s) => s.setShowSettings)
+  const showSettings = useStore((s) => s.showSettings)
   const themeMode = useStore((s) => s.themeMode)
   const setThemeMode = useStore((s) => s.setThemeMode)
   const authStatus = useStore((s) => s.authStatus)
   const [showHelp, setShowHelp] = useState(false)
+  const [hasUnreadReminderDot, setHasUnreadReminderDot] = useState(false)
+  const [adminReminders, setAdminReminders] = useState<Awaited<ReturnType<typeof fetchAdminBackendReminders>>>([])
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
+
+  useEffect(() => {
+    if (authStatus?.role !== 'admin') {
+      setAdminReminders([])
+      setHasUnreadReminderDot(false)
+      return
+    }
+
+    let cancelled = false
+    void fetchAdminBackendReminders()
+      .then((items) => {
+        if (cancelled) return
+        setAdminReminders(items)
+        setHasUnreadReminderDot(hasUnreadCompletedReminders(items))
+      })
+      .catch(() => {
+        if (cancelled) return
+        setAdminReminders([])
+        setHasUnreadReminderDot(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authStatus?.role, showSettings])
+
+  useEffect(() => {
+    if (authStatus?.role !== 'admin' || !adminReminders.length) return
+    setHasUnreadReminderDot(hasUnreadCompletedReminders(adminReminders))
+    const timer = window.setInterval(() => {
+      setHasUnreadReminderDot(hasUnreadCompletedReminders(adminReminders))
+    }, 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [authStatus?.role, adminReminders])
+
+  const openSettings = () => {
+    if (authStatus?.role === 'admin' && adminReminders.length) {
+      markCompletedRemindersSeen(adminReminders)
+      setHasUnreadReminderDot(false)
+    }
+    setShowSettings(true)
+  }
 
   return (
     <header className="safe-area-top glass-surface sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.08]">
@@ -43,7 +90,7 @@ export default function Header() {
           {authStatus?.role === 'user' && (
             <button
               type="button"
-              onClick={() => setShowSettings(true)}
+              onClick={openSettings}
               className="inline-flex max-w-[5.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.12]"
             >
               {authStatus.user?.remainingImageCredits == null
@@ -116,10 +163,13 @@ export default function Header() {
             </svg>
           </button>
           <button
-            onClick={() => setShowSettings(true)}
-            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
+            onClick={openSettings}
+            className="relative p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
             title="设置"
           >
+            {authStatus?.role === 'admin' && hasUnreadReminderDot && (
+              <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-900" />
+            )}
             <svg
               className="w-5 h-5 text-gray-600 dark:text-gray-400"
               fill="none"

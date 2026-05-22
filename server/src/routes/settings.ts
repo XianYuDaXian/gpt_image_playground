@@ -1,19 +1,28 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
-import { strFromU8, unzipSync } from 'fflate'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import { strFromU8, zipSync, unzipSync } from 'fflate'
 import { z } from 'zod'
 import {
+  createSession,
   createPlainUsageCode,
   getAllowedProviderProfileIds,
   hashSecret,
   requireAdmin,
   requireAuth,
+  setSessionCookie,
 } from '../lib/auth.js'
 import { decryptText, encryptText, maskSecret } from '../lib/crypto.js'
-import { loadSerializedTask } from '../lib/taskDto.js'
-import type { ProviderProfileRecord, UsageCodeStatsRecord } from '../lib/db.js'
+import type {
+  AppSettingRecord,
+  ProviderProfileRecord,
+  TaskEventRowRecord,
+  UsageCodeActivityRecord,
+  UsageCodeRawRecord,
+  UsageCodeStatsRecord,
+  UsageQuotaEventRowRecord,
+} from '../lib/db.js'
 
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
@@ -123,13 +132,168 @@ const backupImportSchema = z.object({
   images: z.array(backupImageSchema),
 })
 
+const fullBackupProviderProfileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  tagColor: z.string().nullable().optional(),
+  baseUrl: z.string().url(),
+  apiKey: z.string(),
+  model: z.string().min(1),
+  apiMode: z.enum(['images', 'responses', 'videos']),
+  timeoutSeconds: z.number().int().positive(),
+  codexCli: z.boolean(),
+  grokApiCompat: z.boolean(),
+  xaiImage2kEnabled: z.boolean(),
+  responseFormatB64Json: z.boolean(),
+  videoMaxResolution: z.enum(['480p', '720p']),
+  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]),
+  isDefault: z.boolean(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+})
+
+const fullBackupAppSettingSchema = z.object({
+  key: z.string().min(1),
+  value: z.unknown(),
+  updatedAt: z.string().min(1),
+})
+
+const fullBackupUsageCodeSchema = z.object({
+  id: z.string().min(1),
+  code: z.string().min(1),
+  name: z.string().min(1),
+  allowedProviderProfileIds: z.array(z.string().min(1)).nullable(),
+  isEnabled: z.boolean(),
+  imageQuota: z.number().int().nullable(),
+  providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable(),
+  usedImageCredits: z.number().int().nonnegative(),
+  providerUsedImageCredits: z.record(z.string().min(1), z.number().int().nonnegative()).nullable(),
+  videoQuota: z.number().int().nullable(),
+  providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable(),
+  usedVideoCredits: z.number().int().nonnegative(),
+  providerUsedVideoCredits: z.record(z.string().min(1), z.number().int().nonnegative()).nullable(),
+  outputImageCount: z.number().int().nonnegative(),
+  outputVideoCount: z.number().int().nonnegative(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  lastUsedAt: z.string().nullable(),
+})
+
+const fullBackupTaskSchema = z.object({
+  id: z.string().min(1),
+  prompt: z.string(),
+  taskType: z.enum(['image', 'video']),
+  status: z.string().min(1),
+  progressPercent: z.number().int(),
+  currentStep: z.string().min(1),
+  paramsJson: z.string(),
+  errorMessage: z.string().nullable(),
+  providerProfileId: z.string().nullable(),
+  upstreamRequestId: z.string().nullable(),
+  upstreamUsageJson: z.string().nullable(),
+  ownerUsageCodeId: z.string().nullable(),
+  ownerKind: z.enum(['admin', 'usage_code', 'legacy']),
+  reservedImageCredits: z.number().int().nonnegative(),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  finishedAt: z.string().nullable(),
+  isFavorite: z.boolean(),
+  isArchived: z.boolean(),
+})
+
+const fullBackupTaskImageSchema = z.object({
+  id: z.string().min(1),
+  taskId: z.string().min(1),
+  kind: z.enum(['input', 'mask', 'output', 'thumb', 'video_input', 'video_output']),
+  filePath: z.string().min(1),
+  mimeType: z.string().min(1),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  bytes: z.number().int().nonnegative(),
+  sha256: z.string().min(1),
+  metadataJson: z.string().nullable(),
+  createdAt: z.string().min(1),
+})
+
+const fullBackupTaskEventSchema = z.object({
+  id: z.number().int().nonnegative(),
+  taskId: z.string().min(1),
+  status: z.string().min(1),
+  step: z.string().min(1),
+  percent: z.number().int(),
+  message: z.string().nullable(),
+  createdAt: z.string().min(1),
+})
+
+const fullBackupUsageQuotaEventSchema = z.object({
+  id: z.number().int().nonnegative(),
+  usageCodeId: z.string().min(1),
+  taskId: z.string().nullable(),
+  eventType: z.string().min(1),
+  credits: z.number().int(),
+  reason: z.string().nullable(),
+  providerProfileId: z.string().nullable(),
+  createdAt: z.string().min(1),
+})
+
+const fullBackupUsageCodeActivitySchema = z.object({
+  id: z.number().int().nonnegative(),
+  usageCodeId: z.string().min(1),
+  taskId: z.string().nullable(),
+  actorKind: z.enum(['admin', 'user', 'system']),
+  eventType: z.string().min(1),
+  message: z.string().min(1),
+  createdAt: z.string().min(1),
+})
+
+const fullBackupManifestSchema = z.object({
+  kind: z.literal('admin_full_backup'),
+  version: z.literal(2),
+  exportedAt: z.string().min(1),
+  providerProfiles: z.array(fullBackupProviderProfileSchema),
+  appSettings: z.array(fullBackupAppSettingSchema),
+  usageCodes: z.array(fullBackupUsageCodeSchema),
+  tasks: z.array(fullBackupTaskSchema),
+  taskImages: z.array(fullBackupTaskImageSchema),
+  taskEvents: z.array(fullBackupTaskEventSchema),
+  usageQuotaEvents: z.array(fullBackupUsageQuotaEventSchema),
+  usageCodeActivityLogs: z.array(fullBackupUsageCodeActivitySchema),
+})
+
 const resetRemoteDataSchema = z.object({
-  mode: z.enum(['tasks', 'all']),
+  mode: z.enum(['tasks', 'all', 'usage_code_tasks_only']),
 })
 
 const distributionSettingsSchema = z.object({
   enabled: z.boolean(),
   maxConcurrentTasks: z.coerce.number().int().positive().max(50).default(2),
+})
+
+const reminderTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, '时间格式必须是 HH:mm')
+
+const reminderItemSchema = z.object({
+  id: z.string().min(1),
+  enabled: z.boolean().default(false),
+  title: z.string().trim().max(80).default('数据备份提醒'),
+  message: z.string().trim().max(5000).default(''),
+  imageDataUrl: z.string().trim().nullable().default(null),
+  maxDailyShows: z.coerce.number().int().min(1).max(24).default(1),
+  startAt: z.string().datetime(),
+  endAt: z.string().datetime(),
+  startTime: reminderTimeSchema.default('09:00'),
+  endTime: reminderTimeSchema.default('21:00'),
+  createdAt: z.string().datetime().optional(),
+  updatedAt: z.string().datetime().optional(),
+}).refine((value) => value.message.length > 0, {
+  message: '提醒事项必须填写正文',
+  path: ['message'],
+}).refine((value) => new Date(value.endAt).getTime() > new Date(value.startAt).getTime(), {
+  message: '结束时间必须晚于开始时间',
+  path: ['endAt'],
+})
+
+const reminderListSchema = z.object({
+  items: z.array(reminderItemSchema),
 })
 
 const usageCodeCreateSchema = z.object({
@@ -200,6 +364,60 @@ function getRuntimePreferences(app: Parameters<FastifyPluginAsync>[0]) {
     alwaysShowRetryButton: Boolean(runtime?.alwaysShowRetryButton),
     showUsageCodeAliasOnTaskCard: Boolean(runtime?.showUsageCodeAliasOnTaskCard),
   }
+}
+
+function getReminderItems(app: Parameters<FastifyPluginAsync>[0]) {
+  const stored = app.db.getAppSetting('reminders')
+  if (stored) {
+    return reminderListSchema.parse(stored).items
+  }
+
+  const legacyAnnouncement = app.db.getAppSetting('announcement')
+  if (legacyAnnouncement) {
+    const parsedLegacy = reminderItemSchema.safeParse({
+      id: crypto.randomUUID(),
+      enabled: Boolean((legacyAnnouncement as { enabled?: boolean }).enabled),
+      title: (legacyAnnouncement as { title?: string }).title ?? '数据备份提醒',
+      message: (legacyAnnouncement as { message?: string }).message ?? '',
+      imageDataUrl: (legacyAnnouncement as { imageDataUrl?: string | null }).imageDataUrl ?? null,
+      maxDailyShows: (legacyAnnouncement as { maxDailyShows?: number }).maxDailyShows ?? 1,
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      startTime: (legacyAnnouncement as { startTime?: string }).startTime ?? '09:00',
+      endTime: (legacyAnnouncement as { endTime?: string }).endTime ?? '21:00',
+      createdAt: new Date().toISOString(),
+      updatedAt: (legacyAnnouncement as { updatedAt?: string }).updatedAt ?? new Date().toISOString(),
+    })
+    if (parsedLegacy.success) {
+      return [parsedLegacy.data]
+    }
+  }
+
+  return []
+}
+
+function isLanAddress(ip: string) {
+  const normalizedIp = ip.trim().toLowerCase()
+  if (!normalizedIp) return false
+  if (normalizedIp === '127.0.0.1' || normalizedIp === '::1' || normalizedIp === 'localhost') return true
+
+  const ipv4MappedMatch = normalizedIp.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/)
+  const effectiveIp = ipv4MappedMatch?.[1] ?? normalizedIp
+
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(effectiveIp)) return true
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(effectiveIp)) return true
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(effectiveIp)) return true
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(effectiveIp)) return true
+  if (/^(fc|fd)[0-9a-f:]+$/.test(effectiveIp)) return true
+  if (/^fe80:[0-9a-f:]+$/.test(effectiveIp)) return true
+  return false
+}
+
+function requireLanForDataManagement(request: FastifyRequest, reply: FastifyReply) {
+  const clientIp = String(request.ip ?? '').trim()
+  if (isLanAddress(clientIp)) return
+  reply.code(403)
+  throw new Error('数据管理操作仅允许在本机或局域网内进行')
 }
 
 function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
@@ -396,9 +614,379 @@ function dataUrlToBytes(dataUrl: string) {
   }
 }
 
-async function parseBackupImportPayload(
-  request: FastifyRequest,
+function getUsageMediaArchiveEntries(
+  app: Parameters<FastifyPluginAsync>[0],
+  usageCodeIds: string[],
 ) {
+  const tasks = app.db.listTasksForUsageCodes(usageCodeIds, 5000)
+  const seenImageIds = new Set<string>()
+  const entries: Array<{
+    imageId: string
+    taskId: string
+    prompt: string
+    kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output'
+    filePath: string
+    mimeType: string
+    bytes: number
+  }> = []
+
+  for (const task of tasks) {
+    const images = app.db.listTaskImages(task.id)
+    for (const image of images) {
+      if (image.kind !== 'output' && image.kind !== 'video_output') continue
+      if (seenImageIds.has(image.id)) continue
+      seenImageIds.add(image.id)
+      entries.push({
+        imageId: image.id,
+        taskId: task.id,
+        prompt: task.prompt,
+        kind: image.kind,
+        filePath: image.filePath,
+        mimeType: image.mimeType,
+        bytes: image.bytes,
+      })
+    }
+  }
+
+  return entries
+}
+
+function summarizeUsageMediaEntries(entries: Array<{
+  kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output'
+  bytes: number
+}>) {
+  return entries.reduce(
+    (summary, entry) => {
+      if (entry.kind === 'output') summary.imageCount += 1
+      if (entry.kind === 'video_output') summary.videoCount += 1
+      summary.totalBytes += entry.bytes
+      return summary
+    },
+    { imageCount: 0, videoCount: 0, totalBytes: 0 },
+  )
+}
+
+function getArchiveExtension(filePath: string, mimeType: string) {
+  const ext = path.extname(filePath).trim()
+  if (ext) return ext
+  if (mimeType.includes('jpeg')) return '.jpg'
+  if (mimeType.includes('webp')) return '.webp'
+  if (mimeType.includes('gif')) return '.gif'
+  if (mimeType.includes('mp4')) return '.mp4'
+  if (mimeType.includes('quicktime')) return '.mov'
+  if (mimeType.includes('webm')) return '.webm'
+  return mimeType.startsWith('video/') ? '.mp4' : '.png'
+}
+
+function sanitizeArchiveNamePart(value: string) {
+  return value
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function shortenPromptForArchive(prompt: string) {
+  const normalized = sanitizeArchiveNamePart(prompt)
+  const sliced = Array.from(normalized).slice(0, 20).join('')
+  return sliced || '未命名任务'
+}
+
+function getArchiveLabelByKind(kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output') {
+  if (kind === 'video_output') return '视频'
+  return '图片'
+}
+
+function buildUsageMediaArchiveFileName(entry: {
+  prompt: string
+  kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output'
+  filePath: string
+  mimeType: string
+}, index: number) {
+  const extension = getArchiveExtension(entry.filePath, entry.mimeType)
+  const label = getArchiveLabelByKind(entry.kind)
+  const prompt = shortenPromptForArchive(entry.prompt)
+  const suffix = index > 1 ? `（${index}）` : ''
+  return `${label}-${prompt}${suffix}${extension}`
+}
+
+function formatBytesForDisplay(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
+}
+
+async function removeTaskMediaFiles(
+  app: Parameters<FastifyPluginAsync>[0],
+  taskId: string,
+) {
+  const images = app.db.listTaskImages(taskId)
+  for (const image of images) {
+    try {
+      await fs.rm(path.join(app.config.mediaDir, image.filePath), { force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+  return images
+}
+
+type LegacyBinaryImage = Omit<z.infer<typeof backupImageSchema>, 'dataUrl'> & { binary: Buffer }
+
+type LegacyImportPayload = {
+  runtimeSettings: z.infer<typeof runtimeSettingsSchema>
+  tasks: z.infer<typeof backupTaskSchema>[]
+  images: LegacyBinaryImage[]
+}
+
+type ParsedAdminBackupPayload = {
+  providerProfiles: ProviderProfileRecord[]
+  appSettings: AppSettingRecord[]
+  usageCodes: UsageCodeRawRecord[]
+  usageQuotaEvents: UsageQuotaEventRowRecord[]
+  usageCodeActivityLogs: UsageCodeActivityRecord[]
+  tasks: Array<{
+    id: string
+    prompt: string
+    taskType?: 'image' | 'video'
+    status: string
+    progressPercent: number
+    currentStep: string
+    paramsJson: string
+    errorMessage: string | null
+    providerProfileId: string | null
+    upstreamRequestId?: string | null
+    upstreamUsageJson?: string | null
+    ownerUsageCodeId?: string | null
+    ownerKind?: 'admin' | 'usage_code' | 'legacy'
+    reservedImageCredits?: number
+    createdAt: string
+    updatedAt: string
+    finishedAt: string | null
+    isFavorite?: boolean
+    isArchived?: boolean
+  }>
+  taskImages: Array<{
+    id: string
+    taskId: string
+    kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output'
+    filePath: string
+    mimeType: string
+    width: number | null
+    height: number | null
+    bytes: number
+    sha256: string
+    metadataJson?: string | null
+    createdAt: string
+  }>
+  taskEvents: TaskEventRowRecord[]
+}
+
+type ParsedAdminBackupImport = {
+  kind: 'full' | 'legacy'
+  payload: ParsedAdminBackupPayload
+  files: Array<{ filePath: string; binary: Buffer }>
+}
+
+function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
+  const providerProfiles = app.db.listProviderProfiles().map((profile) => ({
+    id: profile.id,
+    name: profile.name,
+    tagColor: profile.tagColor,
+    baseUrl: profile.baseUrl,
+    apiKey: decryptText(profile.apiKeyEncrypted, app.config.appSecret),
+    model: profile.model,
+    apiMode: profile.apiMode,
+    timeoutSeconds: profile.timeoutSeconds,
+    codexCli: Boolean(profile.codexCli),
+    grokApiCompat: Boolean(profile.grokApiCompat),
+    xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
+    responseFormatB64Json: Boolean(profile.responseFormatB64Json),
+    videoMaxResolution: profile.videoMaxResolution,
+    videoMaxDuration: profile.videoMaxDuration,
+    isDefault: Boolean(profile.isDefault),
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  }))
+  const appSettings = app.db.listAppSettings().map((setting) => ({
+    key: setting.key,
+    value: JSON.parse(setting.valueJson),
+    updatedAt: setting.updatedAt,
+  }))
+  const usageCodes = app.db.listUsageCodes().map((code) => ({
+    id: code.id,
+    code: code.codeEncrypted ? decryptText(code.codeEncrypted, app.config.appSecret) : '',
+    name: code.name,
+    allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
+    isEnabled: Boolean(code.isEnabled),
+    imageQuota: code.imageQuota,
+    providerImageQuotas: code.providerImageQuotas ?? null,
+    usedImageCredits: code.usedImageCredits,
+    providerUsedImageCredits: code.providerUsedImageCredits ?? null,
+    videoQuota: code.videoQuota,
+    providerVideoQuotas: code.providerVideoQuotas ?? null,
+    usedVideoCredits: code.usedVideoCredits,
+    providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
+    outputImageCount: code.outputImageCount,
+    outputVideoCount: code.outputVideoCount,
+    createdAt: code.createdAt,
+    updatedAt: code.updatedAt,
+    lastUsedAt: code.lastUsedAt,
+  }))
+  const tasks = app.db.listTasks(100000).map((task) => ({
+    id: task.id,
+    prompt: task.prompt,
+    taskType: task.taskType,
+    status: task.status,
+    progressPercent: task.progressPercent,
+    currentStep: task.currentStep,
+    paramsJson: task.paramsJson,
+    errorMessage: task.errorMessage,
+    providerProfileId: task.providerProfileId,
+    upstreamRequestId: task.upstreamRequestId,
+    upstreamUsageJson: task.upstreamUsageJson,
+    ownerUsageCodeId: task.ownerUsageCodeId,
+    ownerKind: task.ownerKind,
+    reservedImageCredits: task.reservedImageCredits,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    finishedAt: task.finishedAt,
+    isFavorite: Boolean(task.isFavorite),
+    isArchived: Boolean(task.isArchived),
+  }))
+  const taskImages = tasks.flatMap((task) => app.db.listTaskImages(task.id).map((image) => ({
+    id: image.id,
+    taskId: image.taskId,
+    kind: image.kind,
+    filePath: image.filePath,
+    mimeType: image.mimeType,
+    width: image.width,
+    height: image.height,
+    bytes: image.bytes,
+    sha256: image.sha256,
+    metadataJson: image.metadataJson,
+    createdAt: image.createdAt,
+  })))
+  const taskEvents = app.db.listAllTaskEvents()
+  const usageQuotaEvents = app.db.listAllUsageQuotaEvents()
+  const usageCodeActivityLogs = app.db.listAllUsageCodeActivityLogs()
+
+  return {
+    kind: 'admin_full_backup' as const,
+    version: 2 as const,
+    exportedAt: new Date().toISOString(),
+    providerProfiles,
+    appSettings,
+    usageCodes,
+    tasks,
+    taskImages,
+    taskEvents,
+    usageQuotaEvents,
+    usageCodeActivityLogs,
+  }
+}
+
+function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payload: LegacyImportPayload): ParsedAdminBackupPayload {
+  const nowIso = new Date().toISOString()
+  const providerProfileId = 'imported-default'
+  const providerProfiles: ProviderProfileRecord[] = [{
+    id: providerProfileId,
+    name: '导入的默认节点',
+    tagColor: 'blue',
+    baseUrl: payload.runtimeSettings.baseUrl,
+    apiKeyEncrypted: encryptText(payload.runtimeSettings.apiKey, app.config.appSecret),
+    model: payload.runtimeSettings.model,
+    apiMode: payload.runtimeSettings.apiMode,
+    timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
+    codexCli: payload.runtimeSettings.codexCli ? 1 : 0,
+    grokApiCompat: payload.runtimeSettings.grokApiCompat ? 1 : 0,
+    xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled ? 1 : 0,
+    responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json ? 1 : 0,
+    videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
+    videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
+    isDefault: 1,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  }]
+  const appSettings: AppSettingRecord[] = [{
+    key: 'runtime',
+    valueJson: JSON.stringify({
+      clearInputAfterSubmit: payload.runtimeSettings.clearInputAfterSubmit,
+      persistInputOnRestart: payload.runtimeSettings.persistInputOnRestart,
+      reuseTaskApiProfileTemporarily: payload.runtimeSettings.reuseTaskApiProfileTemporarily,
+      alwaysShowRetryButton: payload.runtimeSettings.alwaysShowRetryButton,
+      showUsageCodeAliasOnTaskCard: payload.runtimeSettings.showUsageCodeAliasOnTaskCard,
+    }),
+    updatedAt: nowIso,
+  }]
+  const imageMap = new Map(payload.images.map((image) => [image.id, image] as const))
+  const tasks = payload.tasks.map((task) => ({
+    id: task.id,
+    prompt: task.prompt,
+    taskType: 'image' as const,
+    status: toServerStatus(task.status, task.serverStatus),
+    progressPercent: task.progressPercent ?? (task.status === 'done' ? 100 : task.status === 'error' ? 100 : 50),
+    currentStep: task.currentStep ?? (task.status === 'done' ? 'completed' : task.status === 'error' ? 'failed' : 'processing'),
+    paramsJson: JSON.stringify(task.params),
+    errorMessage: task.error ?? null,
+    providerProfileId,
+    upstreamRequestId: null,
+    upstreamUsageJson: null,
+    ownerUsageCodeId: null,
+    ownerKind: 'legacy' as const,
+    reservedImageCredits: 0,
+    createdAt: toIsoTimestamp(task.createdAt, nowIso),
+    updatedAt: toIsoTimestamp(task.updatedAt ?? task.finishedAt ?? task.createdAt, nowIso),
+    finishedAt: task.finishedAt ? toIsoTimestamp(task.finishedAt, nowIso) : null,
+    isFavorite: task.isFavorite ?? false,
+    isArchived: task.isArchived ?? false,
+  }))
+  const taskImages = payload.tasks.flatMap((task) => {
+    const imageIds = [...task.inputImageIds, ...(task.maskImageId ? [task.maskImageId] : []), ...task.outputImages]
+    return imageIds
+      .filter((imageId, index) => imageIds.indexOf(imageId) === index)
+      .map((imageId) => {
+        const image = imageMap.get(imageId)
+        if (!image) {
+          throw new Error(`备份缺少图片文件：${imageId}`)
+        }
+        return {
+          id: image.id,
+          taskId: task.id,
+          kind: inferImageKind(task, image.id),
+          filePath: image.filePath,
+          mimeType: image.mimeType,
+          width: image.width ?? null,
+          height: image.height ?? null,
+          bytes: image.binary.byteLength,
+          sha256: image.sha256,
+          metadataJson: null,
+          createdAt: toIsoTimestamp(image.createdAt, nowIso),
+        }
+      })
+  })
+
+  return {
+    providerProfiles,
+    appSettings,
+    usageCodes: [] as UsageCodeRawRecord[],
+    usageQuotaEvents: [] as UsageQuotaEventRowRecord[],
+    usageCodeActivityLogs: [] as UsageCodeActivityRecord[],
+    tasks,
+    taskImages,
+    taskEvents: [] as TaskEventRowRecord[],
+  }
+}
+
+async function parseBackupImportPayload(
+  app: Parameters<FastifyPluginAsync>[0],
+  request: FastifyRequest,
+): Promise<ParsedAdminBackupImport> {
   const contentType = request.headers['content-type'] ?? ''
 
   if (contentType.includes('multipart/form-data')) {
@@ -414,8 +1002,78 @@ async function parseBackupImportPayload(
       throw new Error('备份文件缺少 manifest.json')
     }
 
-    const manifest = backupManifestSchema.parse(JSON.parse(strFromU8(manifestBytes)))
-    return {
+    const parsedManifest = JSON.parse(strFromU8(manifestBytes))
+    if (parsedManifest?.kind === 'admin_full_backup' && parsedManifest?.version === 2) {
+      const manifest = fullBackupManifestSchema.parse(parsedManifest)
+      return {
+        kind: 'full' as const,
+        payload: {
+          providerProfiles: manifest.providerProfiles.map((profile) => ({
+            id: profile.id,
+            name: profile.name,
+            tagColor: profile.tagColor ?? null,
+            baseUrl: profile.baseUrl,
+            apiKeyEncrypted: encryptText(profile.apiKey, app.config.appSecret),
+            model: profile.model,
+            apiMode: profile.apiMode,
+            timeoutSeconds: profile.timeoutSeconds,
+            codexCli: profile.codexCli ? 1 : 0,
+            grokApiCompat: profile.grokApiCompat ? 1 : 0,
+            xaiImage2kEnabled: profile.xaiImage2kEnabled ? 1 : 0,
+            responseFormatB64Json: profile.responseFormatB64Json ? 1 : 0,
+            videoMaxResolution: profile.videoMaxResolution,
+            videoMaxDuration: profile.videoMaxDuration,
+            isDefault: profile.isDefault ? 1 : 0,
+            createdAt: profile.createdAt,
+            updatedAt: profile.updatedAt,
+          })),
+          appSettings: manifest.appSettings.map((setting) => ({
+            key: setting.key,
+            valueJson: JSON.stringify(setting.value),
+            updatedAt: setting.updatedAt,
+          })),
+          usageCodes: manifest.usageCodes.map((code) => ({
+            id: code.id,
+            codeHash: hashSecret(code.code, app.config.appSecret),
+            codeEncrypted: encryptText(code.code, app.config.appSecret),
+            name: code.name,
+            allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
+            isEnabled: code.isEnabled ? 1 : 0,
+            imageQuota: code.imageQuota,
+            providerImageQuotas: code.providerImageQuotas ?? null,
+            usedImageCredits: code.usedImageCredits,
+            providerUsedImageCredits: code.providerUsedImageCredits ?? null,
+            videoQuota: code.videoQuota,
+            providerVideoQuotas: code.providerVideoQuotas ?? null,
+            usedVideoCredits: code.usedVideoCredits,
+            providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
+            outputImageCount: code.outputImageCount,
+            outputVideoCount: code.outputVideoCount,
+            createdAt: code.createdAt,
+            updatedAt: code.updatedAt,
+            lastUsedAt: code.lastUsedAt,
+          })),
+          usageQuotaEvents: manifest.usageQuotaEvents,
+          usageCodeActivityLogs: manifest.usageCodeActivityLogs,
+          tasks: manifest.tasks,
+          taskImages: manifest.taskImages,
+          taskEvents: manifest.taskEvents,
+        },
+        files: manifest.taskImages.map((image) => {
+          const bytes = zipFiles[image.filePath]
+          if (!bytes) {
+            throw new Error(`备份缺少媒体文件：${image.filePath}`)
+          }
+          return {
+            filePath: image.filePath,
+            binary: Buffer.from(bytes),
+          }
+        }),
+      }
+    }
+
+    const manifest = backupManifestSchema.parse(parsedManifest)
+    const legacyPayload = {
       runtimeSettings: manifest.runtimeSettings,
       tasks: manifest.tasks,
       images: manifest.images.map((image) => {
@@ -429,10 +1087,18 @@ async function parseBackupImportPayload(
         }
       }),
     }
+    return {
+      kind: 'legacy' as const,
+      payload: buildLegacyImportPayload(app, legacyPayload),
+      files: legacyPayload.images.map((image) => ({
+        filePath: image.filePath,
+        binary: image.binary,
+      })),
+    }
   }
 
   const payload = backupImportSchema.parse(request.body)
-  return {
+  const legacyPayload = {
     runtimeSettings: payload.runtimeSettings,
     tasks: payload.tasks,
     images: payload.images.map((image) => {
@@ -443,6 +1109,14 @@ async function parseBackupImportPayload(
         binary: bytes,
       }
     }),
+  }
+  return {
+    kind: 'legacy' as const,
+    payload: buildLegacyImportPayload(app, legacyPayload),
+    files: legacyPayload.images.map((image) => ({
+      filePath: image.filePath,
+      binary: image.binary,
+    })),
   }
 }
 
@@ -513,6 +1187,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       persistInputOnRestart: preferences.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
       alwaysShowRetryButton: preferences.alwaysShowRetryButton,
+      showUsageCodeAliasOnTaskCard: preferences.showUsageCodeAliasOnTaskCard,
       source: profile.id === 'env-default' ? 'env' : 'database',
     }
   })
@@ -580,6 +1255,35 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const payload = runtimePreferencesSchema.parse(request.body)
     app.db.setAppSetting('runtime', payload)
     return getRuntimePreferences(app)
+  })
+
+  app.get('/api/reminders', async (request, reply) => {
+    await requireAuth(app, request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return {
+      items: getReminderItems(app),
+    }
+  })
+
+  app.get('/api/admin/reminders', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return {
+      items: getReminderItems(app),
+    }
+  })
+
+  app.put('/api/admin/reminders', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const payload = reminderListSchema.parse(request.body)
+    const now = new Date().toISOString()
+    const items = payload.items.map((item) => ({
+      ...item,
+      createdAt: item.createdAt ?? now,
+      updatedAt: now,
+    }))
+    app.db.setAppSetting('reminders', { items })
+    return { items }
   })
 
   app.get('/api/provider-options', async (request, reply) => {
@@ -907,30 +1611,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/admin/data/import', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    const payload = await parseBackupImportPayload(request)
-    const importedProfile = app.db.upsertProviderProfile({
-      id: 'imported-default',
-      name: '导入的默认节点',
-      baseUrl: payload.runtimeSettings.baseUrl,
-      apiKeyEncrypted: encryptText(payload.runtimeSettings.apiKey, app.config.appSecret),
-      model: payload.runtimeSettings.model,
-      apiMode: payload.runtimeSettings.apiMode,
-      timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
-      codexCli: payload.runtimeSettings.codexCli,
-      grokApiCompat: payload.runtimeSettings.grokApiCompat,
-      xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled,
-      responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json,
-      videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
-      videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
-      isDefault: true,
-    })
-
-    app.db.setAppSetting('runtime', {
-      clearInputAfterSubmit: payload.runtimeSettings.clearInputAfterSubmit,
-      persistInputOnRestart: payload.runtimeSettings.persistInputOnRestart,
-      reuseTaskApiProfileTemporarily: payload.runtimeSettings.reuseTaskApiProfileTemporarily,
-      alwaysShowRetryButton: payload.runtimeSettings.alwaysShowRetryButton,
-    })
+    requireLanForDataManagement(request, reply)
+    const parsed = await parseBackupImportPayload(app, request)
 
     await fs.rm(app.config.mediaDir, { recursive: true, force: true })
     await fs.mkdir(app.config.mediaDir, { recursive: true })
@@ -939,98 +1621,154 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await fs.mkdir(app.config.outputsDir, { recursive: true })
     await fs.mkdir(app.config.thumbsDir, { recursive: true })
 
-    for (const image of payload.images) {
-      const absolutePath = path.join(app.config.mediaDir, image.filePath)
+    for (const file of parsed.files) {
+      const absolutePath = path.join(app.config.mediaDir, file.filePath)
       await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-      await fs.writeFile(absolutePath, image.binary)
+      await fs.writeFile(absolutePath, file.binary)
     }
 
-    const nowIso = new Date().toISOString()
-    const importedTasks = payload.tasks.map((task) => ({
-      id: task.id,
-      prompt: task.prompt,
-      status: toServerStatus(task.status, task.serverStatus),
-      progressPercent: task.progressPercent ?? (task.status === 'done' ? 100 : task.status === 'error' ? 100 : 50),
-      currentStep: task.currentStep ?? (task.status === 'done' ? 'completed' : task.status === 'error' ? 'failed' : 'processing'),
-      paramsJson: JSON.stringify(task.params),
-      errorMessage: task.error ?? null,
-      providerProfileId: importedProfile?.id ?? null,
-      createdAt: toIsoTimestamp(task.createdAt, nowIso),
-      updatedAt: toIsoTimestamp(task.updatedAt ?? task.finishedAt ?? task.createdAt, nowIso),
-      finishedAt: task.finishedAt ? toIsoTimestamp(task.finishedAt, nowIso) : null,
-      isFavorite: task.isFavorite ?? false,
-      isArchived: task.isArchived ?? false,
-    }))
-
-    const imageMap = new Map(payload.images.map((image) => [image.id, image] as const))
-    const importedTaskImages = payload.tasks.flatMap((task) => {
-      const imageIds = [...task.inputImageIds, ...(task.maskImageId ? [task.maskImageId] : []), ...task.outputImages]
-      return imageIds
-        .filter((imageId, index) => imageIds.indexOf(imageId) === index)
-        .map((imageId) => {
-          const image = imageMap.get(imageId)
-          if (!image) {
-            throw new Error(`备份缺少图片文件：${imageId}`)
-          }
-          return {
-            id: image.id,
-            taskId: task.id,
-            kind: inferImageKind(task, image.id),
-            filePath: image.filePath,
-            mimeType: image.mimeType,
-            width: image.width ?? null,
-            height: image.height ?? null,
-            bytes: image.binary.byteLength,
-            sha256: image.sha256,
-            createdAt: toIsoTimestamp(image.createdAt, nowIso),
-          }
-        })
+    app.db.replaceFullBackup(parsed.payload)
+    const nextSession = createSession(app, {
+      role: 'admin',
+      usageCodeId: null,
     })
-
-    app.db.replaceImportedData({
-      tasks: importedTasks,
-      taskImages: importedTaskImages,
-    })
+    setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
 
     return {
       ok: true,
-      importedTasks: payload.tasks.length,
-      importedImages: payload.images.length,
-      defaultProfileId: importedProfile?.id ?? null,
+      importedTasks: parsed.payload.tasks.length,
+      importedImages: parsed.payload.taskImages.length,
+      importedProviderProfiles: parsed.payload.providerProfiles.length,
+      importedUsageCodes: parsed.payload.usageCodes.length,
     }
   })
 
   app.get('/api/admin/data/export', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    const profile = app.db.getDefaultProviderProfile()
-    const runtime = profile
-      ? {
-          baseUrl: profile.baseUrl,
-          apiKey: decryptText(profile.apiKeyEncrypted, app.config.appSecret),
-          model: profile.model,
-          apiMode: profile.apiMode,
-          timeoutSeconds: profile.timeoutSeconds,
-          codexCli: Boolean(profile.codexCli),
-          grokApiCompat: Boolean(profile.grokApiCompat),
-          xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
-          responseFormatB64Json: Boolean(profile.responseFormatB64Json),
-          videoMaxResolution: profile.videoMaxResolution,
-          videoMaxDuration: profile.videoMaxDuration,
-          ...getRuntimePreferences(app),
-        }
-      : null
-
-    const tasks = app.db.listTasks(500).map((task) => loadSerializedTask(app.db, task.id, { appSecret: app.config.appSecret, exposeUsageCodeAlias: true })).filter(Boolean)
-
-    return {
-      runtimeSettings: runtime,
-      tasks,
+    requireLanForDataManagement(request, reply)
+    const manifest = buildFullBackupManifest(app)
+    const zipFiles: Record<string, Uint8Array> = {
+      'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'),
     }
+
+    for (const image of manifest.taskImages) {
+      const absolutePath = path.join(app.config.mediaDir, image.filePath)
+      zipFiles[image.filePath] = new Uint8Array(await fs.readFile(absolutePath))
+    }
+
+    const zipped = zipSync(zipFiles, { level: 6 })
+    reply.header('Cache-Control', 'no-store')
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="gpt-image-playground-full-backup-${Date.now()}.zip"`)
+    return reply.send(Buffer.from(zipped))
+  })
+
+  app.get('/api/user/data/export-media/summary', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以查看自己的导出预估' }
+    }
+
+    const entries = getUsageMediaArchiveEntries(app, auth.usageCodeIds)
+    const summary = summarizeUsageMediaEntries(entries)
+    return summary
+  })
+
+  app.get('/api/user/data/export-media', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以导出自己的图片与视频' }
+    }
+
+    const entries = getUsageMediaArchiveEntries(app, auth.usageCodeIds)
+    const summary = summarizeUsageMediaEntries(entries)
+    const zipFiles: Record<string, Uint8Array> = {}
+    const folderCount = new Map<string, number>()
+    const taskFolderMap = new Map<string, string>()
+    const taskFileCount = new Map<string, Map<string, number>>()
+
+    if (!entries.length) {
+      zipFiles['README.txt'] = Buffer.from('当前使用码下没有可导出的图片或视频文件。', 'utf-8')
+    }
+
+    for (const entry of entries) {
+      const absolutePath = path.join(app.config.mediaDir, entry.filePath)
+      const content = await fs.readFile(absolutePath)
+      let folderName = taskFolderMap.get(entry.taskId)
+      if (!folderName) {
+        const folderBaseName = `任务-${shortenPromptForArchive(entry.prompt)}`
+        const nextFolderIndex = (folderCount.get(folderBaseName) ?? 0) + 1
+        folderCount.set(folderBaseName, nextFolderIndex)
+        folderName = nextFolderIndex > 1 ? `${folderBaseName}-${nextFolderIndex}` : folderBaseName
+        taskFolderMap.set(entry.taskId, folderName)
+      }
+
+      const fileBaseName = buildUsageMediaArchiveFileName(entry, 1)
+      const folderFileCount = taskFileCount.get(entry.taskId) ?? new Map<string, number>()
+      const nextFileIndex = (folderFileCount.get(fileBaseName) ?? 0) + 1
+      folderFileCount.set(fileBaseName, nextFileIndex)
+      taskFileCount.set(entry.taskId, folderFileCount)
+
+      zipFiles[`${folderName}/${buildUsageMediaArchiveFileName(entry, nextFileIndex)}`] = new Uint8Array(content)
+    }
+
+    const exportTime = new Date().toISOString()
+    for (const usageCodeId of auth.usageCodeIds) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId,
+        actorKind: 'user',
+        eventType: 'media_exported',
+        message: `最近一次产物导出时间：${new Date(exportTime).toLocaleString('zh-CN')}，图片 ${summary.imageCount} 张，视频 ${summary.videoCount} 个，预计大小 ${formatBytesForDisplay(summary.totalBytes)}`,
+        createdAt: exportTime,
+      })
+    }
+
+    const zipped = zipSync(zipFiles, { level: 6 })
+    reply.header('Cache-Control', 'no-store')
+    reply.header('Content-Type', 'application/zip')
+    reply.header('Content-Disposition', `attachment; filename="usage-code-media-${Date.now()}.zip"`)
+    return reply.send(Buffer.from(zipped))
   })
 
   app.post('/api/admin/data/reset', async (request, reply) => {
     await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
     const payload = resetRemoteDataSchema.parse(request.body)
+
+    if (payload.mode === 'usage_code_tasks_only') {
+      const usageCodeTasks = app.db.listAllUsageCodeTasks()
+
+      for (const task of usageCodeTasks) {
+        const images = await removeTaskMediaFiles(app, task.id)
+        const outputImageCount = images.filter((image) => image.kind === 'output').length
+        const outputVideoCount = images.filter((image) => image.kind === 'video_output').length
+
+        app.taskWorker.cancel(task.id)
+        if (task.ownerUsageCodeId) {
+          app.db.insertUsageCodeActivityLog({
+            usageCodeId: task.ownerUsageCodeId,
+            taskId: task.id,
+            actorKind: 'admin',
+            eventType: 'admin_task_purged',
+            message: `管理员批量清理使用码任务，删除图片 ${outputImageCount} 张，视频 ${outputVideoCount} 个`,
+          })
+        }
+        app.db.deleteTask(task.id)
+        app.taskEvents.emitDeleted(task.id, {
+          ownerUsageCodeId: task.ownerUsageCodeId,
+          ownerKind: task.ownerKind,
+        })
+      }
+
+      return {
+        ok: true,
+        mode: payload.mode,
+        deletedTasks: usageCodeTasks.length,
+      }
+    }
+
     const existingTasks = app.db.listTasks(200).map((task) => ({
       id: task.id,
       ownerUsageCodeId: task.ownerUsageCodeId,

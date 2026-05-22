@@ -68,6 +68,21 @@ export interface BackendDistributionSettings {
   maxConcurrentTasks: number
 }
 
+export interface BackendReminderItem {
+  id: string
+  enabled: boolean
+  title: string
+  message: string
+  imageDataUrl: string | null
+  maxDailyShows: number
+  startAt: string
+  endAt: string
+  startTime: string
+  endTime: string
+  createdAt?: string
+  updatedAt?: string
+}
+
 export interface BackendUsageCode {
   id: string
   code: string | null
@@ -243,7 +258,7 @@ export async function deleteBackendProviderProfile(profileId: string): Promise<v
   await readResponseJson<{ ok: true }>(response)
 }
 
-export async function resetBackendRemoteData(mode: 'tasks' | 'all') {
+export async function resetBackendRemoteData(mode: 'tasks' | 'all' | 'usage_code_tasks_only') {
   const response = await fetch('/api/admin/data/reset', {
     method: 'POST',
     headers: {
@@ -252,12 +267,34 @@ export async function resetBackendRemoteData(mode: 'tasks' | 'all') {
     body: JSON.stringify({ mode }),
   })
 
-  return readResponseJson<{ ok: true; mode: 'tasks' | 'all' }>(response)
+  return readResponseJson<{ ok: true; mode: 'tasks' | 'all' | 'usage_code_tasks_only'; deletedTasks?: number }>(response)
 }
 
 export async function fetchBackendDistribution(): Promise<BackendDistributionSettings> {
   const response = await fetch('/api/admin/distribution', { cache: 'no-store' })
   return readResponseJson<BackendDistributionSettings>(response)
+}
+
+export async function fetchBackendReminders(): Promise<BackendReminderItem[]> {
+  const response = await fetch('/api/reminders', { cache: 'no-store' })
+  const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
+  return payload.items
+}
+
+export async function fetchAdminBackendReminders(): Promise<BackendReminderItem[]> {
+  const response = await fetch('/api/admin/reminders', { cache: 'no-store' })
+  const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
+  return payload.items
+}
+
+export async function saveBackendReminders(items: BackendReminderItem[]): Promise<BackendReminderItem[]> {
+  const response = await fetch('/api/admin/reminders', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  })
+  const payload = await readResponseJson<{ items: BackendReminderItem[] }>(response)
+  return payload.items
 }
 
 export async function saveBackendDistribution(settings: BackendDistributionSettings): Promise<BackendDistributionSettings> {

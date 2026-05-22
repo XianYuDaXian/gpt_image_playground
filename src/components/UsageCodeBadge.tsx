@@ -16,7 +16,7 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   const codeText = showAlias
     ? (task.ownerUsageCode?.name ?? task.ownerLabel)
     : (task.ownerUsageCode?.code ?? task.ownerLabel)
-  const detail = formatUsageCodeTooltip(task, { showAlias })
+  const detail = formatUsageCodeTooltip(task, { showAlias: !showAlias })
   const updatePosition = () => {
     const rect = buttonRef.current?.getBoundingClientRect()
     if (!rect) return false

@@ -130,6 +130,37 @@ export interface UsageCodeActivityRecord {
   createdAt: string
 }
 
+export interface AppSettingRecord {
+  key: string
+  valueJson: string
+  updatedAt: string
+}
+
+export interface TaskEventRowRecord {
+  id: number
+  taskId: string
+  status: string
+  step: string
+  percent: number
+  message: string | null
+  createdAt: string
+}
+
+export interface UsageQuotaEventRowRecord {
+  id: number
+  usageCodeId: string
+  taskId: string | null
+  eventType: string
+  credits: number
+  reason: string | null
+  providerProfileId: string | null
+  createdAt: string
+}
+
+export interface UsageCodeRawRecord extends UsageCodeRecord {
+  codeEncrypted: string | null
+}
+
 export interface AuthSessionRecord {
   id: string
   tokenHash: string
@@ -849,8 +880,21 @@ export class AppDatabase {
       VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET
         value_json = excluded.value_json,
-        updated_at = excluded.updated_at
+      updated_at = excluded.updated_at
     `).run(key, JSON.stringify(value), now)
+  }
+
+  listAppSettings() {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          key,
+          value_json as valueJson,
+          updated_at as updatedAt
+        FROM app_settings
+        ORDER BY key ASC
+      `)
+      .all() as AppSettingRecord[]
   }
 
   getDistributionSettings(): DistributionSettings {
@@ -934,6 +978,24 @@ ${selectUsageCodeFields()}
         providerUsedVideoCreditsJson: string | null
       } & Omit<UsageCodeRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits' | 'providerVideoQuotas' | 'providerUsedVideoCredits'>) | undefined
     return row ? normalizeUsageCodeRow(row) : undefined
+  }
+
+  listUsageCodes() {
+    const rows = this.sqlite
+      .prepare(`
+        SELECT
+${selectUsageCodeFields()}
+        FROM usage_codes
+        ORDER BY created_at DESC
+      `)
+      .all() as Array<{
+        allowedProviderProfileIdsJson: string | null
+        providerImageQuotasJson: string | null
+        providerUsedImageCreditsJson: string | null
+        providerVideoQuotasJson: string | null
+        providerUsedVideoCreditsJson: string | null
+      } & Omit<UsageCodeRawRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits' | 'providerVideoQuotas' | 'providerUsedVideoCredits'>>
+    return rows.map((row) => normalizeUsageCodeRow(row))
   }
 
   getUsageCodeByHash(codeHash: string) {
@@ -1265,6 +1327,24 @@ ${selectUsageCodeFields()}
       .all(usageCodeId, limit) as UsageQuotaEventRecord[]
   }
 
+  listAllUsageQuotaEvents() {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          id,
+          usage_code_id as usageCodeId,
+          task_id as taskId,
+          event_type as eventType,
+          credits,
+          reason,
+          provider_profile_id as providerProfileId,
+          created_at as createdAt
+        FROM usage_quota_events
+        ORDER BY id ASC
+      `)
+      .all() as UsageQuotaEventRowRecord[]
+  }
+
   listUsageCodeActivityLogs(usageCodeId: string, limit = 50) {
     return this.sqlite
       .prepare(`
@@ -1282,6 +1362,23 @@ ${selectUsageCodeFields()}
         LIMIT ?
       `)
       .all(usageCodeId, limit) as UsageCodeActivityRecord[]
+  }
+
+  listAllUsageCodeActivityLogs() {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          id,
+          usage_code_id as usageCodeId,
+          task_id as taskId,
+          actor_kind as actorKind,
+          event_type as eventType,
+          message,
+          created_at as createdAt
+        FROM usage_code_activity_logs
+        ORDER BY id ASC
+      `)
+      .all() as UsageCodeActivityRecord[]
   }
 
   insertUsageCodeActivityLog(input: {
@@ -2063,6 +2160,39 @@ ${selectUsageCodeFields()}
       .all(...usageCodeIds, limit) as TaskRecord[]
   }
 
+  listAllUsageCodeTasks() {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          tasks.id,
+          tasks.prompt,
+          tasks.task_type as taskType,
+          tasks.status,
+          tasks.progress_percent as progressPercent,
+          tasks.current_step as currentStep,
+          tasks.params_json as paramsJson,
+          tasks.error_message as errorMessage,
+          tasks.provider_profile_id as providerProfileId,
+          tasks.upstream_request_id as upstreamRequestId,
+          tasks.upstream_usage_json as upstreamUsageJson,
+          tasks.owner_usage_code_id as ownerUsageCodeId,
+          tasks.owner_kind as ownerKind,
+          tasks.reserved_image_credits as reservedImageCredits,
+          COALESCE(usage_codes.name, '已删除使用码') as ownerLabel,
+          ${this.taskOwnerStatsSelect()},
+          tasks.created_at as createdAt,
+          tasks.updated_at as updatedAt,
+          tasks.finished_at as finishedAt,
+          tasks.is_favorite as isFavorite,
+          tasks.is_archived as isArchived
+        FROM tasks
+        LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
+        WHERE tasks.owner_kind = 'usage_code'
+        ORDER BY tasks.created_at DESC
+      `)
+      .all() as TaskRecord[]
+  }
+
   getTask(id: string) {
     return this.sqlite
       .prepare(`
@@ -2233,6 +2363,23 @@ ${selectUsageCodeFields()}
         ORDER BY id ASC
       `)
       .all(taskId) as TaskEventRecord[]
+  }
+
+  listAllTaskEvents() {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          id,
+          task_id as taskId,
+          status,
+          step,
+          percent,
+          message,
+          created_at as createdAt
+        FROM task_events
+        ORDER BY id ASC
+      `)
+      .all() as TaskEventRowRecord[]
   }
 
   addTaskImage(input: {
@@ -2422,6 +2569,339 @@ ${selectUsageCodeFields()}
           ...image,
           metadataJson: image.metadataJson ?? null,
         })
+      }
+    })
+
+    tx()
+  }
+
+  replaceFullBackup(input: {
+    providerProfiles: ProviderProfileRecord[]
+    appSettings: AppSettingRecord[]
+    usageCodes: Array<UsageCodeRawRecord>
+    usageQuotaEvents: UsageQuotaEventRowRecord[]
+    usageCodeActivityLogs: UsageCodeActivityRecord[]
+    tasks: Array<{
+      id: string
+      prompt: string
+      taskType?: 'image' | 'video'
+      status: string
+      progressPercent: number
+      currentStep: string
+      paramsJson: string
+      errorMessage: string | null
+      providerProfileId: string | null
+      upstreamRequestId?: string | null
+      upstreamUsageJson?: string | null
+      ownerUsageCodeId?: string | null
+      ownerKind?: 'admin' | 'usage_code' | 'legacy'
+      reservedImageCredits?: number
+      createdAt: string
+      updatedAt: string
+      finishedAt: string | null
+      isFavorite?: boolean
+      isArchived?: boolean
+    }>
+    taskImages: Array<{
+      id: string
+      taskId: string
+      kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output'
+      filePath: string
+      mimeType: string
+      width: number | null
+      height: number | null
+      bytes: number
+      sha256: string
+      metadataJson?: string | null
+      createdAt: string
+    }>
+    taskEvents: TaskEventRowRecord[]
+  }) {
+    const tx = this.sqlite.transaction(() => {
+      this.sqlite.prepare('DELETE FROM auth_sessions').run()
+      this.sqlite.prepare('DELETE FROM usage_quota_events').run()
+      this.sqlite.prepare('DELETE FROM usage_code_activity_logs').run()
+      this.sqlite.prepare('DELETE FROM task_events').run()
+      this.sqlite.prepare('DELETE FROM task_images').run()
+      this.sqlite.prepare('DELETE FROM tasks').run()
+      this.sqlite.prepare('DELETE FROM app_settings').run()
+      this.sqlite.prepare('DELETE FROM provider_profiles').run()
+      this.sqlite.prepare('DELETE FROM usage_codes').run()
+
+      const insertProviderProfile = this.sqlite.prepare(`
+        INSERT INTO provider_profiles (
+          id,
+          name,
+          tag_color,
+          base_url,
+          api_key_encrypted,
+          model,
+          api_mode,
+          timeout_seconds,
+          codex_cli,
+          grok_api_compat,
+          xai_image_2k_enabled,
+          response_format_b64_json,
+          video_max_resolution,
+          video_max_duration,
+          is_default,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          @id,
+          @name,
+          @tagColor,
+          @baseUrl,
+          @apiKeyEncrypted,
+          @model,
+          @apiMode,
+          @timeoutSeconds,
+          @codexCli,
+          @grokApiCompat,
+          @xaiImage2kEnabled,
+          @responseFormatB64Json,
+          @videoMaxResolution,
+          @videoMaxDuration,
+          @isDefault,
+          @createdAt,
+          @updatedAt
+        )
+      `)
+
+      const insertAppSetting = this.sqlite.prepare(`
+        INSERT INTO app_settings (key, value_json, updated_at)
+        VALUES (@key, @valueJson, @updatedAt)
+      `)
+
+      const insertUsageCode = this.sqlite.prepare(`
+        INSERT INTO usage_codes (
+          id,
+          code_hash,
+          code_encrypted,
+          name,
+          allowed_provider_profile_ids_json,
+          is_enabled,
+          image_quota,
+          provider_image_quotas_json,
+          used_image_credits,
+          provider_used_image_credits_json,
+          video_quota,
+          provider_video_quotas_json,
+          used_video_credits,
+          provider_used_video_credits_json,
+          output_image_count,
+          output_video_count,
+          created_at,
+          updated_at,
+          last_used_at
+        )
+        VALUES (
+          @id,
+          @codeHash,
+          @codeEncrypted,
+          @name,
+          @allowedProviderProfileIdsJson,
+          @isEnabled,
+          @imageQuota,
+          @providerImageQuotasJson,
+          @usedImageCredits,
+          @providerUsedImageCreditsJson,
+          @videoQuota,
+          @providerVideoQuotasJson,
+          @usedVideoCredits,
+          @providerUsedVideoCreditsJson,
+          @outputImageCount,
+          @outputVideoCount,
+          @createdAt,
+          @updatedAt,
+          @lastUsedAt
+        )
+      `)
+
+      const insertTask = this.sqlite.prepare(`
+        INSERT INTO tasks (
+          id,
+          prompt,
+          task_type,
+          status,
+          progress_percent,
+          current_step,
+          params_json,
+          error_message,
+          provider_profile_id,
+          upstream_request_id,
+          upstream_usage_json,
+          owner_usage_code_id,
+          owner_kind,
+          reserved_image_credits,
+          created_at,
+          updated_at,
+          finished_at,
+          is_favorite,
+          is_archived
+        )
+        VALUES (
+          @id,
+          @prompt,
+          @taskType,
+          @status,
+          @progressPercent,
+          @currentStep,
+          @paramsJson,
+          @errorMessage,
+          @providerProfileId,
+          @upstreamRequestId,
+          @upstreamUsageJson,
+          @ownerUsageCodeId,
+          @ownerKind,
+          @reservedImageCredits,
+          @createdAt,
+          @updatedAt,
+          @finishedAt,
+          @isFavorite,
+          @isArchived
+        )
+      `)
+
+      const insertTaskImage = this.sqlite.prepare(`
+        INSERT INTO task_images (
+          id,
+          task_id,
+          kind,
+          file_path,
+          mime_type,
+          width,
+          height,
+          bytes,
+          sha256,
+          metadata_json,
+          created_at
+        )
+        VALUES (
+          @id,
+          @taskId,
+          @kind,
+          @filePath,
+          @mimeType,
+          @width,
+          @height,
+          @bytes,
+          @sha256,
+          @metadataJson,
+          @createdAt
+        )
+      `)
+
+      const insertTaskEvent = this.sqlite.prepare(`
+        INSERT INTO task_events (
+          id,
+          task_id,
+          status,
+          step,
+          percent,
+          message,
+          created_at
+        )
+        VALUES (
+          @id,
+          @taskId,
+          @status,
+          @step,
+          @percent,
+          @message,
+          @createdAt
+        )
+      `)
+
+      const insertUsageQuotaEvent = this.sqlite.prepare(`
+        INSERT INTO usage_quota_events (
+          id,
+          usage_code_id,
+          task_id,
+          event_type,
+          credits,
+          reason,
+          provider_profile_id,
+          created_at
+        )
+        VALUES (
+          @id,
+          @usageCodeId,
+          @taskId,
+          @eventType,
+          @credits,
+          @reason,
+          @providerProfileId,
+          @createdAt
+        )
+      `)
+
+      const insertUsageCodeActivityLog = this.sqlite.prepare(`
+        INSERT INTO usage_code_activity_logs (
+          id,
+          usage_code_id,
+          task_id,
+          actor_kind,
+          event_type,
+          message,
+          created_at
+        )
+        VALUES (
+          @id,
+          @usageCodeId,
+          @taskId,
+          @actorKind,
+          @eventType,
+          @message,
+          @createdAt
+        )
+      `)
+
+      for (const profile of input.providerProfiles) {
+        insertProviderProfile.run(profile)
+      }
+      for (const setting of input.appSettings) {
+        insertAppSetting.run(setting)
+      }
+      for (const usageCode of input.usageCodes) {
+        insertUsageCode.run({
+          ...usageCode,
+          allowedProviderProfileIdsJson: stringifyAllowedProviderProfileIds(usageCode.allowedProviderProfileIds),
+          providerImageQuotasJson: stringifyProviderImageQuotaMap(usageCode.providerImageQuotas),
+          providerUsedImageCreditsJson: stringifyProviderImageQuotaMap(usageCode.providerUsedImageCredits),
+          providerVideoQuotasJson: stringifyProviderImageQuotaMap(usageCode.providerVideoQuotas),
+          providerUsedVideoCreditsJson: stringifyProviderImageQuotaMap(usageCode.providerUsedVideoCredits),
+          isEnabled: usageCode.isEnabled ? 1 : 0,
+        })
+      }
+      for (const task of input.tasks) {
+        insertTask.run({
+          ...task,
+          taskType: task.taskType ?? 'image',
+          upstreamRequestId: task.upstreamRequestId ?? null,
+          upstreamUsageJson: task.upstreamUsageJson ?? null,
+          ownerUsageCodeId: task.ownerUsageCodeId ?? null,
+          ownerKind: task.ownerKind ?? 'legacy',
+          reservedImageCredits: task.reservedImageCredits ?? 0,
+          isFavorite: task.isFavorite ? 1 : 0,
+          isArchived: task.isArchived ? 1 : 0,
+        })
+      }
+      for (const image of input.taskImages) {
+        insertTaskImage.run({
+          ...image,
+          metadataJson: image.metadataJson ?? null,
+        })
+      }
+      for (const event of input.taskEvents) {
+        insertTaskEvent.run(event)
+      }
+      for (const event of input.usageQuotaEvents) {
+        insertUsageQuotaEvent.run(event)
+      }
+      for (const event of input.usageCodeActivityLogs) {
+        insertUsageCodeActivityLog.run(event)
       }
     })
 

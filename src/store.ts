@@ -31,6 +31,7 @@ import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import { normalizeImageSize } from './lib/size'
+import { clearAnnouncementLocalState } from './lib/announcement'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -1174,6 +1175,7 @@ export async function clearAllData(options: { silent?: boolean } = {}) {
   await clearImages()
   imageCache.clear()
   thumbnailCache.clear()
+  clearAnnouncementLocalState()
   for (const videoId of Array.from(videoUrlCache.keys())) {
     revokeCachedVideoUrl(videoId)
   }

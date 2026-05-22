@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
 import { applyThemeMode, watchSystemTheme } from './lib/theme'
+import { fetchBackendReminders, type BackendReminderItem } from './lib/backendSettings'
+import { getNextReminderToShow, markReminderShown } from './lib/announcement'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
@@ -14,13 +16,15 @@ import Toast from './components/Toast'
 import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import LoginPage from './components/LoginPage'
+import AnnouncementModal from './components/AnnouncementModal'
 
 export default function App() {
   const themeMode = useStore((s) => s.themeMode)
   const authStatus = useStore((s) => s.authStatus)
   const authInitialized = useStore((s) => s.authInitialized)
+  const [announcement, setAnnouncement] = useState<BackendReminderItem | null>(null)
   const hasOverlayOpen = useStore((s) =>
-    Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
+    Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog || announcement),
   )
 
   useEffect(() => {
@@ -68,6 +72,41 @@ export default function App() {
     }
   }, [hasOverlayOpen])
 
+  useEffect(() => {
+    if (!authStatus?.authenticated || authStatus.role !== 'user') {
+      setAnnouncement(null)
+      return
+    }
+
+    let cancelled = false
+    const checkReminders = () => {
+      if (announcement) return
+      void fetchBackendReminders()
+        .then((items) => {
+          if (cancelled) return
+          const nextAnnouncement = getNextReminderToShow(items)
+          if (!nextAnnouncement) {
+            setAnnouncement(null)
+            return
+          }
+          markReminderShown(nextAnnouncement)
+          setAnnouncement(nextAnnouncement)
+        })
+        .catch(() => {
+          if (cancelled) return
+          setAnnouncement(null)
+        })
+    }
+
+    checkReminders()
+    const timer = window.setInterval(checkReminders, 60 * 1000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [authStatus?.authenticated, authStatus?.role, authStatus?.usageCodes, announcement])
+
   if (!authInitialized) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-gray-50 text-sm text-gray-500 dark:bg-gray-950 dark:text-gray-400">
@@ -97,6 +136,12 @@ export default function App() {
       <Lightbox />
       <SettingsModal />
       <ConfirmDialog />
+      {announcement && (
+        <AnnouncementModal
+          announcement={announcement}
+          onClose={() => setAnnouncement(null)}
+        />
+      )}
       <Toast />
       <MaskEditorModal />
       <ImageContextMenu />

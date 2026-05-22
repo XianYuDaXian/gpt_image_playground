@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
+  fetchAdminBackendReminders,
+  fetchBackendReminders,
   createBackendProviderProfile,
   createBackendUsageCode,
   deleteBackendProviderProfile,
   deleteBackendUsageCode,
+  saveBackendReminders,
   fetchBackendDistribution,
   fetchBackendProviderOptions,
   fetchBackendProviderProfiles,
@@ -15,12 +18,19 @@ import {
   saveBackendDistribution,
   updateBackendProviderProfile,
   updateBackendUsageCode,
+  type BackendReminderItem,
   type BackendDistributionSettings,
   type BackendProviderOption,
   type BackendProviderProfile,
   type BackendUsageCode,
 } from '../lib/backendSettings'
-import { exportBackendBackup, importBackendBackup } from '../lib/backendBackup'
+import {
+  exportBackendBackup,
+  exportUsageCodeMediaArchive,
+  fetchUsageCodeMediaExportSummary,
+  importBackendBackup,
+  type UsageCodeMediaExportSummary,
+} from '../lib/backendBackup'
 import { addSessionUsageCode } from '../lib/backendAuth'
 import { fetchBackendTasks } from '../lib/backendTasks'
 import { useStore, clearAllData, clearLocalTaskCache } from '../store'
@@ -50,6 +60,46 @@ function createEmptyProfile(): BackendProviderProfile {
     videoMaxDuration: 6,
     isDefault: false,
   }
+}
+
+function toLocalDateTimeInputValue(value: Date) {
+  const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function createReminderId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `reminder-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function createEmptyReminder(): BackendReminderItem {
+  const now = new Date()
+  return {
+    id: createReminderId(),
+    enabled: false,
+    title: '数据备份提醒',
+    message: '',
+    imageDataUrl: null,
+    maxDailyShows: 1,
+    startAt: toLocalDateTimeInputValue(now),
+    endAt: toLocalDateTimeInputValue(new Date(now.getTime() + 24 * 60 * 60 * 1000)),
+    startTime: '09:00',
+    endTime: '21:00',
+  }
+}
+
+function normalizeReminderForEditor(item: BackendReminderItem): BackendReminderItem {
+  return {
+    ...item,
+    startAt: item.startAt.length > 16 ? toLocalDateTimeInputValue(new Date(item.startAt)) : item.startAt,
+    endAt: item.endAt.length > 16 ? toLocalDateTimeInputValue(new Date(item.endAt)) : item.endAt,
+  }
+}
+
+function toServerDateTimeValue(value: string) {
+  return new Date(value).toISOString()
 }
 
 function Switch({
@@ -149,6 +199,7 @@ export default function SettingsModal() {
   const [providerOptions, setProviderOptions] = useState<BackendProviderOption[]>([])
   const [profileDraft, setProfileDraft] = useState<BackendProviderProfile>(createEmptyProfile())
   const [distribution, setDistribution] = useState<BackendDistributionSettings>({ enabled: false, maxConcurrentTasks: 2 })
+  const [reminderDrafts, setReminderDrafts] = useState<BackendReminderItem[]>([])
   const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
   const [newCodeName, setNewCodeName] = useState('新使用码')
   const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>(null)
@@ -166,6 +217,8 @@ export default function SettingsModal() {
   const [isImporting, setIsImporting] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [isClearingRemote, setIsClearingRemote] = useState(false)
+  const [isSavingReminders, setIsSavingReminders] = useState(false)
+  const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
@@ -214,6 +267,26 @@ export default function SettingsModal() {
     if (value === 0) return '禁用'
     return String(value)
   }
+
+  const formatBytes = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    const units = ['KB', 'MB', 'GB', 'TB']
+    let value = bytes / 1024
+    let unitIndex = 0
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024
+      unitIndex += 1
+    }
+    return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
+  }
+
+  const readFileAsDataUrl = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
+      reader.readAsDataURL(file)
+    })
 
   const formatActivityEventTagText = (event: BackendUsageCode['activityEvents'][number]) => {
     if (!event.providerProfileName || event.credits == null) return null
@@ -333,12 +406,14 @@ export default function SettingsModal() {
   }
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
       isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
       fetchBackendProviderOptions().catch(() => []),
       isAdmin ? fetchBackendDistribution().catch(() => ({ enabled: false, maxConcurrentTasks: 2 })) : Promise.resolve({ enabled: false, maxConcurrentTasks: 2 }),
       isAdmin ? fetchBackendUsageCodes().catch(() => []) : Promise.resolve([]),
+      isAdmin ? Promise.resolve(null) : fetchUsageCodeMediaExportSummary().catch(() => null),
+      isAdmin ? fetchAdminBackendReminders().catch(() => []) : fetchBackendReminders().catch(() => []),
     ])
 
     const nextDraft: AppSettings = {
@@ -395,7 +470,9 @@ export default function SettingsModal() {
     setProfiles(visibleProfiles)
     setProviderOptions(nextProviderOptions)
     setDistribution(nextDistribution)
+    setReminderDrafts(nextReminders.map(normalizeReminderForEditor))
     setUsageCodes(nextUsageCodes)
+    setUsageCodeExportSummary(nextUsageCodeExportSummary)
     setExpandedUsageCodeIds((prev) => {
       const existing = new Set(prev)
       return nextUsageCodes
@@ -623,6 +700,76 @@ export default function SettingsModal() {
     }
   }
 
+  const handleExportUsageCodeMedia = async () => {
+    setIsExporting(true)
+    try {
+      await exportUsageCodeMediaArchive()
+      await loadSettings()
+      useStore.getState().showToast('图片与视频压缩包已保存到本地', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `导出图片与视频失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
+  const handleSaveReminders = async () => {
+    setIsSavingReminders(true)
+    try {
+      const saved = await saveBackendReminders(
+        reminderDrafts.map((item) => ({
+          ...item,
+          startAt: toServerDateTimeValue(item.startAt),
+          endAt: toServerDateTimeValue(item.endAt),
+        })),
+      )
+      setReminderDrafts(saved.map(normalizeReminderForEditor))
+      useStore.getState().showToast('提醒事项已保存', 'success')
+    } catch (err) {
+      useStore.getState().showToast(
+        `保存提醒事项失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    } finally {
+      setIsSavingReminders(false)
+    }
+  }
+
+  const handlePickReminderImage = async (reminderId: string, event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      useStore.getState().showToast('请选择图片文件', 'error')
+      return
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      setReminderDrafts((prev) => prev.map((item) => item.id === reminderId ? { ...item, imageDataUrl: dataUrl } : item))
+    } catch (err) {
+      useStore.getState().showToast(
+        `读取提醒配图失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
+    }
+  }
+
+  const handleCreateReminder = () => {
+    setReminderDrafts((prev) => [createEmptyReminder(), ...prev])
+  }
+
+  const handleUpdateReminder = (reminderId: string, patch: Partial<BackendReminderItem>) => {
+    setReminderDrafts((prev) => prev.map((item) => item.id === reminderId ? { ...item, ...patch } : item))
+  }
+
+  const handleDeleteReminder = (reminderId: string) => {
+    setReminderDrafts((prev) => prev.filter((item) => item.id !== reminderId))
+  }
+
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -648,20 +795,27 @@ export default function SettingsModal() {
     }
   }
 
-  const handleResetRemoteData = async (mode: 'tasks' | 'all') => {
+  const handleResetRemoteData = async (mode: 'tasks' | 'all' | 'usage_code_tasks_only') => {
     setIsClearingRemote(true)
     try {
-      await resetBackendRemoteData(mode)
+      const result = await resetBackendRemoteData(mode)
       if (mode === 'all') {
         await clearAllData({ silent: true })
         setDraft(DEFAULT_SETTINGS)
         setProfileDraft(createEmptyProfile())
+      } else if (mode === 'usage_code_tasks_only') {
+        await clearLocalTaskCache({ silent: true })
+        await refreshFromBackend()
       } else {
         await clearLocalTaskCache({ silent: true })
         await refreshFromBackend()
       }
       useStore.getState().showToast(
-        mode === 'all' ? '远端数据与设置已清空' : '远端任务与图片已清空',
+        mode === 'all'
+          ? '远端数据与设置已清空'
+          : mode === 'usage_code_tasks_only'
+            ? `已清除 ${result.deletedTasks ?? 0} 条使用码任务与产物`
+            : '远端任务与图片已清空',
         'success',
       )
     } catch (err) {
@@ -1007,9 +1161,39 @@ export default function SettingsModal() {
                     添加
                   </button>
                 </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400">
-                  任务列表会显示以上所有使用码对应的图片。
+                <button
+                  type="button"
+                  onClick={() => void handleExportUsageCodeMedia()}
+                  disabled={isSaving || isExporting}
+                  className="w-full rounded-lg border border-gray-200/70 bg-white/80 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+                >
+                  {isExporting ? '打包中...' : '导出图片与视频'}
+                </button>
+                <div className="rounded-lg border border-dashed border-gray-200/70 bg-white/40 px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-400">
+                  {usageCodeExportSummary
+                    ? `本次将导出 ${usageCodeExportSummary.imageCount} 张图片、${usageCodeExportSummary.videoCount} 个视频，预计总大小 ${formatBytes(usageCodeExportSummary.totalBytes)}。`
+                    : '正在读取导出预估信息。'}
                 </div>
+                <div className="text-xs text-gray-500 dark:text-gray-400">
+                  压缩包只包含当前使用码对应的图片文件和视频文件。
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConfirmDialog({
+                      title: '清除浏览器缓存',
+                      message: '这会清空当前浏览器中的任务记录、图片缓存、视频缓存和输入草稿。\n\n不会删除服务器上的任务、图片、视频和使用码额度。',
+                      confirmText: '确认清除',
+                      tone: 'warning',
+                      action: () => {
+                        void clearAllData()
+                      },
+                    })
+                  }
+                  className="w-full rounded-lg border border-orange-200/80 bg-orange-50/50 px-4 py-2 text-sm font-medium text-orange-600 transition hover:bg-orange-100/80 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-300 dark:hover:bg-orange-500/20"
+                >
+                  清除浏览器缓存
+                </button>
               </div>
             </div>
           )}
@@ -1251,6 +1435,175 @@ export default function SettingsModal() {
                     className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                   />
                 </label>
+              </div>
+
+              <div className="space-y-4 rounded-2xl border border-gray-200/70 bg-gray-50/60 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100">公共提醒事项</div>
+                    <div className="mt-1 text-xs leading-6 text-gray-500 dark:text-gray-400">
+                      事项会在生效时间内按设定频率向使用码用户弹出。结束后仍保留在这里，方便管理员查看历史。
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCreateReminder}
+                    className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                  >
+                    新建事项
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  {reminderDrafts.map((reminder) => {
+                    const ended = new Date(reminder.endAt).getTime() <= Date.now()
+                    return (
+                      <div
+                        key={reminder.id}
+                        className="space-y-3 rounded-2xl border border-gray-200/70 bg-white/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                              ended
+                                ? 'bg-red-50 text-red-500 dark:bg-red-500/10 dark:text-red-300'
+                                : reminder.enabled
+                                  ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                  : 'bg-gray-100 text-gray-500 dark:bg-white/[0.06] dark:text-gray-400'
+                            }`}>
+                              {ended ? '已结束' : reminder.enabled ? '进行中' : '已关闭'}
+                            </span>
+                            <span className="text-xs text-gray-400 dark:text-gray-500">
+                              每天最多提醒 {reminder.maxDailyShows} 次
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={reminder.enabled}
+                              onChange={(checked) => handleUpdateReminder(reminder.id, { enabled: checked })}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteReminder(reminder.id)}
+                              className="rounded-lg bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition hover:bg-red-100 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事项标题</span>
+                          <input
+                            value={reminder.title}
+                            onChange={(event) => handleUpdateReminder(reminder.id, { title: event.target.value })}
+                            placeholder="数据备份提醒"
+                            className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事项正文</span>
+                          <textarea
+                            value={reminder.message}
+                            onChange={(event) => handleUpdateReminder(reminder.id, { message: event.target.value })}
+                            rows={4}
+                            placeholder="请先导出图片和视频，再准备后续清理。"
+                            className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                          />
+                        </label>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">开始时间</span>
+                            <input
+                              value={reminder.startAt}
+                              onChange={(event) => handleUpdateReminder(reminder.id, { startAt: event.target.value })}
+                              type="datetime-local"
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">结束时间</span>
+                            <input
+                              value={reminder.endAt}
+                              onChange={(event) => handleUpdateReminder(reminder.id, { endAt: event.target.value })}
+                              type="datetime-local"
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">每天提醒次数</span>
+                            <input
+                              value={reminder.maxDailyShows}
+                              onChange={(event) => handleUpdateReminder(reminder.id, {
+                                maxDailyShows: Math.min(24, Math.max(1, Number(event.target.value) || 1)),
+                              })}
+                              type="number"
+                              min={1}
+                              max={24}
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内开始</span>
+                            <input
+                              value={reminder.startTime}
+                              onChange={(event) => handleUpdateReminder(reminder.id, { startTime: event.target.value })}
+                              type="time"
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内结束</span>
+                            <input
+                              value={reminder.endTime}
+                              onChange={(event) => handleUpdateReminder(reminder.id, { endTime: event.target.value })}
+                              type="time"
+                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            />
+                          </label>
+                        </div>
+                        <div className="space-y-2">
+                          <span className="block text-xs text-gray-500 dark:text-gray-400">事项配图</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(event) => void handlePickReminderImage(reminder.id, event)}
+                            className="block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-medium file:text-blue-600 hover:file:bg-blue-100 dark:text-gray-400 dark:file:bg-blue-500/10 dark:file:text-blue-300 dark:hover:file:bg-blue-500/20"
+                          />
+                          {reminder.imageDataUrl ? (
+                            <div className="space-y-2">
+                              <img
+                                src={reminder.imageDataUrl}
+                                alt={reminder.title || '事项配图'}
+                                className="max-h-48 w-full rounded-2xl object-cover"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateReminder(reminder.id, { imageDataUrl: null })}
+                                className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-medium text-red-500 transition hover:bg-red-100 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
+                              >
+                                移除配图
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {!reminderDrafts.length && (
+                    <div className="rounded-xl border border-dashed border-gray-200/70 bg-white/40 px-3 py-6 text-center text-xs text-gray-400 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-500">
+                      暂无提醒事项
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveReminders()}
+                  disabled={isSavingReminders}
+                  className="w-full rounded-xl bg-blue-500 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSavingReminders ? '保存中...' : '保存提醒事项'}
+                </button>
               </div>
 
               <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
@@ -1728,6 +2081,24 @@ export default function SettingsModal() {
                   {isImporting ? '导入中...' : '导入本地备份'}
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setConfirmDialog({
+                    title: '清除全部使用码任务与产物',
+                    message: '这会删除所有使用码用户提交的任务卡片，以及这些任务对应的输入图、遮罩图、输出图、视频和缩略图。\n\n不会删除管理员任务。不会删除使用码、API 配置、分发设置，也不会回退已扣额度或清空过往使用记录。',
+                    confirmText: '确认清除',
+                    tone: 'danger',
+                    action: () => {
+                      void handleResetRemoteData('usage_code_tasks_only')
+                    },
+                  })
+                }
+                disabled={isClearingRemote || isImporting || isExporting}
+                className="w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+              >
+                {isClearingRemote ? '清除中...' : '清除全部使用码任务与产物'}
+              </button>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
