@@ -456,6 +456,7 @@ export default function SettingsModal() {
         persistInputOnRestart: runtimeSettings.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: runtimeSettings.reuseTaskApiProfileTemporarily,
         alwaysShowRetryButton: runtimeSettings.alwaysShowRetryButton,
+        showUsageCodeAliasOnTaskCard: runtimeSettings.showUsageCodeAliasOnTaskCard,
       }
       setSettings(nextSettings)
       setDraft((prev) => ({ ...prev, ...nextSettings }))

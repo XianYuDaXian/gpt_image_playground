@@ -5,8 +5,11 @@ export function formatUsageCodeTooltip(task: TaskRecord, options: { showAlias?: 
   if (!code) return task.ownerLabel ?? ''
 
   const isVideoTask = task.taskType === 'video'
+  const showAlias = options.showAlias !== false
   return [
-    `使用码别名：${code.name}`,
+    showAlias
+      ? `使用码别名：${code.name}`
+      : `使用码：${code.code ?? task.ownerLabel ?? '未知'}`,
     isVideoTask
       ? `当前 API 已生成视频：${code.providerOutputVideoCount}`
       : `当前 API 已生成图片：${code.providerOutputImageCount}`,
