@@ -6,6 +6,7 @@ import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import UsageCodeBadge from './UsageCodeBadge'
+import VideoPlayer from './VideoPlayer'
 import type { VideoTaskParams } from '../types'
 
 export default function DetailModal() {
@@ -31,6 +32,12 @@ export default function DetailModal() {
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const mainImageRef = useRef<HTMLImageElement>(null)
   const [imageLabelLeft, setImageLabelLeft] = useState(8)
+  const isIOS = useMemo(() => {
+    if (typeof navigator === 'undefined') return false
+    const ua = navigator.userAgent || ''
+    const platform = navigator.platform || ''
+    return /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  }, [])
 
   const task = useMemo(
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
@@ -118,8 +125,13 @@ export default function DetailModal() {
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
   const currentOutputImageSrc = currentOutputImageId ? imageSrcs[currentOutputImageId] || '' : ''
   const currentOutputVideoId = task?.outputVideos?.[0] || ''
+  const currentOutputVideoRemoteSrc = currentOutputVideoId
+    ? task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
+    : ''
   const currentOutputVideoSrc = currentOutputVideoId
-    ? videoSrcs[currentOutputVideoId] || task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
+    ? isIOS
+      ? currentOutputVideoRemoteSrc || videoSrcs[currentOutputVideoId] || ''
+      : videoSrcs[currentOutputVideoId] || currentOutputVideoRemoteSrc || ''
     : ''
   const currentOutputVideoPoster = currentOutputVideoId
     ? imageSrcs[currentOutputVideoId] || task?.videoPosterUrlsById?.[currentOutputVideoId] || ''
@@ -345,12 +357,10 @@ export default function DetailModal() {
           {hasRenderedOutput && (
             <>
               {isVideoTask ? (
-                <video
+                <VideoPlayer
                   src={currentOutputVideoSrc}
                   poster={currentOutputVideoPoster || undefined}
-                  className="max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain"
-                  controls
-                  playsInline
+                  nativeControls={isIOS}
                 />
               ) : (
               <img

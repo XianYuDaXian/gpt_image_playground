@@ -1,11 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord, VideoTaskParams } from '../types'
 import {
-  cacheTaskVideoForPlayback,
   cacheTaskImageForEditing,
   ensureMediaThumbnailCached,
   ensureTaskImageAvailable,
-  ensureTaskVideoAvailable,
   subscribeMediaThumbnail,
   updateTaskInStore,
   useStore,
@@ -35,7 +33,6 @@ export default function TaskCard({
   deferImageLoading = false,
 }: Props) {
   const [thumbSrc, setThumbSrc] = useState<string>('')
-  const [videoSrc, setVideoSrc] = useState<string>('')
   const [coverRatio, setCoverRatio] = useState<string>('')
   const [now, setNow] = useState(Date.now())
   const [swipeOffset, setSwipeOffset] = useState(0)
@@ -51,9 +48,6 @@ export default function TaskCard({
   const toggleTaskImageBlur = useStore((s) => s.toggleTaskImageBlur)
   const firstOutputImageId = task.outputImages?.[0]
   const firstOutputVideoId = task.outputVideos?.[0]
-  const firstOutputVideoRemoteUrl = firstOutputVideoId
-    ? task.mediaUrlsById?.[firstOutputVideoId] || task.imageUrlsById?.[firstOutputVideoId] || ''
-    : ''
   const firstOutputVideoPosterUrl = firstOutputVideoId ? task.videoPosterUrlsById?.[firstOutputVideoId] || '' : ''
   const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
   const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
@@ -226,7 +220,6 @@ export default function TaskCard({
 
     setCoverRatio('')
     setThumbSrc('')
-    setVideoSrc('')
 
     const mediaId = task.taskType === 'video' && firstOutputVideoPosterUrl ? null : task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
     if (firstOutputVideoPosterUrl) {
@@ -262,18 +255,6 @@ export default function TaskCard({
       }
     }
 
-    if (task.taskType === 'video' && firstOutputVideoId) {
-      ensureTaskVideoAvailable(firstOutputVideoId).then((url) => {
-        if (!cancelled && url) setVideoSrc(url)
-      })
-
-      if (firstOutputVideoRemoteUrl) {
-        void cacheTaskVideoForPlayback(firstOutputVideoId, firstOutputVideoRemoteUrl).then((url) => {
-          if (!cancelled && url) setVideoSrc(url)
-        })
-      }
-    }
-
     return () => {
       cancelled = true
       unsubscribe?.()
@@ -283,7 +264,6 @@ export default function TaskCard({
     firstOutputSize?.width,
     firstOutputVideoId,
     firstOutputVideoPosterUrl,
-    firstOutputVideoRemoteUrl,
     shouldLoadImage,
     task.imageUrlsById,
     task.outputImages,
@@ -358,7 +338,6 @@ export default function TaskCard({
   const videoParams = isVideoTask ? task.params as VideoTaskParams : null
   const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
   const taskModelLabel = task.providerProfileModel ?? null
-  const videoPreviewSrc = videoSrc ? `${videoSrc}#t=0.001` : ''
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showDeferredPlaceholder =
@@ -484,19 +463,6 @@ export default function TaskCard({
               <div className="absolute inset-0 bg-black/20" />
             </>
           )}
-          {isVideoTask && !thumbSrc && videoSrc && (
-            <>
-              <video
-                src={videoPreviewSrc}
-                poster={firstOutputVideoPosterUrl || undefined}
-                className="h-full w-full object-cover"
-                muted
-                playsInline
-                preload="auto"
-              />
-              <div className="absolute inset-0 bg-black/20" />
-            </>
-          )}
           {hasOutputVideo && (
             <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center">
               <div className="flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm">
@@ -590,7 +556,7 @@ export default function TaskCard({
               </span>
             </div>
           )}
-          {task.status === 'done' && !thumbSrc && !videoSrc && (
+          {task.status === 'done' && !thumbSrc && (
             <svg
               className="w-8 h-8 text-gray-300"
               fill="none"

@@ -344,7 +344,6 @@ input[type="number"] {
   background: rgba(255, 255, 255, 0.96);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  position: relative;
   overflow: hidden;
   isolation: isolate;
 }
@@ -353,7 +352,6 @@ input[type="number"] {
   background: rgba(255, 255, 255, 0.985);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  position: relative;
   overflow: hidden;
   isolation: isolate;
 }
@@ -362,7 +360,6 @@ input[type="number"] {
   background: rgba(18, 22, 29, 0.985);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  position: relative;
   overflow: hidden;
   isolation: isolate;
 }
@@ -371,7 +368,6 @@ input[type="number"] {
   background: rgba(0, 0, 0, 0.5);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  position: relative;
   overflow: hidden;
   isolation: isolate;
 }
@@ -380,15 +376,22 @@ input[type="number"] {
   background: rgba(0, 0, 0, 0.66);
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
-  position: relative;
   overflow: hidden;
   isolation: isolate;
+}
+
+.no-backdrop-filter .glass-surface:not(.absolute):not(.fixed):not(.sticky),
+.no-backdrop-filter .glass-surface-strong:not(.absolute):not(.fixed):not(.sticky),
+.no-backdrop-filter .glass-surface-dark:not(.absolute):not(.fixed):not(.sticky),
+.no-backdrop-filter .glass-overlay-soft:not(.absolute):not(.fixed):not(.sticky),
+.no-backdrop-filter .glass-overlay:not(.absolute):not(.fixed):not(.sticky) {
+  position: relative;
 }
 
 .no-backdrop-filter .safe-input-card {
   background: rgba(255, 255, 255, 0.96);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   isolation: isolate;
 }
 
@@ -506,6 +509,145 @@ input[type="number"] {
 
 .dark .glass-surface-strong {
   background: rgba(24, 24, 27, 0.9);
+}
+
+.select-menu-surface {
+  background: rgba(255, 255, 255, 0.985);
+}
+
+.dark .select-menu-surface {
+  background: rgba(18, 18, 21, 0.975);
+}
+
+.no-backdrop-filter .select-menu-surface {
+  background: rgba(255, 255, 255, 0.995);
+}
+
+.no-backdrop-filter.dark .select-menu-surface {
+  background: rgba(18, 18, 21, 0.995);
+}
+
+.detail-video-player {
+  display: flex;
+  position: relative;
+  align-items: center;
+  justify-content: center;
+  width: calc(100% - 2rem);
+  height: calc(100% - 2rem);
+  max-height: calc(100% - 2rem);
+  max-width: calc(100% - 2rem);
+  overflow: hidden;
+  border-radius: 1rem;
+  background: rgb(0 0 0);
+}
+
+.detail-video-element {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  background: rgb(0 0 0);
+  object-fit: contain;
+  position: relative;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.detail-video-element-native {
+  pointer-events: auto;
+}
+
+.detail-video-controls {
+  position: absolute;
+  inset: auto 0 0 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem 0.75rem;
+  background: linear-gradient(180deg, transparent, rgb(0 0 0 / 0.9));
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+
+.detail-video-play-button {
+  display: inline-flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255);
+  transition: background-color 0.2s ease;
+  touch-action: manipulation;
+}
+
+.detail-video-play-button:hover {
+  background: rgb(255 255 255 / 0.2);
+}
+
+.detail-video-time {
+  flex-shrink: 0;
+  color: rgb(255 255 255 / 0.92);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-video-progress {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  flex: 1;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.28);
+  pointer-events: auto;
+  touch-action: pan-x;
+}
+
+.detail-video-progress::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 0.875rem;
+  width: 0.875rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255);
+  border: 0;
+}
+
+.detail-video-progress::-moz-range-thumb {
+  height: 0.875rem;
+  width: 0.875rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255);
+  border: 0;
+}
+
+.detail-video-progress::-moz-range-track {
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.28);
+}
+
+.detail-video-fullscreen-button {
+  display: inline-flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255);
+  transition: background-color 0.2s ease;
+  touch-action: manipulation;
+}
+
+.detail-video-fullscreen-button:hover {
+  background: rgb(255 255 255 / 0.2);
 }
 
 .safe-editor-header {

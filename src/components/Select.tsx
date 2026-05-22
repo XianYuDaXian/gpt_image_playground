@@ -11,15 +11,17 @@ interface SelectProps {
   options: Option[]
   disabled?: boolean
   className?: string
+  placement?: 'auto' | 'top' | 'bottom'
 }
 
-export default function Select({ value, onChange, options, disabled, className }: SelectProps) {
+export default function Select({ value, onChange, options, disabled, className, placement = 'auto' }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [openUp, setOpenUp] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLDivElement>(null)
 
   const selectedOption = options.find((o) => o.value === value)
+  const arrowPointsUp = isOpen ? !openUp : placement === 'top'
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -35,16 +37,20 @@ export default function Select({ value, onChange, options, disabled, className }
     if (disabled) return
     e.stopPropagation()
 
-    if (!isOpen && triggerRef.current) {
+    if (!isOpen && placement !== 'auto') {
+      setOpenUp(placement === 'top')
+    } else if (!isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
-      const spaceAbove = rect.top
-      const spaceBelow = window.innerHeight - rect.bottom
+      const viewportTop = window.visualViewport?.offsetTop ?? 0
+      const viewportBottom = viewportTop + (window.visualViewport?.height ?? window.innerHeight)
+      const spaceAbove = rect.top - viewportTop
+      const spaceBelow = viewportBottom - rect.bottom
       const estimatedMenuHeight = Math.min(options.length * 36 + 8, 240)
-      setOpenUp(spaceAbove > spaceBelow)
+      setOpenUp(spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow)
     }
 
     setIsOpen(!isOpen)
-  }, [disabled, isOpen, options.length])
+  }, [disabled, isOpen, options.length, placement])
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -57,7 +63,7 @@ export default function Select({ value, onChange, options, disabled, className }
       >
         <span className="flex min-w-0 flex-1 items-center overflow-hidden">{selectedOption?.label ?? value}</span>
         <svg
-          className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${arrowPointsUp ? 'rotate-180' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -68,7 +74,7 @@ export default function Select({ value, onChange, options, disabled, className }
 
       {isOpen && (
         <div
-          className={`glass-surface-strong absolute z-[90] w-full border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10 ${
+          className={`glass-surface-strong select-menu-surface absolute z-[90] w-full border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10 ${
             openUp ? 'bottom-full mb-1.5 animate-dropdown-up' : 'top-full mt-1.5 animate-dropdown-down'
           }`}
         >
