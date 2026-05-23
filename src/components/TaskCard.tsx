@@ -1,9 +1,8 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord, VideoTaskParams } from '../types'
 import {
-  cacheTaskImageForEditing,
   ensureMediaThumbnailCached,
-  ensureTaskImageAvailable,
+  ensureTaskImageThumbnailAvailable,
   subscribeMediaThumbnail,
   updateTaskInStore,
   useStore,
@@ -49,9 +48,10 @@ export default function TaskCard({
   const firstOutputImageId = task.outputImages?.[0]
   const firstOutputVideoId = task.outputVideos?.[0]
   const firstOutputVideoPosterUrl = firstOutputVideoId ? task.videoPosterUrlsById?.[firstOutputVideoId] || '' : ''
-  const firstOutputSize = firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined
+  const firstOutputSize = task.taskType === 'video'
+    ? (firstOutputVideoId ? task.imageSizesById?.[firstOutputVideoId] : undefined)
+    : (firstOutputImageId ? task.imageSizesById?.[firstOutputImageId] : undefined)
   const firstOutputImageLoaded = firstOutputImageId ? loadedTaskImageIds.includes(firstOutputImageId) : false
-  const shouldLoadImage = Boolean(firstOutputImageId) && (!deferImageLoading || firstOutputImageLoaded)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -218,40 +218,51 @@ export default function TaskCard({
     let cancelled = false
     let unsubscribe: (() => void) | undefined
 
-    setCoverRatio('')
-    setThumbSrc('')
-
-    const mediaId = task.taskType === 'video' && firstOutputVideoPosterUrl ? null : task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
-    if (firstOutputVideoPosterUrl) {
-      setThumbSrc(firstOutputVideoPosterUrl)
+    const mediaId = task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
+    if (!mediaId && !firstOutputVideoPosterUrl) {
+      setCoverRatio('')
+      setThumbSrc('')
     }
-    if (mediaId && (task.taskType === 'video' || shouldLoadImage)) {
+    if (mediaId) {
       unsubscribe = subscribeMediaThumbnail(mediaId, (thumbnail) => {
         if (cancelled) return
-        setThumbSrc(thumbnail.dataUrl)
+        setThumbSrc((prev) => prev === thumbnail.dataUrl ? prev : thumbnail.dataUrl)
         if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
           setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
         }
       })
 
       ensureMediaThumbnailCached(mediaId).then((thumbnail) => {
-        if (cancelled || !thumbnail) return
-        setThumbSrc(thumbnail.dataUrl)
-        if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
-          setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
+        if (cancelled) return
+        if (thumbnail) {
+          setThumbSrc((prev) => prev === thumbnail.dataUrl ? prev : thumbnail.dataUrl)
+          if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
+            setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
+          }
+          return
+        }
+
+        const fallbackImageId = task.taskType === 'video' ? firstOutputVideoId : firstOutputImageId
+        const fallbackRemoteUrl = task.taskType === 'video'
+          ? firstOutputVideoPosterUrl
+          : (firstOutputImageId ? task.imageUrlsById?.[firstOutputImageId] : '')
+        if (fallbackImageId && fallbackRemoteUrl) {
+          void ensureTaskImageThumbnailAvailable(fallbackImageId, fallbackRemoteUrl)
+            .then((generatedThumbnail) => {
+              if (cancelled || !generatedThumbnail) return
+              setThumbSrc((prev) => prev === generatedThumbnail.dataUrl ? prev : generatedThumbnail.dataUrl)
+              if (!firstOutputSize?.width && !firstOutputSize?.height && generatedThumbnail.width && generatedThumbnail.height) {
+                setCoverRatio(formatImageRatio(generatedThumbnail.width, generatedThumbnail.height))
+              }
+            })
+            .catch(() => {
+              /* 主界面不回退到远端海报或原图，缩略图生成失败时保留占位 */
+            })
         }
       })
-    }
-
-    const imageId = task.outputImages?.[0]
-    if (imageId && shouldLoadImage) {
-      const remoteUrl = task.imageUrlsById?.[imageId]
-      if (remoteUrl) {
-        setThumbSrc((prev) => prev || remoteUrl)
-      } else {
-        ensureTaskImageAvailable(imageId).then((url) => {
-          if (!cancelled && url) setThumbSrc((prev) => prev || url)
-        })
+      return () => {
+        cancelled = true
+        unsubscribe?.()
       }
     }
 
@@ -264,7 +275,7 @@ export default function TaskCard({
     firstOutputSize?.width,
     firstOutputVideoId,
     firstOutputVideoPosterUrl,
-    shouldLoadImage,
+    firstOutputImageId,
     task.imageUrlsById,
     task.outputImages,
     task.taskType,
@@ -275,26 +286,6 @@ export default function TaskCard({
       setCoverRatio(formatImageRatio(firstOutputSize.width, firstOutputSize.height))
     }
   }, [firstOutputSize?.height, firstOutputSize?.width])
-
-  useEffect(() => {
-    if (firstOutputSize?.width && firstOutputSize.height) return
-    if (!firstOutputImageId || !shouldLoadImage) return
-    const remoteUrl = task.imageUrlsById?.[firstOutputImageId]
-    if (!remoteUrl) return
-
-    let cancelled = false
-    const image = new Image()
-    image.onload = () => {
-      if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
-        setCoverRatio(formatImageRatio(image.naturalWidth, image.naturalHeight))
-      }
-    }
-    image.src = remoteUrl
-
-    return () => {
-      cancelled = true
-    }
-  }, [firstOutputImageId, firstOutputSize?.height, firstOutputSize?.width, shouldLoadImage, task.imageUrlsById])
 
   useEffect(() => {
     if (!thumbSrc) return
@@ -342,7 +333,7 @@ export default function TaskCard({
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showDeferredPlaceholder =
-    task.status === 'done' && hasOutputImage && Boolean(firstOutputImageId) && deferImageLoading && !firstOutputImageLoaded
+    task.status === 'done' && hasOutputImage && Boolean(firstOutputImageId) && deferImageLoading && !firstOutputImageLoaded && !thumbSrc
   const isCoverBlurred = Boolean(thumbSrc) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -390,12 +381,6 @@ export default function TaskCard({
           if (Date.now() < suppressClickUntilRef.current) {
             e.preventDefault()
             e.stopPropagation()
-            return
-          }
-          if (showDeferredPlaceholder && firstOutputImageId) {
-            e.preventDefault()
-            e.stopPropagation()
-            markTaskImageLoaded(firstOutputImageId)
             return
           }
           onClick(e)
@@ -458,6 +443,8 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
+                width={firstOutputSize?.width ?? undefined}
+                height={firstOutputSize?.height ?? undefined}
                 className={`h-full w-full object-cover transition duration-200 ${isCoverBlurred ? 'scale-[1.03] blur-md' : ''}`}
                 alt=""
               />
@@ -477,18 +464,12 @@ export default function TaskCard({
             <>
               <img
                 src={thumbSrc}
+                width={firstOutputSize?.width ?? undefined}
+                height={firstOutputSize?.height ?? undefined}
                 data-image-id={task.outputImages[0]}
                 data-original-src={task.imageUrlsById?.[task.outputImages[0]]}
                 className={`saveable-image w-full h-full object-cover transition duration-200 ${isCoverBlurred ? 'scale-[1.03] blur-md' : ''}`}
                 loading="lazy"
-                onLoad={(event) => {
-                  if (task.outputImages[0]) {
-                    markTaskImageLoaded(task.outputImages[0])
-                  }
-                  const remoteUrl = task.imageUrlsById?.[task.outputImages[0]]
-                  if (!remoteUrl || !task.outputImages[0]) return
-                  void cacheTaskImageForEditing(task.outputImages[0], remoteUrl, event.currentTarget)
-                }}
                 alt=""
               />
               {task.outputImages.length > 1 && (
@@ -500,6 +481,13 @@ export default function TaskCard({
           )}
           {showDeferredPlaceholder && (
             <div
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                if (firstOutputImageId) {
+                  markTaskImageLoaded(firstOutputImageId)
+                }
+              }}
               className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-gray-100 text-gray-500 transition hover:bg-gray-200 dark:bg-black/20 dark:text-gray-300 dark:hover:bg-black/30"
               title="点击加载图片"
             >

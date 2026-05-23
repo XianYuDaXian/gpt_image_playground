@@ -19,7 +19,6 @@ import {
   getStoredFreshImageThumbnail,
   deleteImage,
   clearImages,
-  getAllImages,
   putCachedVideoBlob,
   storeImage,
   putImage,
@@ -833,11 +832,6 @@ export async function initStore() {
     )
   }
 
-  const images = await getAllImages()
-  for (const img of images) {
-    cacheImage(img.id, img.dataUrl)
-  }
-
   await restorePersistedInputDrafts()
 
   setupTaskStreams()
@@ -1323,6 +1317,32 @@ export async function ensureTaskImageAvailable(imageId: string): Promise<string 
   )
   if (!task) return undefined
   return loadTaskImageDataUrl(task, imageId)
+}
+
+export async function ensureTaskImageThumbnailAvailable(
+  imageId: string,
+  remoteUrl: string,
+): Promise<{ dataUrl: string; width?: number; height?: number } | undefined> {
+  const cached = await ensureImageThumbnailCached(imageId)
+  if (cached) return cached
+
+  const response = await fetch(remoteUrl)
+  const blob = await response.blob()
+  const dataUrl = await blobToDataUrl(blob)
+  const generatedThumbnail = await createAndStoreImageThumbnail(imageId, dataUrl)
+  const thumbnail = {
+    dataUrl: generatedThumbnail.thumbnailDataUrl,
+    width: generatedThumbnail.width,
+    height: generatedThumbnail.height,
+    thumbnailVersion: generatedThumbnail.thumbnailVersion,
+  }
+  cacheThumbnail(imageId, thumbnail)
+  notifyImageThumbnail(imageId, {
+    dataUrl: generatedThumbnail.thumbnailDataUrl,
+    width: generatedThumbnail.width,
+    height: generatedThumbnail.height,
+  })
+  return thumbnail
 }
 
 export async function ensureTaskVideoAvailable(videoId: string): Promise<string | undefined> {
