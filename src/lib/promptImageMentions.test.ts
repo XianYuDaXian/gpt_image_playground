@@ -8,6 +8,7 @@ import {
   isCursorInSelectedImageMention,
   remapImageMentionsForOrder,
   replaceImageMentionsForApi,
+  replaceImageMentionsForVideoApi,
 } from './promptImageMentions'
 
 const images: InputImage[] = [
@@ -93,5 +94,16 @@ describe('prompt image mentions', () => {
 
   it('downgrades removed mentions to visible text', () => {
     expect(replaceImageMentionsForApi(`把 ${getSelectedImageMentionLabel(2)} 变蓝`, 2)).toBe('把 @图3 变蓝')
+  })
+
+  it('replaces selected mentions with video placeholders for video api submission', () => {
+    expect(replaceImageMentionsForVideoApi(
+      `让 ${getSelectedImageMentionLabel(0)} 和 ${getSelectedImageMentionLabel(1)} 中的人物跳舞`,
+      2,
+    )).toBe('让 <IMAGE_1> 和 <IMAGE_2> 中的人物跳舞')
+  })
+
+  it('does not replace manually typed mentions for video api submission', () => {
+    expect(replaceImageMentionsForVideoApi('让 @图1 和 @图2 中的人物跳舞', 2)).toBe('让 @图1 和 @图2 中的人物跳舞')
   })
 })

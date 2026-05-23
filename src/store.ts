@@ -29,7 +29,7 @@ import { fetchAuthStatus, logoutAuth, type AuthStatus } from './lib/backendAuth'
 import { createBackendTask, deleteBackendTask, fetchBackendTaskPage, updateBackendTaskFlags } from './lib/backendTasks'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
-import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
+import { remapImageMentionsForOrder, replaceImageMentionsForApi, replaceImageMentionsForVideoApi } from './lib/promptImageMentions'
 import { normalizeImageSize } from './lib/size'
 import { clearAnnouncementLocalState } from './lib/announcement'
 
@@ -953,7 +953,9 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
       inputDataUrls.push(img.dataUrl)
     }
     const result = await createBackendTask({
-      prompt: replaceImageMentionsForApi(prompt.trim(), orderedInputImages.length),
+      prompt: taskMode === 'video'
+        ? replaceImageMentionsForVideoApi(prompt.trim(), orderedInputImages.length)
+        : replaceImageMentionsForApi(prompt.trim(), orderedInputImages.length),
       params: normalizedParams,
       taskType: taskMode,
       videoParams: taskMode === 'video'

@@ -87,11 +87,12 @@ export async function submitVideoGeneration(payload: VideoGenerationPayload, api
   if (inputImageDataUrls.length === 0 && payload.params.aspect_ratio && payload.params.aspect_ratio !== 'auto') {
     body.aspect_ratio = payload.params.aspect_ratio
   }
-  if (inputImageDataUrls[0]) {
+  if (inputImageDataUrls.length === 1 && inputImageDataUrls[0]) {
     body.image = { url: inputImageDataUrls[0] }
   }
   if (inputImageDataUrls.length > 1) {
-    body.reference_images = inputImageDataUrls.slice(1).map((url) => ({ url }))
+    // 多图视频走参考图模式，所有输入图都放入 reference_images。
+    body.reference_images = inputImageDataUrls.map((url) => ({ url }))
   }
 
   const response = await fetchWithTimeout(

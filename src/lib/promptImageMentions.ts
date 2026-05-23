@@ -124,3 +124,11 @@ export function replaceImageMentionsForApi(prompt: string, imageCount?: number):
     return `[image ${n}]`
   })
 }
+
+export function replaceImageMentionsForVideoApi(prompt: string, imageCount?: number): string {
+  return prompt.replace(SELECTED_IMAGE_MENTION_RE, (text, n) => {
+    const index = Number(n) - 1
+    if (imageCount != null && (index < 0 || index >= imageCount)) return stripImageMentionMarkers(text)
+    return `<IMAGE_${n}>`
+  })
+}
