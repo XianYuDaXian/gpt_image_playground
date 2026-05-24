@@ -83,6 +83,12 @@ export interface BackendManagementOperationLog {
   createdAt: string
 }
 
+export interface BackendMediaStats {
+  imageCount: number
+  videoCount: number
+  totalBytes: number
+}
+
 export interface BackendReminderItem {
   id: string
   enabled: boolean
@@ -302,6 +308,11 @@ export async function resetBackendRemoteData(mode: 'tasks' | 'all' | 'usage_code
 export async function fetchBackendManagementLogs() {
   const response = await fetch('/api/admin/data/management-logs', { cache: 'no-store' })
   return readResponseJson<{ items: BackendManagementOperationLog[] }>(response)
+}
+
+export async function fetchBackendMediaStats() {
+  const response = await fetch('/api/admin/data/media-stats', { cache: 'no-store' })
+  return readResponseJson<BackendMediaStats>(response)
 }
 
 export async function fetchBackendDistribution(): Promise<BackendDistributionSettings> {

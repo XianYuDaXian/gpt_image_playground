@@ -63,6 +63,17 @@ export interface TaskRecord {
   isArchived: number
 }
 
+export interface TaskListQueryInput {
+  ownerUsageCodeIds?: string[]
+  includeUsageCodeTasksForAdmin?: boolean
+  status?: 'all' | 'running' | 'done' | 'error'
+  taskType?: 'all' | 'image' | 'video'
+  favorite?: boolean
+  archived?: boolean
+  limit: number
+  offset: number
+}
+
 export interface TaskImageRecord {
   id: string
   taskId: string
@@ -153,6 +164,12 @@ export interface TaskEventRowRecord {
   percent: number
   message: string | null
   createdAt: string
+}
+
+export interface MediaStatsRecord {
+  imageCount: number
+  videoCount: number
+  totalBytes: number
 }
 
 export interface UsageQuotaEventRowRecord {
@@ -608,6 +625,23 @@ export class AppDatabase {
     if (!usageQuotaEventColumnNames.has('provider_profile_id')) {
       this.sqlite.exec('ALTER TABLE usage_quota_events ADD COLUMN provider_profile_id TEXT')
     }
+
+    this.sqlite.exec(`
+      CREATE INDEX IF NOT EXISTS idx_tasks_created_at
+      ON tasks(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_tasks_owner_kind_created_at
+      ON tasks(owner_kind, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_tasks_owner_usage_code_created_at
+      ON tasks(owner_usage_code_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_tasks_status_created_at
+      ON tasks(status, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_task_images_task_id
+      ON task_images(task_id);
+      CREATE INDEX IF NOT EXISTS idx_task_images_task_id_kind
+      ON task_images(task_id, kind);
+      CREATE INDEX IF NOT EXISTS idx_task_events_task_id_created_at
+      ON task_events(task_id, created_at ASC);
+    `)
   }
 
   private assignMissingProviderTagColors() {
@@ -2058,6 +2092,120 @@ ${selectUsageCodeFields()}
       .all(limit) as TaskRecord[]
   }
 
+  private buildTaskListWhereClause(input: Omit<TaskListQueryInput, 'limit' | 'offset'>) {
+    const where: string[] = []
+    const params: Array<string | number> = []
+
+    if (input.ownerUsageCodeIds) {
+      if (input.ownerUsageCodeIds.length === 0) {
+        where.push('1 = 0')
+      } else {
+        where.push(`tasks.owner_usage_code_id IN (${input.ownerUsageCodeIds.map(() => '?').join(', ')})`)
+        params.push(...input.ownerUsageCodeIds)
+      }
+    }
+
+    if (input.includeUsageCodeTasksForAdmin === false) {
+      where.push("tasks.owner_kind <> 'usage_code'")
+    }
+
+    if (input.favorite) {
+      where.push('tasks.is_favorite = 1')
+    }
+
+    if (input.archived === true) {
+      where.push('tasks.is_archived = 1')
+    } else if (input.archived === false) {
+      where.push('tasks.is_archived = 0')
+    }
+
+    if (input.taskType && input.taskType !== 'all') {
+      where.push('tasks.task_type = ?')
+      params.push(input.taskType)
+    }
+
+    if (input.status && input.status !== 'all') {
+      if (input.status === 'running') {
+        where.push("tasks.status IN ('queued', 'submitted', 'processing', 'downloading')")
+      } else if (input.status === 'done') {
+        where.push("tasks.status = 'succeeded'")
+      } else if (input.status === 'error') {
+        where.push("tasks.status IN ('failed', 'canceled')")
+      }
+    }
+
+    return {
+      whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '',
+      params,
+    }
+  }
+
+  listTaskPage(input: TaskListQueryInput) {
+    const { whereSql, params } = this.buildTaskListWhereClause(input)
+    return this.sqlite
+      .prepare(`
+        SELECT
+          tasks.id,
+          tasks.prompt,
+          tasks.task_type as taskType,
+          tasks.status,
+          tasks.progress_percent as progressPercent,
+          tasks.current_step as currentStep,
+          tasks.params_json as paramsJson,
+          tasks.error_message as errorMessage,
+          tasks.provider_profile_id as providerProfileId,
+          tasks.upstream_request_id as upstreamRequestId,
+          tasks.upstream_usage_json as upstreamUsageJson,
+          tasks.owner_usage_code_id as ownerUsageCodeId,
+          tasks.owner_kind as ownerKind,
+          tasks.reserved_image_credits as reservedImageCredits,
+          CASE
+            WHEN tasks.owner_kind = 'admin' THEN '管理员'
+            WHEN tasks.owner_kind = 'usage_code' THEN COALESCE(usage_codes.name, '已删除使用码')
+            ELSE '历史任务'
+          END as ownerLabel,
+          usage_codes.created_at as ownerUsageCodeCreatedAt,
+          usage_codes.code_encrypted as ownerUsageCodeCodeEncrypted,
+          usage_codes.last_used_at as ownerUsageCodeLastUsedAt,
+          usage_codes.image_quota as ownerUsageCodeImageQuota,
+          usage_codes.used_image_credits as ownerUsageCodeUsedImageCredits,
+          usage_codes.provider_image_quotas_json as ownerUsageCodeProviderImageQuotasJson,
+          usage_codes.provider_used_image_credits_json as ownerUsageCodeProviderUsedImageCreditsJson,
+          usage_codes.video_quota as ownerUsageCodeVideoQuota,
+          usage_codes.used_video_credits as ownerUsageCodeUsedVideoCredits,
+          usage_codes.provider_video_quotas_json as ownerUsageCodeProviderVideoQuotasJson,
+          usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson,
+          usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
+          usage_codes.output_video_count as ownerUsageCodeOutputVideoCount,
+          NULL as ownerUsageCodeTaskCount,
+          NULL as ownerUsageCodeProviderOutputImageCount,
+          NULL as ownerUsageCodeProviderOutputVideoCount,
+          tasks.created_at as createdAt,
+          tasks.updated_at as updatedAt,
+          tasks.finished_at as finishedAt,
+          tasks.is_favorite as isFavorite,
+          tasks.is_archived as isArchived
+        FROM tasks
+        LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
+        ${whereSql}
+        ORDER BY tasks.created_at DESC
+        LIMIT ? OFFSET ?
+      `)
+      .all(...params, input.limit, input.offset) as TaskRecord[]
+  }
+
+  countTaskPage(input: Omit<TaskListQueryInput, 'limit' | 'offset'>) {
+    const { whereSql, params } = this.buildTaskListWhereClause(input)
+    const row = this.sqlite
+      .prepare(`
+        SELECT COUNT(*) as total
+        FROM tasks
+        ${whereSql}
+      `)
+      .get(...params) as { total: number }
+    return row.total
+  }
+
   private taskOwnerStatsSelect() {
     return `
       usage_codes.created_at as ownerUsageCodeCreatedAt,
@@ -3012,6 +3160,43 @@ ${selectUsageCodeFields()}
         ORDER BY created_at ASC, id ASC
       `)
       .all(taskId) as TaskImageRecord[]
+  }
+
+  listTaskImagesForTasks(taskIds: string[]) {
+    if (taskIds.length === 0) return []
+    const placeholders = taskIds.map(() => '?').join(', ')
+    return this.sqlite
+      .prepare(`
+        SELECT
+          id,
+          task_id as taskId,
+          kind,
+          file_path as filePath,
+          mime_type as mimeType,
+          width,
+          height,
+          bytes,
+          sha256,
+          metadata_json as metadataJson,
+          created_at as createdAt
+        FROM task_images
+        WHERE task_id IN (${placeholders})
+        ORDER BY created_at ASC, id ASC
+      `)
+      .all(...taskIds) as TaskImageRecord[]
+  }
+
+  summarizeMediaStats() {
+    const row = this.sqlite
+      .prepare(`
+        SELECT
+          COALESCE(SUM(CASE WHEN kind = 'video_output' THEN 0 ELSE 1 END), 0) as imageCount,
+          COALESCE(SUM(CASE WHEN kind = 'video_output' THEN 1 ELSE 0 END), 0) as videoCount,
+          COALESCE(SUM(bytes), 0) as totalBytes
+        FROM task_images
+      `)
+      .get() as MediaStatsRecord
+    return row
   }
 
   getTaskImageByFilePath(filePath: string) {

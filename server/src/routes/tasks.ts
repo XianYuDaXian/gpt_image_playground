@@ -191,6 +191,30 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     })
   }
 
+  const serializeTaskList = (
+    tasks: Array<ReturnType<typeof app.db.listTaskPage>[number]>,
+    exposeUsageCodeAlias: boolean,
+  ) => {
+    if (tasks.length === 0) return []
+    const taskIds = tasks.map((task) => task.id)
+    const images = app.db.listTaskImagesForTasks(taskIds)
+    const imagesByTaskId = new Map<string, typeof images>()
+    for (const image of images) {
+      const current = imagesByTaskId.get(image.taskId) ?? []
+      current.push(image)
+      imagesByTaskId.set(image.taskId, current)
+    }
+    const providerIds = Array.from(new Set(tasks.map((task) => task.providerProfileId).filter((value): value is string => Boolean(value))))
+    const providerMap = new Map(
+      providerIds.map((providerId) => [providerId, app.db.getProviderProfile(providerId) ?? null] as const),
+    )
+    return tasks.map((task) => serializeTaskRecord(task, imagesByTaskId.get(task.id) ?? [], {
+      appSecret: app.config.appSecret,
+      exposeUsageCodeAlias,
+      providerProfile: task.providerProfileId ? providerMap.get(task.providerProfileId) ?? null : null,
+    }))
+  }
+
   app.post('/api/tasks', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
 
@@ -413,31 +437,46 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const searchTags = Array.isArray(query.searchTag)
       ? query.searchTag
       : query.searchTag ? [query.searchTag] : []
-    const rawTasks = auth.role === 'admin'
-      ? app.db.listTasks(ADMIN_TASK_LIST_LIMIT)
-      : app.db.listTasksForUsageCodes(auth.usageCodeIds, ADMIN_TASK_LIST_LIMIT)
-    const filteredTasks = rawTasks
-      .map((task) => serializeTask(task, auth.role === 'admin'))
-      .filter((task) => {
-        if (query.favorite && !task.isFavorite) return false
-        if (query.archived ? !task.isArchived : task.isArchived) return false
-        if (query.status !== 'all' && task.status !== query.status) return false
-        if (query.taskType !== 'all' && (task.taskType ?? 'image') !== query.taskType) return false
-        if (
-          auth.role === 'admin'
-          && !query.showUsageCodeTasksForAdmin
-          && task.ownerKind === 'usage_code'
-          && !query.query?.trim()
-          && searchTags.length === 0
-        ) {
-          return false
-        }
-        if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
-        return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
+    const hasTextSearch = Boolean(query.query?.trim() || searchTags.length)
+    const includeUsageCodeTasksForAdmin = auth.role !== 'admin'
+      ? true
+      : hasTextSearch ? true : Boolean(query.showUsageCodeTasksForAdmin)
+    const baseInput = {
+      ownerUsageCodeIds: auth.role === 'user' ? auth.usageCodeIds : undefined,
+      includeUsageCodeTasksForAdmin,
+      status: query.status,
+      taskType: query.taskType,
+      favorite: Boolean(query.favorite),
+      archived: Boolean(query.archived),
+    }
+
+    let total = 0
+    let items: ReturnType<typeof serializeTaskList> = []
+    if (hasTextSearch) {
+      const rawTasks = app.db.listTaskPage({
+        ...baseInput,
+        limit: auth.role === 'admin' ? ADMIN_TASK_LIST_LIMIT : USER_TASK_LIST_LIMIT,
+        offset: 0,
       })
-    const total = filteredTasks.length
-    const start = (query.page - 1) * query.pageSize
-    const items = filteredTasks.slice(start, start + query.pageSize)
+      const filteredTasks = serializeTaskList(rawTasks, auth.role === 'admin')
+        .filter((task) => {
+          if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
+          return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
+        })
+      total = filteredTasks.length
+      const start = (query.page - 1) * query.pageSize
+      items = filteredTasks.slice(start, start + query.pageSize)
+    } else {
+      total = app.db.countTaskPage(baseInput)
+      const start = (query.page - 1) * query.pageSize
+      const rawTasks = app.db.listTaskPage({
+        ...baseInput,
+        limit: query.pageSize,
+        offset: start,
+      })
+      items = serializeTaskList(rawTasks, auth.role === 'admin')
+    }
+
     return {
       items,
       total,
@@ -496,10 +535,17 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     })
 
     const buildTaskList = () => {
-      const tasks = auth.role === 'admin'
-        ? app.db.listTasks(ADMIN_TASK_LIST_LIMIT)
-        : app.db.listTasksForUsageCodes(auth.usageCodeIds, USER_TASK_LIST_LIMIT)
-      return tasks.map((task) => serializeTask(task, auth.role === 'admin'))
+      const tasks = app.db.listTaskPage({
+        ownerUsageCodeIds: auth.role === 'user' ? auth.usageCodeIds : undefined,
+        includeUsageCodeTasksForAdmin: true,
+        status: 'all',
+        taskType: 'all',
+        favorite: false,
+        archived: false,
+        limit: auth.role === 'admin' ? ADMIN_TASK_LIST_LIMIT : USER_TASK_LIST_LIMIT,
+        offset: 0,
+      })
+      return serializeTaskList(tasks, auth.role === 'admin')
     }
 
     reply.raw.write(formatSseEvent('snapshot', { tasks: buildTaskList() }))

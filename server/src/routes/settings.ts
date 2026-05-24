@@ -2777,6 +2777,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  app.get('/api/admin/data/media-stats', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return app.db.summarizeMediaStats()
+  })
+
   app.post('/api/admin/data/export/start', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)

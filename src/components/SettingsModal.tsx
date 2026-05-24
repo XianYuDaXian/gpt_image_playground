@@ -14,6 +14,7 @@ import {
   fetchBackendRuntimeSettings,
   fetchBackendUsageCodes,
   fetchBackendManagementLogs,
+  fetchBackendMediaStats,
   resetBackendRemoteData,
   saveBackendRuntimePreferences,
   saveBackendDistribution,
@@ -22,6 +23,7 @@ import {
   type BackendReminderItem,
   type BackendDistributionSettings,
   type BackendManagementOperationLog,
+  type BackendMediaStats,
   type BackendProviderOption,
   type BackendProviderProfile,
   type BackendUsageCode,
@@ -297,6 +299,7 @@ export default function SettingsModal() {
   const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
   const [showImportCandidates, setShowImportCandidates] = useState(false)
   const [managementLogs, setManagementLogs] = useState<BackendManagementOperationLog[]>([])
+  const [mediaStats, setMediaStats] = useState<BackendMediaStats | null>(null)
   const [maintenanceCardNow, setMaintenanceCardNow] = useState(() => Date.now())
   const importInputRef = useRef<HTMLInputElement>(null)
 
@@ -565,7 +568,7 @@ export default function SettingsModal() {
   }
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders, nextManagementLogs] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders, nextManagementLogs, nextMediaStats] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
       isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
       fetchBackendProviderOptions().catch(() => []),
@@ -574,6 +577,7 @@ export default function SettingsModal() {
       isAdmin ? Promise.resolve(null) : fetchUsageCodeMediaExportSummary().catch(() => null),
       isAdmin ? fetchAdminBackendReminders().catch(() => []) : fetchBackendReminders().catch(() => []),
       isAdmin ? fetchBackendManagementLogs().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      isAdmin ? fetchBackendMediaStats().catch(() => null) : Promise.resolve(null),
     ])
 
     const nextDraft: AppSettings = {
@@ -643,6 +647,7 @@ export default function SettingsModal() {
     setUsageCodes(nextUsageCodes)
     setUsageCodeExportSummary(nextUsageCodeExportSummary)
     setManagementLogs(nextManagementLogs.items)
+    setMediaStats(nextMediaStats)
     setExpandedUsageCodeIds((prev) => {
       const existing = new Set(prev)
       return nextUsageCodes
@@ -675,6 +680,14 @@ export default function SettingsModal() {
     if (backupState?.phase !== 'completed' && backupState?.phase !== 'failed') return
     void fetchBackendManagementLogs()
       .then((result) => setManagementLogs(result.items))
+      .catch(() => undefined)
+  }, [showSettings, isAdmin, activeTab, backupState?.phase, backupState?.finishedAt])
+
+  useEffect(() => {
+    if (!showSettings || !isAdmin || activeTab !== 'data') return
+    if (backupState?.phase !== 'completed' && backupState?.phase !== 'failed') return
+    void fetchBackendMediaStats()
+      .then((result) => setMediaStats(result))
       .catch(() => undefined)
   }, [showSettings, isAdmin, activeTab, backupState?.phase, backupState?.finishedAt])
 
@@ -2773,6 +2786,11 @@ export default function SettingsModal() {
               >
                 清空本地缓存
               </button>
+              <div className="rounded-xl border border-gray-200/70 bg-white/40 px-4 py-3 text-xs leading-6 text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-400">
+                {mediaStats
+                  ? `媒体统计：图片 ${mediaStats.imageCount} 张，视频 ${mediaStats.videoCount} 个，总大小 ${formatBytes(mediaStats.totalBytes)}`
+                  : '媒体统计：读取中...'}
+              </div>
               <input
                 ref={importInputRef}
                 type="file"
