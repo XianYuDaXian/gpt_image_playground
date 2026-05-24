@@ -315,7 +315,7 @@ function selectUsageCodeFields() {
           used_video_credits as usedVideoCredits,
           provider_used_video_credits_json as providerUsedVideoCreditsJson,
           output_image_count as outputImageCount,
-          0 as outputVideoCount,
+          output_video_count as outputVideoCount,
           created_at as createdAt,
           updated_at as updatedAt,
           last_used_at as lastUsedAt
@@ -615,6 +615,24 @@ export class AppDatabase {
         ), 0)
       `)
     }
+    this.sqlite.exec(`
+      UPDATE usage_codes
+      SET output_video_count = MAX(
+        output_video_count,
+        COALESCE((
+          SELECT COUNT(*)
+          FROM usage_code_activity_logs
+          WHERE usage_code_activity_logs.usage_code_id = usage_codes.id
+            AND usage_code_activity_logs.event_type = 'video_task_succeeded'
+        ), 0),
+        COALESCE((
+          SELECT COUNT(task_images.id)
+          FROM tasks owner_tasks
+          INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'video_output'
+          WHERE owner_tasks.owner_usage_code_id = usage_codes.id
+        ), 0)
+      )
+    `)
     const taskImageColumns = this.sqlite.prepare('PRAGMA table_info(task_images)').all() as Array<{ name: string }>
     const taskImageColumnNames = new Set(taskImageColumns.map((column) => column.name))
     if (!taskImageColumnNames.has('metadata_json')) {
@@ -1322,7 +1340,7 @@ ${selectUsageCodeFields()}
           usage_codes.used_video_credits as usedVideoCredits,
           usage_codes.provider_used_video_credits_json as providerUsedVideoCreditsJson,
           usage_codes.output_image_count as outputImageCount,
-          COALESCE(COUNT(DISTINCT video_task_images.id), 0) as outputVideoCount,
+          usage_codes.output_video_count as outputVideoCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
@@ -1331,7 +1349,6 @@ ${selectUsageCodeFields()}
         FROM usage_codes
         LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
         LEFT JOIN task_images ON task_images.task_id = tasks.id AND task_images.kind = 'output'
-        LEFT JOIN task_images video_task_images ON video_task_images.task_id = tasks.id AND video_task_images.kind = 'video_output'
         GROUP BY usage_codes.id
         ORDER BY usage_codes.created_at DESC
       `)
@@ -1508,7 +1525,7 @@ ${selectUsageCodeFields()}
           usage_codes.used_video_credits as usedVideoCredits,
           usage_codes.provider_used_video_credits_json as providerUsedVideoCreditsJson,
           usage_codes.output_image_count as outputImageCount,
-          COALESCE(COUNT(DISTINCT video_task_images.id), 0) as outputVideoCount,
+          usage_codes.output_video_count as outputVideoCount,
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
@@ -1516,7 +1533,6 @@ ${selectUsageCodeFields()}
         FROM auth_session_usage_codes
         INNER JOIN usage_codes ON usage_codes.id = auth_session_usage_codes.usage_code_id
         LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
-        LEFT JOIN task_images video_task_images ON video_task_images.task_id = tasks.id AND video_task_images.kind = 'video_output'
         WHERE auth_session_usage_codes.session_id = ?
         GROUP BY usage_codes.id, auth_session_usage_codes.created_at
         ORDER BY auth_session_usage_codes.created_at ASC
@@ -1863,6 +1879,20 @@ ${selectUsageCodeFields()}
     return true
   }
 
+  recordUsageCodeOutputVideos(input: {
+    usageCodeId: string
+    count: number
+  }) {
+    if (input.count <= 0) return false
+    this.sqlite.prepare(`
+      UPDATE usage_codes
+      SET output_video_count = output_video_count + ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(input.count, new Date().toISOString(), input.usageCodeId)
+    return true
+  }
+
   private insertUsageQuotaEvent(input: {
     usageCodeId: string
     taskId?: string | null
@@ -2164,22 +2194,7 @@ ${selectUsageCodeFields()}
             WHEN tasks.owner_kind = 'usage_code' THEN COALESCE(usage_codes.name, '已删除使用码')
             ELSE '历史任务'
           END as ownerLabel,
-          usage_codes.created_at as ownerUsageCodeCreatedAt,
-          usage_codes.code_encrypted as ownerUsageCodeCodeEncrypted,
-          usage_codes.last_used_at as ownerUsageCodeLastUsedAt,
-          usage_codes.image_quota as ownerUsageCodeImageQuota,
-          usage_codes.used_image_credits as ownerUsageCodeUsedImageCredits,
-          usage_codes.provider_image_quotas_json as ownerUsageCodeProviderImageQuotasJson,
-          usage_codes.provider_used_image_credits_json as ownerUsageCodeProviderUsedImageCreditsJson,
-          usage_codes.video_quota as ownerUsageCodeVideoQuota,
-          usage_codes.used_video_credits as ownerUsageCodeUsedVideoCredits,
-          usage_codes.provider_video_quotas_json as ownerUsageCodeProviderVideoQuotasJson,
-          usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson,
-          usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
-          usage_codes.output_video_count as ownerUsageCodeOutputVideoCount,
-          NULL as ownerUsageCodeTaskCount,
-          NULL as ownerUsageCodeProviderOutputImageCount,
-          NULL as ownerUsageCodeProviderOutputVideoCount,
+          ${this.taskOwnerStatsSelect()},
           tasks.created_at as createdAt,
           tasks.updated_at as updatedAt,
           tasks.finished_at as finishedAt,
@@ -2219,8 +2234,18 @@ ${selectUsageCodeFields()}
       usage_codes.used_video_credits as ownerUsageCodeUsedVideoCredits,
       usage_codes.provider_video_quotas_json as ownerUsageCodeProviderVideoQuotasJson,
       usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson,
-      usage_codes.output_image_count as ownerUsageCodeOutputImageCount,
-      usage_codes.output_video_count as ownerUsageCodeOutputVideoCount,
+      (
+        SELECT COUNT(task_images.id)
+        FROM tasks owner_tasks
+        INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'output'
+        WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
+      ) as ownerUsageCodeOutputImageCount,
+      (
+        SELECT COUNT(task_images.id)
+        FROM tasks owner_tasks
+        INNER JOIN task_images ON task_images.task_id = owner_tasks.id AND task_images.kind = 'video_output'
+        WHERE owner_tasks.owner_usage_code_id = tasks.owner_usage_code_id
+      ) as ownerUsageCodeOutputVideoCount,
       (
         SELECT COUNT(*)
         FROM tasks owner_tasks

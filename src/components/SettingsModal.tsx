@@ -71,6 +71,18 @@ function createEmptyProfile(): BackendProviderProfile {
   }
 }
 
+function createCopiedProfile(profile: BackendProviderProfile): BackendProviderProfile {
+  return {
+    ...profile,
+    id: '',
+    name: `${profile.name} 副本`,
+    apiKey: '',
+    apiKeyMasked: profile.apiKeyMasked ?? null,
+    apiKeyConfigured: profile.apiKeyConfigured ?? false,
+    isDefault: false,
+  }
+}
+
 function toLocalDateTimeInputValue(value: Date) {
   const local = new Date(value.getTime() - value.getTimezoneOffset() * 60000)
   return local.toISOString().slice(0, 16)
@@ -412,6 +424,11 @@ export default function SettingsModal() {
       availableText: formatQuotaValue(availableCount),
       availableDetailText: String(availableCount ?? 0),
     }
+  }
+
+  const getLegacyImageUsageCount = (code: BackendUsageCode) => {
+    const providerUsedTotal = Object.values(code.providerUsedImageCredits ?? {}).reduce((sum, value) => sum + value, 0)
+    return Math.max(0, code.usedImageCredits - providerUsedTotal)
   }
 
   const formatBytes = (bytes: number) => {
@@ -840,6 +857,16 @@ export default function SettingsModal() {
     } finally {
       setIsSaving(false)
     }
+  }
+
+  const handleCopyProfile = () => {
+    if (!profileDraft.id) {
+      useStore.getState().showToast('请先选择一个已有 API 配置', 'info')
+      return
+    }
+    setProfileDraft(createCopiedProfile(profileDraft))
+    setShowApiKey(false)
+    useStore.getState().showToast('已复制当前 API 配置', 'success')
   }
 
   const handleAddSessionUsageCode = async () => {
@@ -1545,6 +1572,14 @@ export default function SettingsModal() {
                 />
                 <button
                   type="button"
+                  onClick={handleCopyProfile}
+                  disabled={!profileDraft.id}
+                  className="w-20 shrink-0 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm font-medium leading-normal text-gray-600 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+                >
+                  复制
+                </button>
+                <button
+                  type="button"
                   onClick={() => setProfileDraft(createEmptyProfile())}
                   className="w-20 shrink-0 whitespace-nowrap rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium leading-normal text-blue-500 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20"
                 >
@@ -2223,6 +2258,7 @@ export default function SettingsModal() {
                   const videoQuotaEditorProfiles = getQuotaEditorProfiles(code.allowedProviderProfileIds, 'video')
                   const isExpanded = expandedUsageCodeIds.includes(code.id)
                   const enabledProfiles = getEnabledProfilesForUsageCode(code.allowedProviderProfileIds)
+                  const legacyImageUsageCount = getLegacyImageUsageCount(code)
                   return (
                     <div
                       key={code.id}
@@ -2253,7 +2289,13 @@ export default function SettingsModal() {
                                 className="w-full rounded-lg bg-transparent pr-2 text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
                               />
                               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                任务 {code.taskCount} · 已生成图片 {code.outputImageCount} · 已生成视频 {code.outputVideoCount}
+                                <span>{`任务 ${code.taskCount} · 已生成图片 ${code.outputImageCount}`}</span>
+                                {legacyImageUsageCount > 0 && (
+                                  <span className="ml-1 whitespace-nowrap text-[11px] text-gray-400 dark:text-gray-500">
+                                    {`（旧额 ${legacyImageUsageCount}）`}
+                                  </span>
+                                )}
+                                <span>{` · 已生成视频 ${code.outputVideoCount}`}</span>
                               </p>
                               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                                 最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}

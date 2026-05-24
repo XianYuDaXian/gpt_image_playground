@@ -381,6 +381,10 @@ export class TaskWorker {
         upstreamUsageJson: finalUsage ? JSON.stringify(finalUsage) : null,
       })
       if (task.ownerKind === 'usage_code' && task.ownerUsageCodeId) {
+        this.db.recordUsageCodeOutputVideos({
+          usageCodeId: task.ownerUsageCodeId,
+          count: 1,
+        })
         this.db.insertUsageCodeActivityLog({
           usageCodeId: task.ownerUsageCodeId,
           taskId,
