@@ -27,6 +27,7 @@ declare module 'fastify' {
 
 const app = Fastify({
   logger: true,
+  trustProxy: true,
   bodyLimit: 4 * 1024 * 1024 * 1024,
 })
 
@@ -53,6 +54,42 @@ app.decorate('taskWorker', new TaskWorker(app.db, app.taskEvents, {
   thumbsDir: appConfig.thumbsDir,
   maxConcurrentTasks: app.db.getDistributionSettings().maxConcurrentTasks,
 }))
+
+if (appConfig.accessLogVerbose) {
+  app.addHook('onRequest', async (request) => {
+    if (appConfig.accessLogMediaOnly && !request.url.startsWith('/media/')) return
+
+    request.log.info({
+      type: 'access-request',
+      method: request.method,
+      url: request.url,
+      ip: request.ip,
+      hostname: request.hostname,
+      cfConnectingIp: request.headers['cf-connecting-ip'] ?? null,
+      xForwardedFor: request.headers['x-forwarded-for'] ?? null,
+      xRealIp: request.headers['x-real-ip'] ?? null,
+      cfRay: request.headers['cf-ray'] ?? null,
+      userAgent: request.headers['user-agent'] ?? null,
+      referer: request.headers.referer ?? null,
+      range: request.headers.range ?? null,
+      accept: request.headers.accept ?? null,
+    }, '访问开始')
+  })
+
+  app.addHook('onResponse', async (request, reply) => {
+    if (appConfig.accessLogMediaOnly && !request.url.startsWith('/media/')) return
+
+    request.log.info({
+      type: 'access-response',
+      method: request.method,
+      url: request.url,
+      ip: request.ip,
+      statusCode: reply.statusCode,
+      responseTimeMs: reply.elapsedTime,
+      contentLength: reply.getHeader('content-length') ?? null,
+    }, '访问结束')
+  })
+}
 
 app.addHook('preHandler', async (request, reply) => {
   const maintenance = getBackupJobState(app)

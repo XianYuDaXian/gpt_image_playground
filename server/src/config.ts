@@ -9,6 +9,8 @@ const envSchema = z.object({
   APP_SECRET: z.string().min(16).default('change-this-secret-in-production'),
   ADMIN_PASSWORD: z.string().optional(),
   CORS_ORIGIN: z.string().default('*'),
+  ACCESS_LOG_VERBOSE: z.coerce.boolean().default(false),
+  ACCESS_LOG_MEDIA_ONLY: z.coerce.boolean().default(false),
   UPSTREAM_API_URL: z.string().optional(),
   UPSTREAM_API_KEY: z.string().optional(),
   UPSTREAM_MODEL: z.string().optional(),
@@ -43,6 +45,8 @@ export const appConfig = {
   appSecret: parsed.APP_SECRET,
   adminPassword: parsed.ADMIN_PASSWORD?.trim() ?? '',
   corsOrigin: parsed.CORS_ORIGIN,
+  accessLogVerbose: parsed.ACCESS_LOG_VERBOSE,
+  accessLogMediaOnly: parsed.ACCESS_LOG_MEDIA_ONLY,
   versionCheckRepoOwner: parsed.VERSION_CHECK_REPO_OWNER,
   versionCheckRepoName: parsed.VERSION_CHECK_REPO_NAME,
   bootstrapProvider: parsed.UPSTREAM_API_URL && parsed.UPSTREAM_API_KEY

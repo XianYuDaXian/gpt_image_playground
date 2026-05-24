@@ -2570,8 +2570,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return getRuntimePreferences(app)
   })
 
+  const remindersEnabled = true
+
   app.get('/api/reminders', async (request, reply) => {
     await requireAuth(app, request, reply)
+    if (!remindersEnabled) {
+      reply.code(503)
+      return { message: '提醒功能已临时关闭' }
+    }
     reply.header('Cache-Control', 'no-store')
     return {
       items: getReminderItems(app),
@@ -2580,6 +2586,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get('/api/admin/reminders', async (request, reply) => {
     await requireAdmin(app, request, reply)
+    if (!remindersEnabled) {
+      reply.code(503)
+      return { message: '提醒功能已临时关闭' }
+    }
     reply.header('Cache-Control', 'no-store')
     return {
       items: getReminderItems(app),

@@ -1164,6 +1164,12 @@ export default function InputBar() {
     const handlePaste = (e: ClipboardEvent) => {
       if (document.body.dataset.referenceEditorActive === '1') return
       if (document.body.dataset.settingsModalActive === '1') return
+      const activeElement = document.activeElement
+      const isEditableTarget = activeElement instanceof HTMLElement
+        && (activeElement.isContentEditable || activeElement.matches('input, textarea') || activeElement.closest('[contenteditable="true"]'))
+      const pastedText = e.clipboardData?.getData('text/plain') ?? ''
+      // 可编辑输入区优先保留文本粘贴，避免 emoji 被误判成参考图。
+      if (isEditableTarget && pastedText) return
       const items = e.clipboardData?.items
       if (!items) return
       const imageFiles: File[] = []

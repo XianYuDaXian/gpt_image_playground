@@ -128,6 +128,33 @@ function normalizeReminderForEditor(item: BackendReminderItem): BackendReminderI
   }
 }
 
+function isReminderImageUrl(value: string) {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function normalizeReminderImageUrls(values: string[]) {
+  return Array.from(new Set(
+    values
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0 && isReminderImageUrl(value)),
+  )).slice(0, 16)
+}
+
+function formatReminderImageUrls(value: string[]) {
+  return value.join('\n')
+}
+
+function createReminderImageUrlDraftMap(items: BackendReminderItem[]) {
+  return Object.fromEntries(
+    items.map((item) => [item.id, formatReminderImageUrls(item.imageDataUrls ?? [])]),
+  )
+}
+
 function toServerDateTimeValue(value: string) {
   return new Date(value).toISOString()
 }
@@ -288,6 +315,7 @@ export default function SettingsModal() {
   const [profileDraft, setProfileDraft] = useState<BackendProviderProfile>(createEmptyProfile())
   const [distribution, setDistribution] = useState<BackendDistributionSettings>({ enabled: false, maxConcurrentTasks: 2 })
   const [reminderDrafts, setReminderDrafts] = useState<BackendReminderItem[]>([])
+  const [reminderImageUrlDrafts, setReminderImageUrlDrafts] = useState<Record<string, string>>({})
   const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
   const [newCodeName, setNewCodeName] = useState('新使用码')
   const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>([])
@@ -451,20 +479,6 @@ export default function SettingsModal() {
       hour: '2-digit',
       minute: '2-digit',
     })
-
-  const readFileAsDataUrl = (file: File) =>
-    new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(String(reader.result ?? ''))
-      reader.onerror = () => reject(reader.error ?? new Error('读取图片失败'))
-      reader.readAsDataURL(file)
-    })
-
-  const readReminderImageFiles = async (files: File[]) => {
-    const imageFiles = files.filter((file) => file.type.startsWith('image/')).slice(0, 16)
-    if (!imageFiles.length) throw new Error('请选择图片文件')
-    return Promise.all(imageFiles.map((file) => readFileAsDataUrl(file)))
-  }
 
   const formatActivityEventTagText = (event: BackendUsageCode['activityEvents'][number]) => {
     if (!event.providerProfileName || event.credits == null) return null
@@ -651,7 +665,9 @@ export default function SettingsModal() {
     setProfiles(visibleProfiles)
     setProviderOptions(nextProviderOptions)
     setDistribution(nextDistribution)
-    setReminderDrafts(nextReminders.map(normalizeReminderForEditor))
+    const nextReminderDrafts = nextReminders.map(normalizeReminderForEditor)
+    setReminderDrafts(nextReminderDrafts)
+    setReminderImageUrlDrafts(createReminderImageUrlDraftMap(nextReminderDrafts))
     setExpandedReminderIds((prev) => {
       const previous = new Set(prev)
       return nextReminders
@@ -968,7 +984,9 @@ export default function SettingsModal() {
           endAt: toServerDateTimeValue(item.endAt),
         })),
       )
-      setReminderDrafts(saved.map(normalizeReminderForEditor))
+      const nextReminderDrafts = saved.map(normalizeReminderForEditor)
+      setReminderDrafts(nextReminderDrafts)
+      setReminderImageUrlDrafts(createReminderImageUrlDraftMap(nextReminderDrafts))
       useStore.getState().showToast('提醒事项已保存', 'success')
     } catch (err) {
       useStore.getState().showToast(
@@ -980,60 +998,30 @@ export default function SettingsModal() {
     }
   }
 
-  const handlePickReminderImage = async (reminderId: string, event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files ?? [])
-    event.target.value = ''
-    if (!files.length) return
-
-    try {
-      const dataUrls = await readReminderImageFiles(files)
-      setReminderDrafts((prev) => prev.map((item) => {
-        if (item.id !== reminderId) return item
-        const imageDataUrls = Array.from(new Set([...(item.imageDataUrls ?? []), ...dataUrls])).slice(0, 16)
-        return {
-          ...item,
-          imageDataUrl: imageDataUrls[0] ?? null,
-          imageDataUrls,
-        }
-      }))
-    } catch (err) {
-      useStore.getState().showToast(
-        `读取提醒配图失败：${err instanceof Error ? err.message : String(err)}`,
-        'error',
-      )
-    }
-  }
-
-  const handleReminderMessagePaste = async (reminderId: string, event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === 'file')
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file instanceof File && file.type.startsWith('image/'))
-    if (!files.length) return
-    event.preventDefault()
-    event.stopPropagation()
-    event.nativeEvent.stopImmediatePropagation?.()
-    try {
-      const dataUrls = await readReminderImageFiles(files)
-      setReminderDrafts((prev) => prev.map((item) => {
-        if (item.id !== reminderId) return item
-        const imageDataUrls = Array.from(new Set([...(item.imageDataUrls ?? []), ...dataUrls])).slice(0, 16)
-        return {
-          ...item,
-          imageDataUrl: imageDataUrls[0] ?? null,
-          imageDataUrls,
-        }
-      }))
-      useStore.getState().showToast(`已添加 ${dataUrls.length} 张提醒配图`, 'success')
-    } catch (err) {
-      useStore.getState().showToast(
-        `粘贴提醒配图失败：${err instanceof Error ? err.message : String(err)}`,
-        'error',
-      )
-    }
+  const handleReminderImageUrlChange = (reminderId: string, value: string) => {
+    setReminderImageUrlDrafts((prev) => ({
+      ...prev,
+      [reminderId]: value,
+    }))
+    const imageDataUrls = normalizeReminderImageUrls(value.split(/\r?\n/))
+    setReminderDrafts((prev) => prev.map((item) => {
+      if (item.id !== reminderId) return item
+      return {
+        ...item,
+        imageDataUrl: imageDataUrls[0] ?? null,
+        imageDataUrls,
+      }
+    }))
   }
 
   const handleRemoveReminderImage = (reminderId: string, index: number) => {
+    const nextDraftText = reminderDrafts
+      .find((item) => item.id === reminderId)
+      ?.imageDataUrls?.filter((_, currentIndex) => currentIndex !== index)
+    setReminderImageUrlDrafts((prev) => ({
+      ...prev,
+      [reminderId]: formatReminderImageUrls(nextDraftText ?? []),
+    }))
     setReminderDrafts((prev) => prev.map((item) => {
       if (item.id !== reminderId) return item
       const imageDataUrls = (item.imageDataUrls ?? []).filter((_, currentIndex) => currentIndex !== index)
@@ -1048,6 +1036,10 @@ export default function SettingsModal() {
   const handleCreateReminder = () => {
     const nextReminder = createEmptyReminder()
     setReminderDrafts((prev) => [nextReminder, ...prev])
+    setReminderImageUrlDrafts((prev) => ({
+      ...prev,
+      [nextReminder.id]: '',
+    }))
     setExpandedReminderIds((prev) => prev.includes(nextReminder.id) ? prev : [nextReminder.id, ...prev])
   }
 
@@ -1057,6 +1049,11 @@ export default function SettingsModal() {
 
   const handleDeleteReminder = (reminderId: string) => {
     setReminderDrafts((prev) => prev.filter((item) => item.id !== reminderId))
+    setReminderImageUrlDrafts((prev) => {
+      const next = { ...prev }
+      delete next[reminderId]
+      return next
+    })
     setExpandedReminderIds((prev) => prev.filter((id) => id !== reminderId))
   }
 
@@ -1935,9 +1932,8 @@ export default function SettingsModal() {
                             value={reminder.message}
                             onChange={(event) => handleUpdateReminder(reminder.id, { message: event.target.value })}
                             onClear={() => handleUpdateReminder(reminder.id, { message: '' })}
-                            onPaste={(event) => void handleReminderMessagePaste(reminder.id, event)}
                             rows={4}
-                            placeholder="请先导出图片和视频，再准备后续清理。可直接粘贴多张图片。"
+                            placeholder="请先导出图片和视频，再准备后续清理。"
                             className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                           />
                         </label>
@@ -2001,15 +1997,20 @@ export default function SettingsModal() {
                         </div>
                         <div className="space-y-2">
                           <span className="block text-xs text-gray-500 dark:text-gray-400">事项配图</span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            onChange={(event) => void handlePickReminderImage(reminder.id, event)}
-                            className="block w-full text-xs text-gray-500 file:mr-3 file:rounded-lg file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:font-medium file:text-blue-600 hover:file:bg-blue-100 dark:text-gray-400 dark:file:bg-blue-500/10 dark:file:text-blue-300 dark:hover:file:bg-blue-500/20"
+                          <textarea
+                            value={reminderImageUrlDrafts[reminder.id] ?? ''}
+                            onChange={(event) => handleReminderImageUrlChange(reminder.id, event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.stopPropagation()
+                              }
+                            }}
+                            rows={4}
+                            className="min-h-[96px] w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                            placeholder={'每行一个公开图片链接\nhttps://example.com/a.jpg\nhttps://example.com/b.png'}
                           />
                           <div className="text-[11px] text-gray-400 dark:text-gray-500">
-                            支持选择或粘贴多张图片。最多保留 16 张。
+                            支持粘贴多张公开图片链接。每行一个。最多保留 16 张。下方会直接预览。
                           </div>
                           {reminder.imageDataUrls?.length ? (
                             <div className="space-y-2">
