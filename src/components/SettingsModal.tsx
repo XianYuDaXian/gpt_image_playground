@@ -2594,7 +2594,7 @@ export default function SettingsModal() {
                                     ? '远端记录清空失败'
                                     : '正在清空远端记录'}
                       </div>
-                      <div className="mt-1 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                      <div className="mt-1 break-all text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
                         {backupState.error || backupState.message}
                       </div>
                     </div>

@@ -93,12 +93,12 @@ function MaintenanceOverlay() {
           </>
         )}
         {isAdmin && maintenance.error && (
-          <div className="mt-3 rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          <div className="mt-3 break-all rounded-2xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
             {maintenance.error}
           </div>
         )}
         {isAdmin && maintenance.filePath && !maintenance.active && (
-          <div className="mt-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-gray-300">
+          <div className="mt-3 break-all rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs leading-5 text-gray-300">
             {maintenance.filePath}
           </div>
         )}
