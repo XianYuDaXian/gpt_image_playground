@@ -70,6 +70,15 @@ export class TaskWorker {
     this.pending = this.pending.filter((id) => id !== taskId)
   }
 
+  getSnapshot() {
+    return {
+      runningCount: this.running.size,
+      pendingCount: this.pending.length,
+      activeTaskIds: [...this.running],
+      pendingTaskIds: [...this.pending],
+    }
+  }
+
   private isTaskInactive(taskId: string) {
     return this.cancelled.has(taskId) || !this.db.taskExists(taskId)
   }

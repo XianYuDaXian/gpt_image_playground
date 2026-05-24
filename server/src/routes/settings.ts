@@ -1,10 +1,10 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createWriteStream } from 'node:fs'
-import { pipeline } from 'node:stream/promises'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { finished, pipeline } from 'node:stream/promises'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { zipSync } from 'fflate'
+import { Zip, ZipDeflate, ZipPassThrough, zipSync } from 'fflate'
 import type { CentralDirectory } from 'unzipper'
 import unzipper from 'unzipper'
 import { z } from 'zod'
@@ -19,6 +19,15 @@ import {
   setSessionCookie,
 } from '../lib/auth.js'
 import { decryptText, encryptText, maskSecret } from '../lib/crypto.js'
+import {
+  appendManagementOperationLog,
+  getBackupJobState,
+  getDefaultBackupJobState,
+  getMaintenanceMessage,
+  listManagementOperationLogs,
+  patchBackupJobState,
+  setBackupJobState,
+} from '../lib/maintenance.js'
 import type {
   AppSettingRecord,
   ProviderProfileRecord,
@@ -265,6 +274,32 @@ const fullBackupManifestSchema = z.object({
   usageCodeActivityLogs: z.array(fullBackupUsageCodeActivitySchema),
 })
 
+const splitBackupIndexPartSchema = z.object({
+  name: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+  sha256: z.string().min(1),
+  fileCount: z.number().int().nonnegative(),
+})
+
+const splitBackupIndexFileSchema = z.object({
+  filePath: z.string().min(1),
+  partName: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+  sha256: z.string().min(1),
+})
+
+const splitBackupIndexSchema = z.object({
+  kind: z.literal('admin_split_backup_index'),
+  version: z.literal(1),
+  backupId: z.string().min(1),
+  exportedAt: z.string().min(1),
+  totalBytes: z.number().int().nonnegative(),
+  totalFiles: z.number().int().nonnegative(),
+  manifest: fullBackupManifestSchema,
+  parts: z.array(splitBackupIndexPartSchema).min(1),
+  files: z.array(splitBackupIndexFileSchema),
+})
+
 const resetRemoteDataSchema = z.object({
   mode: z.enum(['tasks', 'all', 'usage_code_tasks_only']),
 })
@@ -459,15 +494,15 @@ function resolveBackupArchivePath(app: Parameters<FastifyPluginAsync>[0], archiv
   return resolvedPath
 }
 
-async function listBackupArchiveFiles(rootDir: string, currentDir = rootDir): Promise<Array<{
-  filePath: string
+async function listBackupArtifacts(rootDir: string, currentDir = rootDir): Promise<Array<{
+  absolutePath: string
   fileName: string
   bytes: number
   modifiedAt: string
 }>> {
   const entries = await fs.readdir(currentDir, { withFileTypes: true }).catch(() => [])
   const results: Array<{
-    filePath: string
+    absolutePath: string
     fileName: string
     bytes: number
     modifiedAt: string
@@ -476,13 +511,15 @@ async function listBackupArchiveFiles(rootDir: string, currentDir = rootDir): Pr
   for (const entry of entries) {
     const absolutePath = path.join(currentDir, entry.name)
     if (entry.isDirectory()) {
-      results.push(...await listBackupArchiveFiles(rootDir, absolutePath))
+      if (path.resolve(absolutePath) === path.resolve(path.join(rootDir, 'imports'))) continue
+      results.push(...await listBackupArtifacts(rootDir, absolutePath))
       continue
     }
-    if (!entry.isFile() || path.extname(entry.name).toLowerCase() !== '.zip') continue
+    const extension = path.extname(entry.name).toLowerCase()
+    if (!entry.isFile() || (extension !== '.zip' && extension !== '.json')) continue
     const stat = await fs.stat(absolutePath)
     results.push({
-      filePath: absolutePath,
+      absolutePath,
       fileName: path.relative(rootDir, absolutePath).replace(/\\/g, '/'),
       bytes: stat.size,
       modifiedAt: stat.mtime.toISOString(),
@@ -490,6 +527,67 @@ async function listBackupArchiveFiles(rootDir: string, currentDir = rootDir): Pr
   }
 
   return results.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+}
+
+async function listBackupImportCandidates(rootDir: string): Promise<BackupImportCandidate[]> {
+  const artifacts = await listBackupArtifacts(rootDir)
+  const artifactMap = new Map(artifacts.map((item) => [path.resolve(item.absolutePath), item] as const))
+  const splitCandidates: BackupImportCandidate[] = []
+  const splitPartPaths = new Set<string>()
+
+  for (const artifact of artifacts) {
+    if (path.extname(artifact.absolutePath).toLowerCase() !== '.json') continue
+    try {
+      const parsed = splitBackupIndexSchema.parse(JSON.parse(await fs.readFile(artifact.absolutePath, 'utf-8')))
+      let bytes = artifact.bytes
+      let latestModifiedAt = artifact.modifiedAt
+      const missingPartNames: string[] = []
+      let foundPartCount = 0
+
+      for (const part of parsed.parts) {
+        const partPath = path.resolve(path.join(path.dirname(artifact.absolutePath), part.name))
+        splitPartPaths.add(partPath)
+        const matched = artifactMap.get(partPath)
+        if (!matched) {
+          missingPartNames.push(part.name)
+          continue
+        }
+        foundPartCount += 1
+        bytes += matched.bytes
+        if (new Date(matched.modifiedAt).getTime() > new Date(latestModifiedAt).getTime()) {
+          latestModifiedAt = matched.modifiedAt
+        }
+      }
+
+      splitCandidates.push({
+        kind: 'split',
+        filePath: artifact.absolutePath,
+        fileName: artifact.fileName,
+        displayName: path.relative(rootDir, path.dirname(artifact.absolutePath)).replace(/\\/g, '/'),
+        bytes,
+        modifiedAt: latestModifiedAt,
+        partCount: parsed.parts.length,
+        foundPartCount,
+        missingPartNames,
+      })
+    } catch {
+      /* 非引导文件忽略 */
+    }
+  }
+
+  const singleCandidates: BackupImportCandidate[] = artifacts
+    .filter((artifact) => path.extname(artifact.absolutePath).toLowerCase() === '.zip')
+    .filter((artifact) => !splitPartPaths.has(path.resolve(artifact.absolutePath)))
+    .map((artifact) => ({
+      kind: 'single' as const,
+      filePath: artifact.absolutePath,
+      fileName: artifact.fileName,
+      bytes: artifact.bytes,
+      modifiedAt: artifact.modifiedAt,
+    }))
+
+  return [...splitCandidates, ...singleCandidates]
+    .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
 }
 
 function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
@@ -793,21 +891,6 @@ function formatBytesForDisplay(bytes: number) {
   return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
 }
 
-async function removeTaskMediaFiles(
-  app: Parameters<FastifyPluginAsync>[0],
-  taskId: string,
-) {
-  const images = app.db.listTaskImages(taskId)
-  for (const image of images) {
-    try {
-      await fs.rm(path.join(app.config.mediaDir, image.filePath), { force: true })
-    } catch {
-      /* ignore */
-    }
-  }
-  return images
-}
-
 type LegacyBinaryImage = Omit<z.infer<typeof backupImageSchema>, 'dataUrl'> & { binary: Buffer }
 
 type LegacyImportPayload = {
@@ -865,7 +948,38 @@ type ParsedAdminBackupImport = {
   payload: ParsedAdminBackupPayload
   tempDir: string
   files: Array<{ filePath: string; tempPath: string }>
+  cleanupPaths: string[]
 }
+
+type BackupImportCandidate =
+  | {
+      kind: 'single'
+      filePath: string
+      fileName: string
+      displayName?: string
+      bytes: number
+      modifiedAt: string
+    }
+  | {
+      kind: 'split'
+      filePath: string
+      fileName: string
+      displayName?: string
+      bytes: number
+      modifiedAt: string
+      partCount: number
+      foundPartCount: number
+      missingPartNames: string[]
+    }
+
+let backupExportRunner: Promise<void> | null = null
+let remoteResetRunner: Promise<void> | null = null
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+const MAX_BACKUP_PART_BYTES = 3_500_000_000
 
 function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
   const providerProfiles = app.db.listProviderProfiles().map((profile) => ({
@@ -962,6 +1076,706 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
     taskEvents,
     usageQuotaEvents,
     usageCodeActivityLogs,
+  }
+}
+
+type RemoteResetMode = 'tasks' | 'all' | 'usage_code_tasks_only'
+
+function getRemoteResetOperation(mode: RemoteResetMode) {
+  if (mode === 'usage_code_tasks_only') return 'remote_reset_usage_code' as const
+  if (mode === 'all') return 'remote_reset_all' as const
+  return 'remote_reset_tasks' as const
+}
+
+function getRemoteResetStartMessage(mode: RemoteResetMode) {
+  if (mode === 'usage_code_tasks_only') return '等待现有任务完成后开始清理使用码任务与产物'
+  if (mode === 'all') return '等待现有任务完成后开始清空远端全部数据'
+  return '等待现有任务完成后开始清空远端记录'
+}
+
+function getRemoteResetRunningMessage(mode: RemoteResetMode) {
+  if (mode === 'usage_code_tasks_only') return '正在清理使用码任务与产物'
+  if (mode === 'all') return '正在清空远端全部数据'
+  return '正在清空远端记录'
+}
+
+function getRemoteResetCompletedMessage(mode: RemoteResetMode) {
+  if (mode === 'usage_code_tasks_only') return '使用码任务与产物已清理完成'
+  if (mode === 'all') return '远端全部数据已清空'
+  return '远端记录已清空'
+}
+
+function getRemoteResetFailedMessage(mode: RemoteResetMode) {
+  if (mode === 'usage_code_tasks_only') return '清理使用码任务与产物失败'
+  if (mode === 'all') return '清空远端全部数据失败'
+  return '清空远端记录失败'
+}
+
+async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: RemoteResetMode) {
+  const startedAt = new Date().toISOString()
+  const operation = getRemoteResetOperation(mode)
+  setBackupJobState(app, {
+    ...getDefaultBackupJobState(),
+    active: true,
+    operation,
+    phase: 'preparing',
+    message: getRemoteResetStartMessage(mode),
+    progressPercent: 5,
+    startedAt,
+  })
+
+  try {
+    while (true) {
+      const snapshot = app.taskWorker.getSnapshot()
+      patchBackupJobState(app, {
+        waitingRunningTasks: snapshot.runningCount,
+        waitingPendingTasks: snapshot.pendingCount,
+        message: snapshot.runningCount > 0 || snapshot.pendingCount > 0
+          ? `等待队列清空：执行中 ${snapshot.runningCount}，排队中 ${snapshot.pendingCount}`
+          : getRemoteResetRunningMessage(mode),
+      })
+      if (snapshot.runningCount === 0 && snapshot.pendingCount === 0) break
+      await sleep(1000)
+    }
+
+    const cleanupRecords = mode === 'usage_code_tasks_only'
+      ? app.db.listUsageCodeTaskMediaCleanupRecords()
+      : app.db.listTaskMediaCleanupRecords()
+    const taskMap = new Map<string, { ownerUsageCodeId: string | null; ownerKind: string }>()
+    const usageCodeSummaryMap = new Map<string, { outputImageCount: number; outputVideoCount: number }>()
+    const directoryStats = new Map<string, { fileCount: number; bytes: number }>()
+    const fileStats = new Map<string, { bytes: number }>()
+
+    for (const record of cleanupRecords) {
+      taskMap.set(record.taskId, {
+        ownerUsageCodeId: record.ownerUsageCodeId,
+        ownerKind: record.ownerKind,
+      })
+
+      if (mode === 'usage_code_tasks_only' && record.ownerUsageCodeId) {
+        const summary = usageCodeSummaryMap.get(record.ownerUsageCodeId) ?? { outputImageCount: 0, outputVideoCount: 0 }
+        if (record.kind === 'output') summary.outputImageCount += 1
+        if (record.kind === 'video_output') summary.outputVideoCount += 1
+        usageCodeSummaryMap.set(record.ownerUsageCodeId, summary)
+      }
+
+      if (!record.filePath) continue
+      const normalizedPath = record.filePath.replace(/\\/g, '/')
+      const relativeDir = path.posix.dirname(normalizedPath)
+      if (relativeDir && relativeDir !== '.') {
+        const current = directoryStats.get(relativeDir) ?? { fileCount: 0, bytes: 0 }
+        current.fileCount += 1
+        current.bytes += Math.max(0, record.bytes ?? 0)
+        directoryStats.set(relativeDir, current)
+        continue
+      }
+      const current = fileStats.get(normalizedPath) ?? { bytes: 0 }
+      current.bytes += Math.max(0, record.bytes ?? 0)
+      fileStats.set(normalizedPath, current)
+    }
+
+    const mediaFileCount = [...directoryStats.values()].reduce((sum, item) => sum + item.fileCount, 0) + fileStats.size
+    const mediaBytes = [...directoryStats.values()].reduce((sum, item) => sum + item.bytes, 0)
+      + [...fileStats.values()].reduce((sum, item) => sum + item.bytes, 0)
+    const totalFiles = Math.max(1, mediaFileCount + 1)
+    patchBackupJobState(app, {
+      phase: 'running',
+      operation,
+      message: getRemoteResetRunningMessage(mode),
+      progressPercent: 10,
+      totalFiles,
+      processedFiles: 0,
+      totalBytes: mediaBytes,
+      processedBytes: 0,
+      waitingRunningTasks: 0,
+      waitingPendingTasks: 0,
+      filename: null,
+      filePath: null,
+      error: null,
+    })
+
+    let processedFiles = 0
+    let processedBytes = 0
+    const sortedDirectories = [...directoryStats.entries()].sort((left, right) => right[0].length - left[0].length)
+    for (const [relativeDir, stats] of sortedDirectories) {
+      await fs.rm(path.join(app.config.mediaDir, relativeDir), { recursive: true, force: true }).catch(() => undefined)
+      processedFiles += stats.fileCount
+      processedBytes += stats.bytes
+      patchBackupJobState(app, {
+        processedFiles,
+        processedBytes,
+        progressPercent: Math.max(10, Math.min(95, Math.floor((processedFiles / totalFiles) * 100))),
+        message: `${getRemoteResetRunningMessage(mode)}（已处理 ${processedFiles}/${totalFiles - 1} 个媒体文件）`,
+      })
+    }
+    for (const [relativePath, stats] of fileStats) {
+      await fs.rm(path.join(app.config.mediaDir, relativePath), { force: true }).catch(() => undefined)
+      processedFiles += 1
+      processedBytes += stats.bytes
+      patchBackupJobState(app, {
+        processedFiles,
+        processedBytes,
+        progressPercent: Math.max(10, Math.min(95, Math.floor((processedFiles / totalFiles) * 100))),
+        message: `${getRemoteResetRunningMessage(mode)}（已处理 ${processedFiles}/${totalFiles - 1} 个媒体文件）`,
+      })
+    }
+
+    patchBackupJobState(app, {
+      processedFiles: totalFiles - 1,
+      processedBytes: mediaBytes,
+      progressPercent: 96,
+      message: '正在清理数据库记录',
+    })
+
+    if (mode === 'usage_code_tasks_only') {
+      app.db.clearUsageCodeTaskData()
+      for (const [usageCodeId, summary] of usageCodeSummaryMap) {
+        app.db.insertUsageCodeActivityLog({
+          usageCodeId,
+          actorKind: 'admin',
+          eventType: 'admin_task_purged',
+          message: `管理员批量清理使用码任务，删除图片 ${summary.outputImageCount} 张，视频 ${summary.outputVideoCount} 个`,
+        })
+      }
+      for (const [taskId, task] of taskMap) {
+        app.taskWorker.cancel(taskId)
+        app.taskEvents.emitDeleted(taskId, {
+          ownerUsageCodeId: task.ownerUsageCodeId,
+          ownerKind: task.ownerKind,
+        })
+      }
+    } else {
+      const existingTasks = [...taskMap.entries()].map(([taskId, task]) => ({
+        id: taskId,
+        ownerUsageCodeId: task.ownerUsageCodeId,
+        ownerKind: task.ownerKind,
+      }))
+      await fs.mkdir(app.config.mediaDir, { recursive: true })
+      await fs.mkdir(app.config.uploadsDir, { recursive: true })
+      await fs.mkdir(app.config.masksDir, { recursive: true })
+      await fs.mkdir(app.config.outputsDir, { recursive: true })
+      await fs.mkdir(app.config.thumbsDir, { recursive: true })
+      if (mode === 'all') {
+        app.db.clearRuntimeData()
+      } else {
+        app.db.clearTaskData()
+      }
+      for (const task of existingTasks) {
+        app.taskWorker.cancel(task.id)
+        app.taskEvents.emitDeleted(task.id, {
+          ownerUsageCodeId: task.ownerUsageCodeId,
+          ownerKind: task.ownerKind,
+        })
+      }
+    }
+
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation,
+      phase: 'completed',
+      message: getRemoteResetCompletedMessage(mode),
+      progressPercent: 100,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      totalFiles,
+      processedFiles: totalFiles,
+      totalBytes: mediaBytes,
+      processedBytes: mediaBytes,
+      error: null,
+    })
+    appendManagementOperationLog(app, {
+      operation,
+      status: 'completed',
+      title: getRemoteResetCompletedMessage(mode),
+      detail: mode === 'usage_code_tasks_only'
+        ? `已清理 ${taskMap.size} 条使用码任务与对应媒体产物`
+        : mode === 'all'
+          ? '后端任务、媒体与运行配置已清空'
+          : '后端任务记录与媒体产物已清空',
+      createdAt: new Date().toISOString(),
+    })
+  } catch (error) {
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation,
+      phase: 'failed',
+      message: getRemoteResetFailedMessage(mode),
+      progressPercent: 100,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    appendManagementOperationLog(app, {
+      operation,
+      status: 'failed',
+      title: getRemoteResetFailedMessage(mode),
+      detail: error instanceof Error ? error.message : String(error),
+      createdAt: new Date().toISOString(),
+    })
+    throw error
+  } finally {
+    remoteResetRunner = null
+  }
+}
+
+function toUint8Array(chunk: Buffer | Uint8Array | string) {
+  if (typeof chunk === 'string') {
+    return new TextEncoder().encode(chunk)
+  }
+  return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+}
+
+async function writeFullBackupArchiveToFile(
+  outputPath: string,
+  input: {
+    manifestJson?: string | null
+    taskImages: Array<{ filePath: string; bytes: number }>
+    mediaDir: string
+  },
+  options: {
+    onProgress?: (input: { processedFiles: number; processedBytes: number; totalFiles: number; totalBytes: number }) => Promise<void> | void
+  } = {},
+) {
+  const output = createWriteStream(outputPath)
+  const zip = new Zip()
+  const hash = crypto.createHash('sha256')
+  const pendingWriteLimitBytes = 8 * 1024 * 1024
+  const manifestBytes = input.manifestJson ? Buffer.byteLength(input.manifestJson, 'utf-8') : 0
+  const totalFiles = input.taskImages.length + (input.manifestJson ? 1 : 0)
+  const totalBytes = input.taskImages.reduce((sum, image) => sum + image.bytes, manifestBytes)
+  let pendingWriteBytes = 0
+  let writeChain = Promise.resolve()
+  let zipClosed = false
+  let processedFiles = 0
+  let processedBytes = 0
+
+  const reportProgress = async () => {
+    await options.onProgress?.({
+      processedFiles,
+      processedBytes,
+      totalFiles,
+      totalBytes,
+    })
+  }
+
+  const writeChunk = (chunk: Uint8Array) => new Promise<void>((resolve, reject) => {
+    const buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+    hash.update(buffer)
+    pendingWriteBytes += buffer.byteLength
+    output.write(buffer, (error) => {
+      pendingWriteBytes -= buffer.byteLength
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+
+  const closeOutput = () => new Promise<void>((resolve, reject) => {
+    if (zipClosed) {
+      resolve()
+      return
+    }
+    zipClosed = true
+    output.end((error?: Error | null) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+
+  const zipFinished = new Promise<void>((resolve, reject) => {
+    output.once('error', reject)
+    zip.ondata = (error, chunk, final) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      writeChain = writeChain
+        .then(() => writeChunk(chunk))
+        .then(async () => {
+          if (final) {
+            await closeOutput()
+          }
+        })
+        .catch(reject)
+    }
+
+    writeChain
+      .then(() => finished(output))
+      .then(() => resolve())
+      .catch(reject)
+  })
+
+  if (input.manifestJson) {
+    const manifestEntry = new ZipDeflate('manifest.json', { level: 6 })
+    zip.add(manifestEntry)
+    manifestEntry.push(toUint8Array(input.manifestJson), true)
+    processedFiles += 1
+    processedBytes += manifestBytes
+    await reportProgress()
+  }
+
+  for (const image of input.taskImages) {
+    const absolutePath = path.join(input.mediaDir, image.filePath)
+    const fileEntry = new ZipPassThrough(image.filePath)
+    zip.add(fileEntry)
+
+    let previousChunk: Buffer | null = null
+    for await (const chunk of createReadStream(absolutePath)) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (previousChunk) {
+        fileEntry.push(toUint8Array(previousChunk), false)
+        processedBytes += previousChunk.byteLength
+        await reportProgress()
+        if (pendingWriteBytes >= pendingWriteLimitBytes) {
+          await writeChain
+        }
+      }
+      previousChunk = buffer
+    }
+
+    fileEntry.push(toUint8Array(previousChunk ?? Buffer.alloc(0)), true)
+    processedBytes += previousChunk?.byteLength ?? 0
+    processedFiles += 1
+    await reportProgress()
+    if (pendingWriteBytes >= pendingWriteLimitBytes) {
+      await writeChain
+    }
+  }
+
+  zip.end()
+  await zipFinished
+  const stat = await fs.stat(outputPath)
+  return {
+    bytes: stat.size,
+    sha256: hash.digest('hex'),
+  }
+}
+
+function getBackupProgressPercent(input: {
+  phase: 'preparing' | 'running' | 'completed' | 'failed'
+  processedBytes?: number
+  totalBytes?: number
+}) {
+  if (input.phase === 'completed') return 100
+  if (input.phase === 'failed') return 0
+  if (input.phase === 'preparing') return 5
+  const totalBytes = Math.max(0, input.totalBytes ?? 0)
+  const processedBytes = Math.max(0, input.processedBytes ?? 0)
+  if (totalBytes <= 0) return 10
+  return Math.max(10, Math.min(99, Math.floor((processedBytes / totalBytes) * 100)))
+}
+
+function buildSplitBackupPlan(manifest: ReturnType<typeof buildFullBackupManifest>, backupId: string) {
+  const manifestJson = JSON.stringify(manifest, null, 2)
+  const totalBytes = manifest.taskImages.reduce((sum, image) => sum + image.bytes, Buffer.byteLength(manifestJson, 'utf-8'))
+  if (totalBytes <= MAX_BACKUP_PART_BYTES) return null
+
+  const parts: Array<{
+    name: string
+    taskImages: Array<(typeof manifest.taskImages)[number]>
+    estimatedBytes: number
+  }> = []
+
+  let currentImages: Array<(typeof manifest.taskImages)[number]> = []
+  let currentBytes = Buffer.byteLength(manifestJson, 'utf-8')
+
+  for (const image of manifest.taskImages) {
+    const willOverflow = currentImages.length > 0 && currentBytes + image.bytes > MAX_BACKUP_PART_BYTES
+    if (willOverflow) {
+      parts.push({
+        name: `${backupId}.part-${String(parts.length + 1).padStart(3, '0')}.zip`,
+        taskImages: currentImages,
+        estimatedBytes: currentBytes,
+      })
+      currentImages = []
+      currentBytes = 0
+    }
+    currentImages.push(image)
+    currentBytes += image.bytes
+  }
+
+  if (currentImages.length > 0) {
+    parts.push({
+      name: `${backupId}.part-${String(parts.length + 1).padStart(3, '0')}.zip`,
+      taskImages: currentImages,
+      estimatedBytes: currentBytes,
+    })
+  }
+
+  return {
+    backupId,
+    manifestJson,
+    totalBytes,
+    totalFiles: manifest.taskImages.length + 1,
+    parts,
+  }
+}
+
+async function runBackupExportJob(app: Parameters<FastifyPluginAsync>[0]) {
+  const startedAt = new Date().toISOString()
+  setBackupJobState(app, {
+    ...getDefaultBackupJobState(),
+    active: true,
+    operation: 'backup_export',
+    phase: 'preparing',
+    message: '等待现有任务完成后开始备份',
+    progressPercent: 5,
+    startedAt,
+  })
+
+  try {
+    while (true) {
+      const snapshot = app.taskWorker.getSnapshot()
+      patchBackupJobState(app, {
+        waitingRunningTasks: snapshot.runningCount,
+        waitingPendingTasks: snapshot.pendingCount,
+        message: snapshot.runningCount > 0 || snapshot.pendingCount > 0
+          ? `等待队列清空：执行中 ${snapshot.runningCount}，排队中 ${snapshot.pendingCount}`
+          : '正在整理备份清单',
+      })
+      if (snapshot.runningCount === 0 && snapshot.pendingCount === 0) break
+      await sleep(1000)
+    }
+
+    const manifest = buildFullBackupManifest(app)
+    await fs.mkdir(app.config.backupsDir, { recursive: true })
+    const backupId = `gpt-image-playground-full-backup-${Date.now()}`
+    const backupDir = path.join(app.config.backupsDir, backupId)
+    await fs.mkdir(backupDir, { recursive: true })
+    const splitPlan = buildSplitBackupPlan(manifest, backupId)
+    const manifestJson = JSON.stringify(manifest, null, 2)
+    const filename = splitPlan ? `${backupId}.index.json` : `${backupId}.zip`
+    const filePath = path.join(backupDir, filename)
+    let lastProgressUpdatedAt = 0
+
+    patchBackupJobState(app, {
+      phase: 'running',
+      operation: 'backup_export',
+      filename,
+      filePath,
+      totalFiles: manifest.taskImages.length + 1,
+      processedFiles: 0,
+      totalBytes: manifest.taskImages.reduce((sum, image) => sum + image.bytes, Buffer.byteLength(manifestJson, 'utf-8')),
+      processedBytes: 0,
+      waitingRunningTasks: 0,
+      waitingPendingTasks: 0,
+      message: '正在写入服务器备份包',
+      progressPercent: 10,
+    })
+
+    let bytes = 0
+    if (splitPlan) {
+      const indexParts: z.infer<typeof splitBackupIndexPartSchema>[] = []
+      const indexFiles: z.infer<typeof splitBackupIndexFileSchema>[] = []
+      let aggregateBytes = 0
+
+      for (let index = 0; index < splitPlan.parts.length; index += 1) {
+        const part = splitPlan.parts[index]
+        const partPath = path.join(backupDir, part.name)
+        const partResult = await writeFullBackupArchiveToFile(partPath, {
+          manifestJson: index === 0 ? splitPlan.manifestJson : null,
+          taskImages: part.taskImages,
+          mediaDir: app.config.mediaDir,
+        }, {
+          onProgress: async ({ processedFiles, processedBytes }) => {
+            const processedFilesBeforePart = splitPlan.parts
+              .slice(0, index)
+              .reduce((sum, item, partIndex) => sum + item.taskImages.length + (partIndex === 0 ? 1 : 0), 0)
+            const processedBytesBeforePart = splitPlan.parts
+              .slice(0, index)
+              .reduce((sum, item, partIndex) => sum + item.taskImages.reduce((inner, image) => inner + image.bytes, partIndex === 0 ? Buffer.byteLength(splitPlan.manifestJson, 'utf-8') : 0), 0)
+            const nextProcessedFiles = processedFilesBeforePart + processedFiles
+            const nextProcessedBytes = processedBytesBeforePart + processedBytes
+            const now = Date.now()
+            const shouldFlush = nextProcessedFiles >= splitPlan.totalFiles || now - lastProgressUpdatedAt >= 400
+            if (!shouldFlush) return
+            lastProgressUpdatedAt = now
+            patchBackupJobState(app, {
+              processedFiles: nextProcessedFiles,
+              processedBytes: nextProcessedBytes,
+              totalFiles: splitPlan.totalFiles,
+              totalBytes: splitPlan.totalBytes,
+              progressPercent: getBackupProgressPercent({
+                phase: 'running',
+                processedBytes: nextProcessedBytes,
+                totalBytes: splitPlan.totalBytes,
+              }),
+              message: `正在写入第 ${index + 1}/${splitPlan.parts.length} 个分包`,
+            })
+          },
+        })
+        const partStat = await fs.stat(partPath)
+        aggregateBytes += partStat.size
+        indexParts.push({
+          name: part.name,
+          bytes: partStat.size,
+          sha256: partResult.sha256,
+          fileCount: part.taskImages.length + (index === 0 ? 1 : 0),
+        })
+        for (const image of part.taskImages) {
+          indexFiles.push({
+            filePath: image.filePath,
+            partName: part.name,
+            bytes: image.bytes,
+            sha256: image.sha256,
+          })
+        }
+        bytes += partResult.bytes
+      }
+
+      const indexPayload = {
+        kind: 'admin_split_backup_index' as const,
+        version: 1 as const,
+        backupId,
+        exportedAt: manifest.exportedAt,
+        totalBytes: splitPlan.totalBytes,
+        totalFiles: splitPlan.totalFiles,
+        manifest,
+        parts: indexParts,
+        files: indexFiles,
+      }
+      await fs.writeFile(filePath, JSON.stringify(indexPayload, null, 2), 'utf-8')
+      bytes = aggregateBytes + (await fs.stat(filePath)).size
+    } else {
+      bytes = (await writeFullBackupArchiveToFile(filePath, {
+        manifestJson,
+        taskImages: manifest.taskImages,
+        mediaDir: app.config.mediaDir,
+      }, {
+        onProgress: async ({ processedFiles, processedBytes, totalFiles, totalBytes }) => {
+          const now = Date.now()
+          const shouldFlush = processedFiles >= totalFiles || now - lastProgressUpdatedAt >= 400
+          if (!shouldFlush) return
+          lastProgressUpdatedAt = now
+          patchBackupJobState(app, {
+            processedFiles,
+            processedBytes,
+            totalFiles,
+            totalBytes,
+            progressPercent: getBackupProgressPercent({
+              phase: 'running',
+              processedBytes,
+              totalBytes,
+            }),
+            message: `正在写入服务器备份包（${processedFiles}/${totalFiles}）`,
+          })
+        },
+      })).bytes
+    }
+
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'backup_export',
+      phase: 'completed',
+      message: '备份已完成',
+      progressPercent: 100,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      totalFiles: manifest.taskImages.length + 1,
+      processedFiles: manifest.taskImages.length + 1,
+      totalBytes: manifest.taskImages.reduce((sum, image) => sum + image.bytes, Buffer.byteLength(manifestJson, 'utf-8')),
+      processedBytes: manifest.taskImages.reduce((sum, image) => sum + image.bytes, Buffer.byteLength(manifestJson, 'utf-8')),
+      waitingRunningTasks: 0,
+      waitingPendingTasks: 0,
+      filename,
+      filePath,
+      error: null,
+    })
+    appendManagementOperationLog(app, {
+      operation: 'backup_export',
+      status: 'completed',
+      title: '服务器备份已完成',
+      detail: `备份文件已写入 ${filePath}`,
+      createdAt: new Date().toISOString(),
+    })
+    app.log.info({ filePath, bytes }, '服务器备份导出完成')
+  } catch (error) {
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'backup_export',
+      phase: 'failed',
+      message: '备份失败',
+      progressPercent: 0,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    appendManagementOperationLog(app, {
+      operation: 'backup_export',
+      status: 'failed',
+      title: '服务器备份失败',
+      detail: error instanceof Error ? error.message : String(error),
+      createdAt: new Date().toISOString(),
+    })
+    throw error
+  }
+}
+
+async function runImportRestoreJob<T>(
+  app: Parameters<FastifyPluginAsync>[0],
+  work: () => Promise<T>,
+) {
+  const startedAt = new Date().toISOString()
+  setBackupJobState(app, {
+    ...getDefaultBackupJobState(),
+    active: true,
+    operation: 'backup_import',
+    phase: 'running',
+    message: '管理员正在恢复备份',
+    progressPercent: 10,
+    startedAt,
+  })
+
+  try {
+    const result = await work()
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'backup_import',
+      phase: 'completed',
+      message: '备份恢复已完成',
+      progressPercent: 100,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    })
+    appendManagementOperationLog(app, {
+      operation: 'backup_import',
+      status: 'completed',
+      title: '服务器备份恢复已完成',
+      detail: '备份数据已恢复到当前服务器',
+      createdAt: new Date().toISOString(),
+    })
+    return result
+  } catch (error) {
+    setBackupJobState(app, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'backup_import',
+      phase: 'failed',
+      message: '备份恢复失败',
+      progressPercent: 0,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    appendManagementOperationLog(app, {
+      operation: 'backup_import',
+      status: 'failed',
+      title: '服务器备份恢复失败',
+      detail: error instanceof Error ? error.message : String(error),
+      createdAt: new Date().toISOString(),
+    })
+    throw error
   }
 }
 
@@ -1100,6 +1914,64 @@ async function extractArchiveEntriesToTempDir(
   return extractedFiles
 }
 
+function buildParsedPayloadFromFullManifest(
+  app: Parameters<FastifyPluginAsync>[0],
+  manifest: z.infer<typeof fullBackupManifestSchema>,
+): ParsedAdminBackupPayload {
+  return {
+    providerProfiles: manifest.providerProfiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      tagColor: profile.tagColor ?? null,
+      baseUrl: profile.baseUrl,
+      apiKeyEncrypted: encryptText(profile.apiKey, app.config.appSecret),
+      model: profile.model,
+      apiMode: profile.apiMode,
+      timeoutSeconds: profile.timeoutSeconds,
+      codexCli: profile.codexCli ? 1 : 0,
+      grokApiCompat: profile.grokApiCompat ? 1 : 0,
+      xaiImage2kEnabled: profile.xaiImage2kEnabled ? 1 : 0,
+      responseFormatB64Json: profile.responseFormatB64Json ? 1 : 0,
+      videoMaxResolution: profile.videoMaxResolution,
+      videoMaxDuration: profile.videoMaxDuration,
+      isDefault: profile.isDefault ? 1 : 0,
+      createdAt: profile.createdAt,
+      updatedAt: profile.updatedAt,
+    })),
+    appSettings: manifest.appSettings.map((setting) => ({
+      key: setting.key,
+      valueJson: JSON.stringify(setting.value),
+      updatedAt: setting.updatedAt,
+    })),
+    usageCodes: manifest.usageCodes.map((code) => ({
+      id: code.id,
+      codeHash: hashSecret(code.code, app.config.appSecret),
+      codeEncrypted: encryptText(code.code, app.config.appSecret),
+      name: code.name,
+      allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
+      isEnabled: code.isEnabled ? 1 : 0,
+      imageQuota: code.imageQuota,
+      providerImageQuotas: code.providerImageQuotas ?? null,
+      usedImageCredits: code.usedImageCredits,
+      providerUsedImageCredits: code.providerUsedImageCredits ?? null,
+      videoQuota: code.videoQuota,
+      providerVideoQuotas: code.providerVideoQuotas ?? null,
+      usedVideoCredits: code.usedVideoCredits,
+      providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
+      outputImageCount: code.outputImageCount,
+      outputVideoCount: code.outputVideoCount,
+      createdAt: code.createdAt,
+      updatedAt: code.updatedAt,
+      lastUsedAt: code.lastUsedAt,
+    })),
+    usageQuotaEvents: manifest.usageQuotaEvents,
+    usageCodeActivityLogs: manifest.usageCodeActivityLogs,
+    tasks: manifest.tasks,
+    taskImages: manifest.taskImages,
+    taskEvents: manifest.taskEvents,
+  }
+}
+
 async function parseBackupArchiveFile(
   app: Parameters<FastifyPluginAsync>[0],
   archivePath: string,
@@ -1123,59 +1995,9 @@ async function parseBackupArchiveFile(
       kind: 'full' as const,
       archivePath,
       tempDir,
-      payload: {
-          providerProfiles: manifest.providerProfiles.map((profile) => ({
-            id: profile.id,
-            name: profile.name,
-            tagColor: profile.tagColor ?? null,
-            baseUrl: profile.baseUrl,
-            apiKeyEncrypted: encryptText(profile.apiKey, app.config.appSecret),
-            model: profile.model,
-            apiMode: profile.apiMode,
-            timeoutSeconds: profile.timeoutSeconds,
-            codexCli: profile.codexCli ? 1 : 0,
-            grokApiCompat: profile.grokApiCompat ? 1 : 0,
-            xaiImage2kEnabled: profile.xaiImage2kEnabled ? 1 : 0,
-            responseFormatB64Json: profile.responseFormatB64Json ? 1 : 0,
-            videoMaxResolution: profile.videoMaxResolution,
-            videoMaxDuration: profile.videoMaxDuration,
-            isDefault: profile.isDefault ? 1 : 0,
-            createdAt: profile.createdAt,
-            updatedAt: profile.updatedAt,
-          })),
-          appSettings: manifest.appSettings.map((setting) => ({
-            key: setting.key,
-            valueJson: JSON.stringify(setting.value),
-            updatedAt: setting.updatedAt,
-          })),
-          usageCodes: manifest.usageCodes.map((code) => ({
-            id: code.id,
-            codeHash: hashSecret(code.code, app.config.appSecret),
-            codeEncrypted: encryptText(code.code, app.config.appSecret),
-            name: code.name,
-            allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
-            isEnabled: code.isEnabled ? 1 : 0,
-            imageQuota: code.imageQuota,
-            providerImageQuotas: code.providerImageQuotas ?? null,
-            usedImageCredits: code.usedImageCredits,
-            providerUsedImageCredits: code.providerUsedImageCredits ?? null,
-            videoQuota: code.videoQuota,
-            providerVideoQuotas: code.providerVideoQuotas ?? null,
-            usedVideoCredits: code.usedVideoCredits,
-            providerUsedVideoCredits: code.providerUsedVideoCredits ?? null,
-            outputImageCount: code.outputImageCount,
-            outputVideoCount: code.outputVideoCount,
-            createdAt: code.createdAt,
-            updatedAt: code.updatedAt,
-            lastUsedAt: code.lastUsedAt,
-          })),
-          usageQuotaEvents: manifest.usageQuotaEvents,
-          usageCodeActivityLogs: manifest.usageCodeActivityLogs,
-          tasks: manifest.tasks,
-          taskImages: manifest.taskImages,
-          taskEvents: manifest.taskEvents,
-        },
+      payload: buildParsedPayloadFromFullManifest(app, manifest),
       files: extractedFiles,
+      cleanupPaths: [],
     }
   }
 
@@ -1206,6 +2028,43 @@ async function parseBackupArchiveFile(
     payload: buildLegacyImportPayload(app, legacyPayload),
     tempDir,
     files: extractedFiles,
+    cleanupPaths: [],
+  }
+}
+
+async function parseSplitBackupIndexFile(
+  app: Parameters<FastifyPluginAsync>[0],
+  indexPath: string,
+  availableFilePaths?: string[],
+): Promise<ParsedAdminBackupImport> {
+  const tempDir = await fs.mkdtemp(path.join(app.config.dataDir, 'backup-import-'))
+  const parsedIndex = splitBackupIndexSchema.parse(JSON.parse(await fs.readFile(indexPath, 'utf-8')))
+  const filesDir = path.join(tempDir, 'files')
+  await fs.mkdir(filesDir, { recursive: true })
+  const availableSet = new Set((availableFilePaths ?? []).map((item) => path.resolve(item)))
+  const extractedFiles: Array<{ filePath: string; tempPath: string }> = []
+
+  for (const part of parsedIndex.parts) {
+    const partPath = path.resolve(path.join(path.dirname(indexPath), part.name))
+    if (availableSet.size > 0 && !availableSet.has(partPath)) {
+      throw new Error(`备份缺少分包：${part.name}`)
+    }
+    await fs.access(partPath)
+    const directory = await unzipper.Open.file(partPath)
+    const requiredPaths = parsedIndex.files
+      .filter((item) => item.partName === part.name)
+      .map((item) => item.filePath)
+    const partExtracted = await extractArchiveEntriesToTempDir(directory, filesDir, requiredPaths)
+    extractedFiles.push(...partExtracted)
+  }
+
+  return {
+    kind: 'full',
+    archivePath: indexPath,
+    payload: buildParsedPayloadFromFullManifest(app, parsedIndex.manifest),
+    tempDir,
+    files: extractedFiles,
+    cleanupPaths: [],
   }
 }
 
@@ -1216,15 +2075,40 @@ async function parseBackupImportPayload(
   const contentType = request.headers['content-type'] ?? ''
 
   if (contentType.includes('multipart/form-data')) {
-    const file = await request.file()
-    if (!file) {
+    const parts = await request.files()
+    const uploadedPaths: string[] = []
+    const uploadBatchDir = path.join(app.config.backupImportsDir, `${Date.now()}`)
+    await fs.mkdir(uploadBatchDir, { recursive: true })
+    for await (const file of parts) {
+      const safeFileName = path.basename(file.filename || `backup-${Date.now()}.zip`).replace(/[^\w.-]+/g, '-')
+      const archivePath = path.join(uploadBatchDir, safeFileName)
+      await pipeline(file.file, createWriteStream(archivePath))
+      uploadedPaths.push(archivePath)
+    }
+
+    if (uploadedPaths.length === 0) {
       throw new Error('导入请求缺少备份文件')
     }
-    const safeFileName = path.basename(file.filename || `backup-${Date.now()}.zip`).replace(/[^\w.-]+/g, '-')
-    const archivePath = path.join(app.config.backupImportsDir, `${Date.now()}-${safeFileName}`)
-    await fs.mkdir(app.config.backupImportsDir, { recursive: true })
-    await pipeline(file.file, createWriteStream(archivePath))
-    return parseBackupArchiveFile(app, archivePath)
+
+    const indexFiles = uploadedPaths.filter((item) => path.extname(item).toLowerCase() === '.json')
+    if (indexFiles.length > 1) {
+      throw new Error('一次只能上传一组备份引导文件')
+    }
+    if (indexFiles.length === 1) {
+      const parsed = await parseSplitBackupIndexFile(app, indexFiles[0], uploadedPaths)
+      return {
+        ...parsed,
+        cleanupPaths: [uploadBatchDir],
+      }
+    }
+    if (uploadedPaths.length !== 1) {
+      throw new Error('单包备份只能上传一个 ZIP 文件')
+    }
+    const parsed = await parseBackupArchiveFile(app, uploadedPaths[0])
+    return {
+      ...parsed,
+      cleanupPaths: [uploadBatchDir],
+    }
   }
 
   const payload = backupImportSchema.parse(request.body)
@@ -1260,6 +2144,7 @@ async function parseBackupImportPayload(
     payload: buildLegacyImportPayload(app, legacyPayload),
     tempDir,
     files,
+    cleanupPaths: [],
   }
 }
 
@@ -1757,144 +2642,163 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
     return {
-      items: await listBackupArchiveFiles(app.config.backupsDir),
+      items: await listBackupImportCandidates(app.config.backupsDir),
     }
   })
 
   app.post('/api/admin/data/import-from-server', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
-    const payload = serverBackupImportSchema.parse(request.body)
-    const archivePath = resolveBackupArchivePath(app, payload.archivePath)
-    await fs.access(archivePath)
-    const parsed = await parseBackupArchiveFile(app, archivePath)
-    const currentSessionToken = getSessionToken(request)
+    return runImportRestoreJob(app, async () => {
+      const payload = serverBackupImportSchema.parse(request.body)
+      const archivePath = resolveBackupArchivePath(app, payload.archivePath)
+      await fs.access(archivePath)
+      const parsed = path.extname(archivePath).toLowerCase() === '.json'
+        ? await parseSplitBackupIndexFile(app, archivePath)
+        : await parseBackupArchiveFile(app, archivePath)
+      const currentSessionToken = getSessionToken(request)
 
-    try {
-      await fs.rm(app.config.mediaDir, { recursive: true, force: true })
-      await fs.mkdir(app.config.mediaDir, { recursive: true })
-      await fs.mkdir(app.config.uploadsDir, { recursive: true })
-      await fs.mkdir(app.config.masksDir, { recursive: true })
-      await fs.mkdir(app.config.outputsDir, { recursive: true })
-      await fs.mkdir(app.config.thumbsDir, { recursive: true })
+      try {
+        await fs.rm(app.config.mediaDir, { recursive: true, force: true })
+        await fs.mkdir(app.config.mediaDir, { recursive: true })
+        await fs.mkdir(app.config.uploadsDir, { recursive: true })
+        await fs.mkdir(app.config.masksDir, { recursive: true })
+        await fs.mkdir(app.config.outputsDir, { recursive: true })
+        await fs.mkdir(app.config.thumbsDir, { recursive: true })
 
-      for (const file of parsed.files) {
-        const absolutePath = path.join(app.config.mediaDir, file.filePath)
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-        await fs.copyFile(file.tempPath, absolutePath)
+        for (const file of parsed.files) {
+          const absolutePath = path.join(app.config.mediaDir, file.filePath)
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+          await fs.copyFile(file.tempPath, absolutePath)
+        }
+
+        app.db.replaceFullBackup(parsed.payload)
+        if (currentSessionToken) {
+          const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
+          app.db.createAuthSession({
+            id: crypto.randomUUID(),
+            tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
+            role: 'admin',
+            usageCodeId: null,
+            expiresAt: expiresAt.toISOString(),
+          })
+          setSessionCookie(reply, currentSessionToken, expiresAt)
+        } else {
+          const nextSession = createSession(app, {
+            role: 'admin',
+            usageCodeId: null,
+          })
+          setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
+        }
+
+        return {
+          ok: true,
+          importedTasks: parsed.payload.tasks.length,
+          importedImages: parsed.payload.taskImages.length,
+          importedProviderProfiles: parsed.payload.providerProfiles.length,
+          importedUsageCodes: parsed.payload.usageCodes.length,
+        }
+      } finally {
+        await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
       }
-
-      app.db.replaceFullBackup(parsed.payload)
-      if (currentSessionToken) {
-        const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
-        app.db.createAuthSession({
-          id: crypto.randomUUID(),
-          tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
-          role: 'admin',
-          usageCodeId: null,
-          expiresAt: expiresAt.toISOString(),
-        })
-        setSessionCookie(reply, currentSessionToken, expiresAt)
-      } else {
-        const nextSession = createSession(app, {
-          role: 'admin',
-          usageCodeId: null,
-        })
-        setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
-      }
-
-      return {
-        ok: true,
-        importedTasks: parsed.payload.tasks.length,
-        importedImages: parsed.payload.taskImages.length,
-        importedProviderProfiles: parsed.payload.providerProfiles.length,
-        importedUsageCodes: parsed.payload.usageCodes.length,
-      }
-    } finally {
-      await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
-    }
+    })
   })
 
   app.post('/api/admin/data/import', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
-    const parsed = await parseBackupImportPayload(app, request)
-    const currentSessionToken = getSessionToken(request)
+    return runImportRestoreJob(app, async () => {
+      const parsed = await parseBackupImportPayload(app, request)
+      const currentSessionToken = getSessionToken(request)
 
-    try {
-      await fs.rm(app.config.mediaDir, { recursive: true, force: true })
-      await fs.mkdir(app.config.mediaDir, { recursive: true })
-      await fs.mkdir(app.config.uploadsDir, { recursive: true })
-      await fs.mkdir(app.config.masksDir, { recursive: true })
-      await fs.mkdir(app.config.outputsDir, { recursive: true })
-      await fs.mkdir(app.config.thumbsDir, { recursive: true })
+      try {
+        await fs.rm(app.config.mediaDir, { recursive: true, force: true })
+        await fs.mkdir(app.config.mediaDir, { recursive: true })
+        await fs.mkdir(app.config.uploadsDir, { recursive: true })
+        await fs.mkdir(app.config.masksDir, { recursive: true })
+        await fs.mkdir(app.config.outputsDir, { recursive: true })
+        await fs.mkdir(app.config.thumbsDir, { recursive: true })
 
-      for (const file of parsed.files) {
-        const absolutePath = path.join(app.config.mediaDir, file.filePath)
-        await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-        await fs.copyFile(file.tempPath, absolutePath)
-      }
+        for (const file of parsed.files) {
+          const absolutePath = path.join(app.config.mediaDir, file.filePath)
+          await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+          await fs.copyFile(file.tempPath, absolutePath)
+        }
 
-      app.db.replaceFullBackup(parsed.payload)
-      if (currentSessionToken) {
-        const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
-        app.db.createAuthSession({
-          id: crypto.randomUUID(),
-          tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
-          role: 'admin',
-          usageCodeId: null,
-          expiresAt: expiresAt.toISOString(),
-        })
-        setSessionCookie(reply, currentSessionToken, expiresAt)
-      } else {
-        const nextSession = createSession(app, {
-          role: 'admin',
-          usageCodeId: null,
-        })
-        setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
-      }
+        app.db.replaceFullBackup(parsed.payload)
+        if (currentSessionToken) {
+          const expiresAt = new Date(Date.now() + RESTORED_ADMIN_SESSION_TTL_MS)
+          app.db.createAuthSession({
+            id: crypto.randomUUID(),
+            tokenHash: hashSecret(currentSessionToken, app.config.appSecret),
+            role: 'admin',
+            usageCodeId: null,
+            expiresAt: expiresAt.toISOString(),
+          })
+          setSessionCookie(reply, currentSessionToken, expiresAt)
+        } else {
+          const nextSession = createSession(app, {
+            role: 'admin',
+            usageCodeId: null,
+          })
+          setSessionCookie(reply, nextSession.token, nextSession.expiresAt)
+        }
 
-      return {
-        ok: true,
-        uploadedArchivePath: parsed.archivePath,
-        importedTasks: parsed.payload.tasks.length,
-        importedImages: parsed.payload.taskImages.length,
-        importedProviderProfiles: parsed.payload.providerProfiles.length,
-        importedUsageCodes: parsed.payload.usageCodes.length,
+        return {
+          ok: true,
+          uploadedArchivePath: parsed.archivePath,
+          importedTasks: parsed.payload.tasks.length,
+          importedImages: parsed.payload.taskImages.length,
+          importedProviderProfiles: parsed.payload.providerProfiles.length,
+          importedUsageCodes: parsed.payload.usageCodes.length,
+        }
+      } finally {
+        await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
+        for (const cleanupPath of parsed.cleanupPaths) {
+          await fs.rm(cleanupPath, { recursive: true, force: true }).catch(() => undefined)
+        }
       }
-    } finally {
-      await fs.rm(parsed.tempDir, { recursive: true, force: true }).catch(() => undefined)
-      if (parsed.archivePath) {
-        await fs.rm(parsed.archivePath, { force: true }).catch(() => undefined)
-      }
+    })
+  })
+
+  app.get('/api/admin/data/export/status', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return getBackupJobState(app)
+  })
+
+  app.get('/api/admin/data/management-logs', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return {
+      items: listManagementOperationLogs(app, 20),
     }
   })
 
-  app.get('/api/admin/data/export', async (request, reply) => {
+  app.post('/api/admin/data/export/start', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
-    const manifest = buildFullBackupManifest(app)
-    const zipFiles: Record<string, Uint8Array> = {
-      'manifest.json': Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'),
+    const current = getBackupJobState(app)
+    if (current.active) {
+      reply.code(409)
+      return {
+        message: getMaintenanceMessage(),
+        state: current,
+      }
     }
 
-    for (const image of manifest.taskImages) {
-      const absolutePath = path.join(app.config.mediaDir, image.filePath)
-      zipFiles[image.filePath] = new Uint8Array(await fs.readFile(absolutePath))
-    }
+    backupExportRunner = runBackupExportJob(app)
+      .catch((error) => {
+        app.log.error(error, '服务器备份导出失败')
+      })
+      .finally(() => {
+        backupExportRunner = null
+      })
 
-    const zipped = zipSync(zipFiles, { level: 6 })
-    await fs.mkdir(app.config.backupsDir, { recursive: true })
-    const filename = `gpt-image-playground-full-backup-${Date.now()}.zip`
-    const filePath = path.join(app.config.backupsDir, filename)
-    await fs.writeFile(filePath, Buffer.from(zipped))
     reply.header('Cache-Control', 'no-store')
-    return {
-      ok: true,
-      filePath,
-      filename,
-      bytes: zipped.byteLength,
-    }
+    return getBackupJobState(app)
   })
 
   app.get('/api/user/data/export-media/summary', async (request, reply) => {
@@ -1970,68 +2874,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
     const payload = resetRemoteDataSchema.parse(request.body)
-
-    if (payload.mode === 'usage_code_tasks_only') {
-      const usageCodeTasks = app.db.listAllUsageCodeTasks()
-
-      for (const task of usageCodeTasks) {
-        const images = await removeTaskMediaFiles(app, task.id)
-        const outputImageCount = images.filter((image) => image.kind === 'output').length
-        const outputVideoCount = images.filter((image) => image.kind === 'video_output').length
-
-        app.taskWorker.cancel(task.id)
-        if (task.ownerUsageCodeId) {
-          app.db.insertUsageCodeActivityLog({
-            usageCodeId: task.ownerUsageCodeId,
-            taskId: task.id,
-            actorKind: 'admin',
-            eventType: 'admin_task_purged',
-            message: `管理员批量清理使用码任务，删除图片 ${outputImageCount} 张，视频 ${outputVideoCount} 个`,
-          })
-        }
-        app.db.deleteTask(task.id)
-        app.taskEvents.emitDeleted(task.id, {
-          ownerUsageCodeId: task.ownerUsageCodeId,
-          ownerKind: task.ownerKind,
-        })
-      }
-
-      return {
-        ok: true,
-        mode: payload.mode,
-        deletedTasks: usageCodeTasks.length,
-      }
+    const currentState = getBackupJobState(app)
+    if (currentState.active) {
+      reply.code(409)
+      return { message: '当前已有维护任务正在执行，请稍后再试' }
     }
 
-    const existingTasks = app.db.listTasks(200).map((task) => ({
-      id: task.id,
-      ownerUsageCodeId: task.ownerUsageCodeId,
-      ownerKind: task.ownerKind,
-    }))
-
-    await fs.rm(app.config.mediaDir, { recursive: true, force: true })
-    await fs.mkdir(app.config.mediaDir, { recursive: true })
-    await fs.mkdir(app.config.uploadsDir, { recursive: true })
-    await fs.mkdir(app.config.masksDir, { recursive: true })
-    await fs.mkdir(app.config.outputsDir, { recursive: true })
-    await fs.mkdir(app.config.thumbsDir, { recursive: true })
-
-    if (payload.mode === 'all') {
-      app.db.clearRuntimeData()
-    } else {
-      app.db.clearTaskData()
-    }
-
-    for (const task of existingTasks) {
-      app.taskEvents.emitDeleted(task.id, {
-        ownerUsageCodeId: task.ownerUsageCodeId,
-        ownerKind: task.ownerKind,
-      })
-    }
-
-    return {
-      ok: true,
-      mode: payload.mode,
-    }
+    remoteResetRunner = runRemoteResetJob(app, payload.mode).catch((error) => {
+      app.log.error({ err: error, mode: payload.mode }, '远端清理任务失败')
+    })
+    reply.header('Cache-Control', 'no-store')
+    return getBackupJobState(app)
   })
 }

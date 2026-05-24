@@ -11,6 +11,7 @@ import {
   setSessionCookie,
   verifyAdminPassword,
 } from '../lib/auth.js'
+import { getBackupJobState, getMaintenanceMessage } from '../lib/maintenance.js'
 
 const adminLoginSchema = z.object({
   password: z.string().min(1),
@@ -110,6 +111,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       reply.code(429)
       return { message: error instanceof Error ? error.message : '尝试次数过多，请稍后再试' }
     }
+    if (getBackupJobState(app).active) {
+      reply.code(503)
+      return { message: getMaintenanceMessage() }
+    }
     const distribution = app.db.getDistributionSettings()
     if (!distribution.enabled) {
       reply.code(403)
@@ -149,6 +154,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       reply.code(429)
       return { message: error instanceof Error ? error.message : '尝试次数过多，请稍后再试' }
+    }
+    if (getBackupJobState(app).active) {
+      reply.code(503)
+      return { message: getMaintenanceMessage() }
     }
     const auth = await getAuthContext(app, request)
     if (!auth || auth.role !== 'user') {

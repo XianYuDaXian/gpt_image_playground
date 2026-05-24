@@ -77,6 +77,15 @@ export interface TaskImageRecord {
   createdAt: string
 }
 
+export interface UsageCodeTaskMediaCleanupRecord {
+  taskId: string
+  ownerUsageCodeId: string | null
+  ownerKind: 'admin' | 'usage_code' | 'legacy'
+  kind: 'input' | 'mask' | 'output' | 'thumb' | 'video_input' | 'video_output' | null
+  filePath: string | null
+  bytes: number | null
+}
+
 export interface UsageCodeRecord {
   id: string
   name: string
@@ -2193,6 +2202,29 @@ ${selectUsageCodeFields()}
       .all() as TaskRecord[]
   }
 
+  listUsageCodeTaskMediaCleanupRecords() {
+    return this.listTaskMediaCleanupRecords('usage_code')
+  }
+
+  listTaskMediaCleanupRecords(ownerKind?: 'usage_code' | 'admin' | 'legacy') {
+    const whereClause = ownerKind ? 'WHERE tasks.owner_kind = ?' : ''
+    return this.sqlite
+      .prepare(`
+        SELECT
+          tasks.id as taskId,
+          tasks.owner_usage_code_id as ownerUsageCodeId,
+          tasks.owner_kind as ownerKind,
+          task_images.kind,
+          task_images.file_path as filePath,
+          task_images.bytes as bytes
+        FROM tasks
+        LEFT JOIN task_images ON task_images.task_id = tasks.id
+        ${whereClause}
+        ORDER BY tasks.created_at DESC, task_images.created_at ASC, task_images.id ASC
+      `)
+      .all(...(ownerKind ? [ownerKind] : [])) as UsageCodeTaskMediaCleanupRecord[]
+  }
+
   getTask(id: string) {
     return this.sqlite
       .prepare(`
@@ -2928,6 +2960,33 @@ ${selectUsageCodeFields()}
       this.sqlite.prepare('DELETE FROM app_settings').run()
       this.sqlite.prepare('DELETE FROM provider_profiles').run()
       this.sqlite.prepare('DELETE FROM usage_codes').run()
+    })
+
+    tx()
+  }
+
+  clearUsageCodeTaskData() {
+    const tx = this.sqlite.transaction(() => {
+      this.sqlite.prepare(`
+        DELETE FROM task_events
+        WHERE task_id IN (
+          SELECT id
+          FROM tasks
+          WHERE owner_kind = 'usage_code'
+        )
+      `).run()
+      this.sqlite.prepare(`
+        DELETE FROM task_images
+        WHERE task_id IN (
+          SELECT id
+          FROM tasks
+          WHERE owner_kind = 'usage_code'
+        )
+      `).run()
+      this.sqlite.prepare(`
+        DELETE FROM tasks
+        WHERE owner_kind = 'usage_code'
+      `).run()
     })
 
     tx()

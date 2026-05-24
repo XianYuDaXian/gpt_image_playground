@@ -8,6 +8,7 @@ import { appConfig } from './config.js'
 import { AppDatabase } from './lib/db.js'
 import { encryptText } from './lib/crypto.js'
 import { TaskEventBus } from './lib/eventBus.js'
+import { getBackupJobState, getMaintenanceMessage } from './lib/maintenance.js'
 import { TaskWorker } from './lib/taskWorker.js'
 import { canAccessTask, getAuthContext } from './lib/auth.js'
 import { authRoutes } from './routes/auth.js'
@@ -54,6 +55,16 @@ app.decorate('taskWorker', new TaskWorker(app.db, app.taskEvents, {
 }))
 
 app.addHook('preHandler', async (request, reply) => {
+  const maintenance = getBackupJobState(app)
+  const isReadOnlyMethod = request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS'
+  const isMaintenanceExempt = request.url.startsWith('/api/auth/admin/login')
+    || request.url.startsWith('/api/auth/logout')
+
+  if (maintenance.active && !isReadOnlyMethod && !isMaintenanceExempt) {
+    reply.code(503)
+    return reply.send({ message: getMaintenanceMessage() })
+  }
+
   if (!request.url.startsWith('/media/')) return
 
   const url = new URL(request.url, 'http://local')

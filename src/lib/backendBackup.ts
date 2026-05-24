@@ -1,15 +1,10 @@
+import type { MaintenanceStatus } from './backendAuth'
+
 export interface UsageCodeMediaExportSummary {
   imageCount: number
   videoCount: number
   totalBytes: number
 }
-export interface AdminBackupExportResult {
-  ok: true
-  filePath: string
-  filename: string
-  bytes: number
-}
-
 export interface AdminBackupImportResult {
   ok: true
   uploadedArchivePath: string | null
@@ -20,10 +15,15 @@ export interface AdminBackupImportResult {
 }
 
 export interface AdminBackupImportCandidate {
+  kind: 'single' | 'split'
   filePath: string
   fileName: string
+  displayName?: string
   bytes: number
   modifiedAt: string
+  partCount?: number
+  foundPartCount?: number
+  missingPartNames?: string[]
 }
 
 async function readResponseJson<T>(response: Response): Promise<T> {
@@ -41,8 +41,16 @@ async function readResponseJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export async function exportBackendBackup() {
-  return readResponseJson<AdminBackupExportResult>(await fetch('/api/admin/data/export', {
+export async function startBackendBackupExport() {
+  return readResponseJson<MaintenanceStatus>(await fetch('/api/admin/data/export/start', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'include',
+  }))
+}
+
+export async function fetchBackendBackupExportStatus() {
+  return readResponseJson<MaintenanceStatus>(await fetch('/api/admin/data/export/status', {
     cache: 'no-store',
     credentials: 'include',
   }))
@@ -82,9 +90,11 @@ export async function fetchUsageCodeMediaExportSummary() {
   )
 }
 
-export async function importBackendBackup(file: File) {
+export async function importBackendBackup(files: File[]) {
   const formData = new FormData()
-  formData.append('archive', file, file.name)
+  for (const file of files) {
+    formData.append('archive', file, file.name)
+  }
 
   return readResponseJson<AdminBackupImportResult>(
     await fetch('/api/admin/data/import', {

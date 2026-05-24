@@ -11,12 +11,15 @@ export default function LoginPage() {
   const showToast = useStore((s) => s.showToast)
   const themeMode = useStore((s) => s.themeMode)
   const setThemeMode = useStore((s) => s.setThemeMode)
-  const [mode, setMode] = useState<LoginMode>(authStatus?.distributionEnabled ? 'code' : 'admin')
+  const maintenanceActive = Boolean(authStatus?.maintenance.active)
+  const [mode, setMode] = useState<LoginMode>(
+    authStatus?.distributionEnabled && !maintenanceActive ? 'code' : 'admin',
+  )
   const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const canUseCode = Boolean(authStatus?.distributionEnabled)
+  const canUseCode = Boolean(authStatus?.distributionEnabled) && !maintenanceActive
 
   useEffect(() => {
     if (!canUseCode && mode === 'code') {
@@ -102,6 +105,12 @@ export default function LoginPage() {
         {!authStatus?.adminConfigured && (
           <div className="mb-4 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-700 dark:border-orange-400/20 dark:bg-orange-500/10 dark:text-orange-300">
             服务端未配置 ADMIN_PASSWORD。
+          </div>
+        )}
+
+        {maintenanceActive && (
+          <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:border-blue-400/20 dark:bg-blue-500/10 dark:text-blue-200">
+            管理员正在维护服务器，请稍等几分钟。
           </div>
         )}
 

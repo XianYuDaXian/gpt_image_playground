@@ -1,5 +1,6 @@
 import { normalizeBaseUrl } from './devProxy'
 import type { AppSettings } from '../types'
+import type { MaintenanceStatus } from './backendAuth'
 
 export interface BackendRuntimeSettings {
   id?: string
@@ -66,6 +67,20 @@ export interface BackendProviderOption {
 export interface BackendDistributionSettings {
   enabled: boolean
   maxConcurrentTasks: number
+}
+
+export interface BackendManagementOperationLog {
+  id: string
+  operation:
+    | 'backup_export'
+    | 'backup_import'
+    | 'remote_reset_usage_code'
+    | 'remote_reset_tasks'
+    | 'remote_reset_all'
+  status: 'completed' | 'failed'
+  title: string
+  detail: string
+  createdAt: string
 }
 
 export interface BackendReminderItem {
@@ -281,7 +296,12 @@ export async function resetBackendRemoteData(mode: 'tasks' | 'all' | 'usage_code
     body: JSON.stringify({ mode }),
   })
 
-  return readResponseJson<{ ok: true; mode: 'tasks' | 'all' | 'usage_code_tasks_only'; deletedTasks?: number }>(response)
+  return readResponseJson<MaintenanceStatus>(response)
+}
+
+export async function fetchBackendManagementLogs() {
+  const response = await fetch('/api/admin/data/management-logs', { cache: 'no-store' })
+  return readResponseJson<{ items: BackendManagementOperationLog[] }>(response)
 }
 
 export async function fetchBackendDistribution(): Promise<BackendDistributionSettings> {

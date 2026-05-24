@@ -1,5 +1,30 @@
 export type AuthRole = 'admin' | 'user'
 
+export interface MaintenanceStatus {
+  active: boolean
+  operation:
+    | 'backup_export'
+    | 'backup_import'
+    | 'remote_reset_usage_code'
+    | 'remote_reset_tasks'
+    | 'remote_reset_all'
+    | null
+  phase: 'idle' | 'preparing' | 'running' | 'completed' | 'failed'
+  message: string
+  progressPercent: number
+  startedAt: string | null
+  finishedAt: string | null
+  totalFiles: number
+  processedFiles: number
+  totalBytes: number
+  processedBytes: number
+  waitingRunningTasks: number
+  waitingPendingTasks: number
+  filename: string | null
+  filePath: string | null
+  error: string | null
+}
+
 export interface AuthUsageCode {
   id: string
   /** 普通用户侧显示的是使用码本身，不是管理员备注名。 */
@@ -26,6 +51,7 @@ export interface AuthStatus {
   role: AuthRole | null
   distributionEnabled: boolean
   adminConfigured: boolean
+  maintenance: MaintenanceStatus
   user: AuthUsageCode | null
   usageCodes: AuthUsageCode[]
 }

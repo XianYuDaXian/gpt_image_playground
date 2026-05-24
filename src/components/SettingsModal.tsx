@@ -13,6 +13,7 @@ import {
   fetchBackendProviderProfiles,
   fetchBackendRuntimeSettings,
   fetchBackendUsageCodes,
+  fetchBackendManagementLogs,
   resetBackendRemoteData,
   saveBackendRuntimePreferences,
   saveBackendDistribution,
@@ -20,6 +21,7 @@ import {
   updateBackendUsageCode,
   type BackendReminderItem,
   type BackendDistributionSettings,
+  type BackendManagementOperationLog,
   type BackendProviderOption,
   type BackendProviderProfile,
   type BackendUsageCode,
@@ -27,7 +29,7 @@ import {
 import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
 import {
   fetchAdminBackupImportCandidates,
-  exportBackendBackup,
+  startBackendBackupExport,
   exportUsageCodeMediaArchive,
   fetchUsageCodeMediaExportSummary,
   importBackendBackup,
@@ -35,7 +37,7 @@ import {
   type AdminBackupImportCandidate,
   type UsageCodeMediaExportSummary,
 } from '../lib/backendBackup'
-import { addSessionUsageCode } from '../lib/backendAuth'
+import { addSessionUsageCode, fetchAuthStatus } from '../lib/backendAuth'
 import { fetchBackendTasks } from '../lib/backendTasks'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { useStore, clearAllData, clearLocalTaskCache } from '../store'
@@ -95,6 +97,8 @@ function createEmptyReminder(): BackendReminderItem {
     endTime: '21:00',
   }
 }
+
+const COMPLETED_MAINTENANCE_CARD_MS = 10_000
 
 function normalizeReminderForEditor(item: BackendReminderItem): BackendReminderItem {
   const imageDataUrls = Array.from(new Set([
@@ -292,6 +296,8 @@ export default function SettingsModal() {
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
   const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
   const [showImportCandidates, setShowImportCandidates] = useState(false)
+  const [managementLogs, setManagementLogs] = useState<BackendManagementOperationLog[]>([])
+  const [maintenanceCardNow, setMaintenanceCardNow] = useState(() => Date.now())
   const importInputRef = useRef<HTMLInputElement>(null)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
@@ -299,6 +305,20 @@ export default function SettingsModal() {
 
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
+  const backupState = authStatus?.maintenance
+  const shouldShowMaintenanceCard = Boolean(
+    backupState
+    && backupState.phase !== 'idle'
+    && (
+      backupState.active
+      || backupState.phase === 'failed'
+      || (
+        backupState.phase === 'completed'
+        && backupState.finishedAt
+        && maintenanceCardNow - new Date(backupState.finishedAt).getTime() <= COMPLETED_MAINTENANCE_CARD_MS
+      )
+    ),
+  )
   const userUsageCodes = authStatus?.usageCodes ?? []
   const hasUnreadEndedReminders = useMemo(
     () => reminderDrafts.some((item) => isCompletedReminderUnread(item)),
@@ -545,7 +565,7 @@ export default function SettingsModal() {
   }
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders, nextManagementLogs] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
       isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
       fetchBackendProviderOptions().catch(() => []),
@@ -553,6 +573,7 @@ export default function SettingsModal() {
       isAdmin ? fetchBackendUsageCodes().catch(() => []) : Promise.resolve([]),
       isAdmin ? Promise.resolve(null) : fetchUsageCodeMediaExportSummary().catch(() => null),
       isAdmin ? fetchAdminBackendReminders().catch(() => []) : fetchBackendReminders().catch(() => []),
+      isAdmin ? fetchBackendManagementLogs().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
     ])
 
     const nextDraft: AppSettings = {
@@ -621,6 +642,7 @@ export default function SettingsModal() {
     })
     setUsageCodes(nextUsageCodes)
     setUsageCodeExportSummary(nextUsageCodeExportSummary)
+    setManagementLogs(nextManagementLogs.items)
     setExpandedUsageCodeIds((prev) => {
       const existing = new Set(prev)
       return nextUsageCodes
@@ -647,6 +669,23 @@ export default function SettingsModal() {
       )
     })
   }, [showSettings, isAdmin])
+
+  useEffect(() => {
+    if (!showSettings || !isAdmin || activeTab !== 'data') return
+    if (backupState?.phase !== 'completed' && backupState?.phase !== 'failed') return
+    void fetchBackendManagementLogs()
+      .then((result) => setManagementLogs(result.items))
+      .catch(() => undefined)
+  }, [showSettings, isAdmin, activeTab, backupState?.phase, backupState?.finishedAt])
+
+  useEffect(() => {
+    if (!showSettings || activeTab !== 'data') return
+    if (backupState?.phase !== 'completed' || !backupState.finishedAt) return
+    const remainingMs = COMPLETED_MAINTENANCE_CARD_MS - (Date.now() - new Date(backupState.finishedAt).getTime())
+    if (remainingMs <= 0) return
+    const timer = window.setTimeout(() => setMaintenanceCardNow(Date.now()), remainingMs + 50)
+    return () => window.clearTimeout(timer)
+  }, [showSettings, activeTab, backupState?.phase, backupState?.finishedAt])
 
   useCloseOnEscape(showSettings, () => setShowSettings(false))
 
@@ -835,19 +874,32 @@ export default function SettingsModal() {
     })
   }
 
-  const handleExportBackup = async () => {
+  const startBackupExportNow = async () => {
     setIsExporting(true)
     try {
-      const result = await exportBackendBackup()
-      useStore.getState().showToast(`备份已保存到服务器：${result.filePath}`, 'success')
+      await startBackendBackupExport()
+      const nextStatus = await fetchAuthStatus()
+      setAuthStatus(nextStatus)
+      useStore.getState().showToast('服务器备份任务已启动', 'success')
     } catch (err) {
       useStore.getState().showToast(
-        `导出备份失败：${err instanceof Error ? err.message : String(err)}`,
+        `启动备份失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
     } finally {
       setIsExporting(false)
     }
+  }
+
+  const handleExportBackup = () => {
+    setConfirmDialog({
+      title: '开始服务器备份',
+      message: '确认后会先停止新的写入请求。系统会等待现有任务队列执行完成，再自动冻结普通用户和管理员的写入操作，然后开始生成服务器备份包。',
+      confirmText: '确认开始',
+      action: () => {
+        void startBackupExportNow()
+      },
+    })
   }
 
   const handleExportUsageCodeMedia = async () => {
@@ -984,13 +1036,13 @@ export default function SettingsModal() {
   }
 
   const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+    const files = Array.from(event.target.files ?? [])
     event.target.value = ''
-    if (!file) return
+    if (!files.length) return
 
     setIsImporting(true)
     try {
-      const result = await importBackendBackup(file)
+      const result = await importBackendBackup(files)
       await clearAllData({ silent: true })
       await refreshFromBackend()
       await loadSettings()
@@ -1053,30 +1105,17 @@ export default function SettingsModal() {
   const handleResetRemoteData = async (mode: 'tasks' | 'all' | 'usage_code_tasks_only') => {
     setIsClearingRemote(true)
     try {
-      const result = await resetBackendRemoteData(mode)
-      if (mode === 'all') {
-        await clearAllData({ silent: true })
-        setDraft(DEFAULT_SETTINGS)
-        setProfileDraft(createEmptyProfile())
-      } else if (mode === 'usage_code_tasks_only') {
-        await clearLocalTaskCache({ silent: true })
-        await refreshFromBackend()
-      } else {
-        await clearLocalTaskCache({ silent: true })
-        await refreshFromBackend()
-      }
-      useStore.getState().showToast(
-        mode === 'all'
-          ? '远端数据与设置已清空'
-          : mode === 'usage_code_tasks_only'
-            ? `已清除 ${result.deletedTasks ?? 0} 条使用码任务与产物`
-            : '远端任务与图片已清空',
-        'success',
-      )
+      await resetBackendRemoteData(mode)
+      const latestAuth = await fetchAuthStatus()
+      useStore.getState().setAuthStatus(latestAuth)
+      useStore.getState().showToast('清理任务已提交，请等待进度完成', 'success')
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       useStore.getState().showToast(
-        `清空远端存储失败：${err instanceof Error ? err.message : String(err)}`,
-        'error',
+        message.includes('当前已有维护任务正在执行')
+          ? '当前已有清理或备份任务正在执行，请等待完成后再试'
+          : `清空远端存储失败：${message}`,
+        message.includes('当前已有维护任务正在执行') ? 'info' : 'error',
       )
     } finally {
       setIsClearingRemote(false)
@@ -2505,38 +2544,124 @@ export default function SettingsModal() {
 
           {activeTab === 'data' && isAdmin && (
             <div className="space-y-3">
+              {shouldShowMaintenanceCard && backupState && (
+                <div className="rounded-2xl border border-blue-200/70 bg-blue-50/70 p-4 dark:border-blue-400/20 dark:bg-blue-500/10">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                        {backupState.operation === 'backup_import'
+                          ? backupState.phase === 'completed'
+                            ? '服务器备份恢复已完成'
+                            : backupState.phase === 'failed'
+                              ? '服务器备份恢复失败'
+                              : '正在恢复服务器备份'
+                          : backupState.operation === 'backup_export'
+                            ? backupState.phase === 'preparing'
+                              ? '正在等待任务队列完成'
+                              : backupState.phase === 'running'
+                                ? '正在生成服务器备份包'
+                                : backupState.phase === 'completed'
+                                  ? '服务器备份已完成'
+                                  : '服务器备份失败'
+                            : backupState.operation === 'remote_reset_usage_code'
+                              ? backupState.phase === 'completed'
+                                ? '使用码任务与产物已清理完成'
+                                : backupState.phase === 'failed'
+                                  ? '使用码任务与产物清理失败'
+                                  : '正在清理使用码任务与产物'
+                              : backupState.operation === 'remote_reset_all'
+                                ? backupState.phase === 'completed'
+                                  ? '远端全部数据已清空'
+                                  : backupState.phase === 'failed'
+                                    ? '远端全部数据清空失败'
+                                    : '正在清空远端全部'
+                                : backupState.phase === 'completed'
+                                  ? '远端记录已清空'
+                                  : backupState.phase === 'failed'
+                                    ? '远端记录清空失败'
+                                    : '正在清空远端记录'}
+                      </div>
+                      <div className="mt-1 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                        {backupState.error || backupState.message}
+                      </div>
+                    </div>
+                    <div className="text-sm font-semibold text-blue-800 dark:text-blue-100">{backupState.progressPercent}%</div>
+                  </div>
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-blue-200/70 dark:bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-blue-500 transition-[width] duration-300"
+                      style={{ width: `${Math.max(4, backupState.progressPercent)}%` }}
+                    />
+                  </div>
+                  <div className="mt-3 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                    {backupState.operation === 'backup_import'
+                      ? '恢复期间普通用户与管理员写入操作都会暂停。'
+                      : backupState.operation?.startsWith('remote_reset_')
+                        ? backupState.phase === 'preparing'
+                          ? `执行中 ${backupState.waitingRunningTasks} 个，排队中 ${backupState.waitingPendingTasks} 个`
+                          : `已处理 ${backupState.processedFiles}/${backupState.totalFiles} 个步骤，${formatBytes(backupState.processedBytes)}/${formatBytes(backupState.totalBytes)}`
+                      : backupState.phase === 'preparing'
+                        ? `执行中 ${backupState.waitingRunningTasks} 个，排队中 ${backupState.waitingPendingTasks} 个`
+                        : `已处理 ${backupState.processedFiles}/${backupState.totalFiles} 个文件，${formatBytes(backupState.processedBytes)}/${formatBytes(backupState.totalBytes)}`}
+                  </div>
+                  {backupState.filePath && (
+                    <div className="mt-2 break-all text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                      {backupState.filePath}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="rounded-2xl border border-gray-200/80 bg-white/50 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="text-sm font-medium text-gray-800 dark:text-gray-100">数据管理操作日志</div>
+                <div className="mt-3 space-y-2">
+                  {managementLogs.length ? managementLogs.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-gray-200/70 bg-gray-50/70 px-3 py-2 dark:border-white/[0.06] dark:bg-white/[0.03]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 break-words text-sm text-gray-800 dark:text-gray-100">{item.title}</div>
+                        <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">{formatLocalDateTime(item.createdAt)}</div>
+                      </div>
+                      <div className="mt-1 break-all text-xs leading-5 text-gray-500 dark:text-gray-400">{item.detail}</div>
+                    </div>
+                  )) : (
+                    <div className="text-xs leading-5 text-gray-500 dark:text-gray-400">最近还没有数据管理操作日志。</div>
+                  )}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
                   onClick={handleExportBackup}
-                  disabled={isExporting || isImporting || isClearingRemote}
+                  disabled={isExporting || isImporting || isClearingRemote || Boolean(backupState?.active)}
                   className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-4 py-2.5 text-sm text-gray-700 transition hover:bg-gray-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
                 >
-                  {isExporting ? '打包中...' : '生成服务器备份包'}
+                  {isExporting ? '提交中...' : backupState?.active ? '备份进行中' : '生成服务器备份包'}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleLoadImportCandidates()}
-                  disabled={isImporting || isExporting || isClearingRemote}
+                  disabled={isImporting || isExporting || isClearingRemote || Boolean(backupState?.active)}
                   className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-4 py-2.5 text-sm text-gray-700 transition hover:bg-gray-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
                 >
                   {isImporting ? '读取中...' : '选择并恢复备份'}
                 </button>
               </div>
               <div className="rounded-xl border border-dashed border-gray-200/80 bg-white/40 px-3 py-2 text-xs leading-5 text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-400">
-                备份会直接保存到服务器本地目录。完成后会提示文件路径。恢复时会先把压缩包上传到服务器目录，再从该文件执行恢复。
+                每次服务器备份都会写入 `backups/备份批次目录/`。大体积备份会拆成引导文件和多个分包。恢复本地分包时，需要把同一目录内的 `.index.json` 和全部 `.zip` 一起上传。
               </div>
               {showImportCandidates && (
                 <div className="space-y-3 rounded-xl border border-gray-200/80 bg-white/50 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100">可导入的服务器备份包</div>
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100">可导入的服务器备份目录</div>
                     <button
                       type="button"
                       onClick={() => importInputRef.current?.click()}
                       disabled={isImporting || isExporting || isClearingRemote}
                       className="rounded-lg bg-blue-500 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      上传本地备份
+                      上传本地备份组
                     </button>
                   </div>
                   {importCandidates.length ? (
@@ -2546,19 +2671,28 @@ export default function SettingsModal() {
                           key={item.filePath}
                           className="rounded-lg border border-gray-200/70 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
                         >
-                          <div className="break-all text-sm font-medium text-gray-800 dark:text-gray-100">{item.fileName}</div>
+                          <div className="break-all text-sm font-medium text-gray-800 dark:text-gray-100">{item.displayName || item.fileName}</div>
                           <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
                             <div>修改时间：{formatLocalDateTime(item.modifiedAt)}</div>
                             <div>文件大小：{formatBytes(item.bytes)}</div>
+                            {item.kind === 'split' && (
+                              <>
+                                <div>引导文件：{item.fileName}</div>
+                                <div>
+                                  分包情况：{item.foundPartCount}/{item.partCount}
+                                  {item.missingPartNames?.length ? ` · 缺少 ${item.missingPartNames.join('、')}` : ' · 已齐全'}
+                                </div>
+                              </>
+                            )}
                           </div>
                           <div className="mt-2 flex justify-end">
                             <button
                               type="button"
                               onClick={() => void handleImportServerBackup(item.filePath)}
-                              disabled={isImporting || isExporting || isClearingRemote}
+                              disabled={isImporting || isExporting || isClearingRemote || Boolean(item.missingPartNames?.length)}
                               className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
                             >
-                              {isImporting ? '恢复中...' : '从该文件恢复'}
+                              {isImporting ? '恢复中...' : item.kind === 'split' ? '恢复这组备份' : '从该文件恢复'}
                             </button>
                           </div>
                         </div>
@@ -2566,7 +2700,7 @@ export default function SettingsModal() {
                     </div>
                   ) : (
                     <div className="text-xs leading-5 text-gray-500 dark:text-gray-400">
-                      服务器备份目录中还没有可导入的压缩包。可以先上传本地备份。
+                      服务器备份目录中还没有可导入的备份批次。可以先上传本地备份组。
                     </div>
                   )}
                 </div>
@@ -2576,7 +2710,7 @@ export default function SettingsModal() {
                 onClick={() =>
                   setConfirmDialog({
                     title: '清除全部使用码任务与产物',
-                    message: '这会删除所有使用码用户提交的任务卡片，以及这些任务对应的输入图、遮罩图、输出图、视频和缩略图。\n\n不会删除管理员任务。不会删除使用码、API 配置、分发设置，也不会回退已扣额度或清空过往使用记录。',
+                    message: '这会删除所有使用码用户提交的任务卡片，以及这些任务对应的输入图、遮罩图、输出图、视频和缩略图，用于释放服务器硬盘空间。\n\n不会删除管理员任务。不会删除使用码、配额记录、活动日志、API 配置或分发设置。',
                     confirmText: '确认清除',
                     tone: 'danger',
                     action: () => {
@@ -2584,10 +2718,10 @@ export default function SettingsModal() {
                     },
                   })
                 }
-                disabled={isClearingRemote || isImporting || isExporting}
+                disabled={isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
                 className="w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
               >
-                {isClearingRemote ? '清除中...' : '清除全部使用码任务与产物'}
+                {isClearingRemote || backupState?.active ? '清理进行中...' : '清除全部使用码任务与产物'}
               </button>
               <div className="grid grid-cols-2 gap-3">
                 <button
@@ -2603,10 +2737,10 @@ export default function SettingsModal() {
                       },
                     })
                   }
-                  disabled={isClearingRemote || isImporting || isExporting}
+                  disabled={isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
                   className="rounded-xl border border-orange-200/80 bg-orange-50/50 px-4 py-2.5 text-sm text-orange-600 transition hover:bg-orange-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-orange-500/20 dark:bg-orange-500/10 dark:text-orange-300 dark:hover:bg-orange-500/20"
                 >
-                  {isClearingRemote ? '清空中...' : '清空远端记录'}
+                  {isClearingRemote || backupState?.active ? '清理进行中...' : '清空远端记录'}
                 </button>
                 <button
                   type="button"
@@ -2621,10 +2755,10 @@ export default function SettingsModal() {
                       },
                     })
                   }
-                  disabled={isClearingRemote || isImporting || isExporting}
+                  disabled={isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
                   className="rounded-xl border border-red-200/80 bg-red-50/50 px-4 py-2.5 text-sm text-red-500 transition hover:bg-red-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-400 dark:hover:bg-red-500/20"
                 >
-                  {isClearingRemote ? '清空中...' : '清空远端全部'}
+                  {isClearingRemote || backupState?.active ? '清理进行中...' : '清空远端全部'}
                 </button>
               </div>
               <button
@@ -2642,7 +2776,8 @@ export default function SettingsModal() {
               <input
                 ref={importInputRef}
                 type="file"
-                accept=".zip,application/zip"
+                accept=".zip,.json,application/zip,application/json"
+                multiple
                 className="hidden"
                 onChange={handleImportFile}
               />

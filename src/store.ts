@@ -50,6 +50,27 @@ let thumbnailBackfillScheduled = false
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
+function getEmptyMaintenanceStatus(): AuthStatus['maintenance'] {
+  return {
+    active: false,
+    operation: null,
+    phase: 'idle',
+    message: '',
+    progressPercent: 0,
+    startedAt: null,
+    finishedAt: null,
+    totalFiles: 0,
+    processedFiles: 0,
+    totalBytes: 0,
+    processedBytes: 0,
+    waitingRunningTasks: 0,
+    waitingPendingTasks: 0,
+    filename: null,
+    filePath: null,
+    error: null,
+  }
+}
+
 function stripInputImageDataUrls(inputImages: InputImage[]) {
   return inputImages.map((image) => ({
     id: image.id,
@@ -790,6 +811,7 @@ export async function initStore() {
       role: null,
       distributionEnabled: false,
       adminConfigured: false,
+      maintenance: getEmptyMaintenanceStatus(),
       user: null,
       usageCodes: [],
     })
@@ -889,6 +911,7 @@ export async function logout() {
       role: null,
       distributionEnabled: false,
       adminConfigured: true,
+      maintenance: getEmptyMaintenanceStatus(),
       user: null,
       usageCodes: [],
     })
