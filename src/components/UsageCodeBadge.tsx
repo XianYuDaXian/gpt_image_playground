@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { TaskRecord } from '../types'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { formatUsageCodeTooltip } from '../lib/usageCodeDisplay'
 import { useStore } from '../store'
 
@@ -9,6 +10,7 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   const [position, setPosition] = useState({ left: 0, top: 0 })
   const authStatus = useStore((state) => state.authStatus)
   const showUsageCodeAliasOnTaskCard = useStore((state) => state.settings.showUsageCodeAliasOnTaskCard)
+  const showToast = useStore((state) => state.showToast)
   const buttonRef = useRef<HTMLButtonElement>(null)
   if (!task.ownerLabel) return null
 
@@ -35,9 +37,14 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
     setOpen(true)
   }
 
-  const toggleDetail = () => {
-    if (!updatePosition()) return
-    setOpen((value) => !value)
+  const handleCopy = async () => {
+    if (!codeText) return
+    try {
+      await copyTextToClipboard(codeText)
+      showToast('分发码已复制', 'success')
+    } catch (err) {
+      showToast(getClipboardFailureMessage('复制分发码失败', err), 'error')
+    }
   }
 
   return (
@@ -45,10 +52,10 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
       <button
         ref={buttonRef}
         type="button"
-        title=""
+        title="点击复制分发码"
         onClick={(event) => {
           event.stopPropagation()
-          toggleDetail()
+          void handleCopy()
         }}
         onMouseEnter={openDetail}
         onMouseLeave={() => setOpen(false)}

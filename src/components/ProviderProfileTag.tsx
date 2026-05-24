@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { AppSettings } from '../types'
 
 const PROVIDER_TAG_STYLE_MAP = {
@@ -61,20 +63,132 @@ export default function ProviderProfileTag(props: {
   className?: string
   disabled?: boolean
   crossed?: boolean
+  detail?: ReactNode
+  content?: ReactNode
+  compact?: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({ left: 0, top: 0 })
+  const tagRef = useRef<HTMLButtonElement | HTMLSpanElement>(null)
   const text = props.text ?? formatProviderProfileTagText(props)
-  return (
-    <span
-      title={text}
-      className={`relative inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-full px-2.5 py-1 text-xs font-medium leading-4 ${getProviderProfileTagClass(props.colorKey, props.tagColor)} ${props.disabled ? 'opacity-45 saturate-50' : ''} ${props.className ?? ''}`}
-    >
+  const hasDetail = Boolean(props.detail)
+
+  const updatePosition = () => {
+    const rect = tagRef.current?.getBoundingClientRect()
+    if (!rect) return false
+    const width = 256
+    const estimatedHeight = 120
+    const gap = 8
+    const left = Math.min(
+      Math.max(8, rect.left + rect.width / 2 - width / 2),
+      Math.max(8, window.innerWidth - width - 8),
+    )
+    const top = rect.bottom + gap + estimatedHeight > window.innerHeight
+      ? Math.max(8, rect.top - gap - estimatedHeight)
+      : rect.bottom + gap
+    setPosition({ left, top })
+    return true
+  }
+
+  const openDetail = () => {
+    if (!hasDetail) return
+    if (!updatePosition()) return
+    setOpen(true)
+  }
+
+  const closeDetail = () => {
+    if (!hasDetail) return
+    setOpen(false)
+  }
+
+  const toggleDetail = () => {
+    if (!hasDetail) return
+    if (!updatePosition()) return
+    setOpen((value) => !value)
+  }
+
+  useEffect(() => {
+    if (!open) return
+
+    const handleDismiss = () => {
+      setOpen(false)
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (tagRef.current?.contains(event.target as Node)) return
+      handleDismiss()
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown, true)
+    window.addEventListener('touchmove', handleDismiss, { capture: true, passive: true })
+    window.addEventListener('wheel', handleDismiss, { capture: true, passive: true })
+    window.addEventListener('scroll', handleDismiss, true)
+    window.addEventListener('resize', handleDismiss)
+
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown, true)
+      window.removeEventListener('touchmove', handleDismiss, true)
+      window.removeEventListener('wheel', handleDismiss, true)
+      window.removeEventListener('scroll', handleDismiss, true)
+      window.removeEventListener('resize', handleDismiss)
+    }
+  }, [open])
+
+  const sizeClass = props.compact
+    ? 'px-2 py-0.5 text-[11px] leading-4'
+    : 'px-2.5 py-1 text-xs leading-4'
+
+  const content = (
+    <>
       {(props.crossed ?? props.disabled) && (
         <span
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-1 top-1/2 h-px -rotate-[18deg] bg-current/80"
         />
       )}
-      <span className="block max-w-full truncate">{text}</span>
+      {props.content ?? <span className="block max-w-full truncate">{text}</span>}
+    </>
+  )
+
+  if (hasDetail) {
+    return (
+      <>
+        <button
+          ref={tagRef as React.RefObject<HTMLButtonElement>}
+          type="button"
+          onMouseEnter={openDetail}
+          onMouseLeave={closeDetail}
+          onFocus={openDetail}
+          onBlur={() => window.setTimeout(closeDetail, 120)}
+          onClick={(event) => {
+            event.stopPropagation()
+            toggleDetail()
+          }}
+          className={`relative inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-full font-medium ${sizeClass} ${getProviderProfileTagClass(props.colorKey, props.tagColor)} ${props.disabled ? 'opacity-45 saturate-50' : ''} ${props.className ?? ''}`}
+        >
+          {content}
+        </button>
+        {open && createPortal(
+          <div
+            className="fixed z-[100] w-64 whitespace-pre-line rounded-xl border border-gray-200 bg-white p-3 text-left text-xs leading-6 text-gray-700 shadow-xl dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200"
+            style={{ left: position.left, top: position.top }}
+            onMouseEnter={openDetail}
+            onMouseLeave={closeDetail}
+          >
+            {props.detail}
+          </div>,
+          document.body,
+        )}
+      </>
+    )
+  }
+
+  return (
+    <span
+      ref={tagRef as React.RefObject<HTMLSpanElement>}
+      className={`relative inline-flex min-w-0 max-w-full items-center overflow-hidden rounded-full font-medium ${sizeClass} ${getProviderProfileTagClass(props.colorKey, props.tagColor)} ${props.disabled ? 'opacity-45 saturate-50' : ''} ${props.className ?? ''}`}
+    >
+      {content}
     </span>
   )
 }

@@ -37,6 +37,7 @@ import {
 } from '../lib/backendBackup'
 import { addSessionUsageCode } from '../lib/backendAuth'
 import { fetchBackendTasks } from '../lib/backendTasks'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { useStore, clearAllData, clearLocalTaskCache } from '../store'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -213,7 +214,7 @@ export default function SettingsModal() {
   const [reminderDrafts, setReminderDrafts] = useState<BackendReminderItem[]>([])
   const [usageCodes, setUsageCodes] = useState<BackendUsageCode[]>([])
   const [newCodeName, setNewCodeName] = useState('新使用码')
-  const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>(null)
+  const [newCodeAllowedProviderProfileIds, setNewCodeAllowedProviderProfileIds] = useState<string[] | null>([])
   const [newCodeProviderImageQuotas, setNewCodeProviderImageQuotas] = useState<Record<string, string>>({})
   const [newCodeProviderVideoQuotas, setNewCodeProviderVideoQuotas] = useState<Record<string, string>>({})
   const [latestPlainCode, setLatestPlainCode] = useState('')
@@ -293,19 +294,43 @@ export default function SettingsModal() {
     allowedProviderProfileIds: string[] | null | undefined,
     quotaType: 'image' | 'video',
   ) => {
-    if (allowedProviderProfileIds?.length) {
+    if (allowedProviderProfileIds == null) {
+      return profiles.filter((profile) => (quotaType === 'video' ? profile.apiMode === 'videos' : profile.apiMode !== 'videos'))
+    }
+    if (allowedProviderProfileIds.length > 0) {
       return profiles.filter((profile) =>
         allowedProviderProfileIds.includes(profile.id)
         && (quotaType === 'video' ? profile.apiMode === 'videos' : profile.apiMode !== 'videos'),
       )
     }
-    return profiles.filter((profile) => (quotaType === 'video' ? profile.apiMode === 'videos' : profile.apiMode !== 'videos'))
+    return []
   }
 
   const formatQuotaValue = (value: number | null | undefined) => {
     if (value == null) return '不限'
     if (value === 0) return '禁用'
     return String(value)
+  }
+
+  const getUsageCodeProviderStats = (code: BackendUsageCode, profile: BackendProviderProfile) => {
+    const isVideoProfile = profile.apiMode === 'videos'
+    const usedCount = isVideoProfile
+      ? code.providerUsedVideoCredits?.[profile.id] ?? 0
+      : code.providerUsedImageCredits?.[profile.id] ?? 0
+    const totalCount = isVideoProfile
+      ? code.providerVideoQuotas?.[profile.id] ?? null
+      : code.providerImageQuotas?.[profile.id] ?? null
+    const availableCount = isVideoProfile
+      ? code.providerRemainingVideoCredits?.[profile.id] ?? null
+      : code.providerRemainingImageCredits?.[profile.id] ?? null
+    return {
+      usedCount,
+      totalCount,
+      totalText: formatQuotaValue(totalCount),
+      availableCount,
+      availableText: formatQuotaValue(availableCount),
+      availableDetailText: String(availableCount ?? 0),
+    }
   }
 
   const formatBytes = (bytes: number) => {
@@ -352,7 +377,8 @@ export default function SettingsModal() {
   }
 
   const getEnabledProfilesForUsageCode = (allowedProviderProfileIds: string[] | null | undefined) => {
-    if (!allowedProviderProfileIds?.length) return profiles
+    if (allowedProviderProfileIds == null) return profiles
+    if (allowedProviderProfileIds.length === 0) return []
     return allowedProviderProfileIds
       .map((id) => profiles.find((profile) => profile.id === id))
       .filter((profile): profile is BackendProviderProfile => Boolean(profile))
@@ -529,7 +555,10 @@ export default function SettingsModal() {
     setExpandedReminderIds((prev) => {
       const previous = new Set(prev)
       return nextReminders
-        .filter((item) => new Date(item.endAt).getTime() > Date.now() || previous.has(item.id))
+        .filter((item) => {
+          const isNewDraft = !item.createdAt && !item.updatedAt
+          return isNewDraft || previous.has(item.id)
+        })
         .map((item) => item.id)
     })
     setUsageCodes(nextUsageCodes)
@@ -867,7 +896,9 @@ export default function SettingsModal() {
   }
 
   const handleCreateReminder = () => {
-    setReminderDrafts((prev) => [createEmptyReminder(), ...prev])
+    const nextReminder = createEmptyReminder()
+    setReminderDrafts((prev) => [nextReminder, ...prev])
+    setExpandedReminderIds((prev) => prev.includes(nextReminder.id) ? prev : [nextReminder.id, ...prev])
   }
 
   const handleUpdateReminder = (reminderId: string, patch: Partial<BackendReminderItem>) => {
@@ -1611,8 +1642,8 @@ export default function SettingsModal() {
               </div>
 
               <div className="space-y-4 rounded-2xl border border-gray-200/70 bg-gray-50/60 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
                     <div className="text-sm font-medium text-gray-800 dark:text-gray-100">公共提醒事项</div>
                     <div className="mt-1 text-xs leading-6 text-gray-500 dark:text-gray-400">
                       事项会在生效时间内按设定频率向使用码用户弹出。结束后仍保留在这里，方便管理员查看历史。
@@ -1621,7 +1652,7 @@ export default function SettingsModal() {
                   <button
                     type="button"
                     onClick={handleCreateReminder}
-                    className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600"
+                    className="self-start rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-600 sm:self-auto"
                   >
                     新建事项
                   </button>
@@ -1636,8 +1667,8 @@ export default function SettingsModal() {
                         key={reminder.id}
                         className="space-y-3 rounded-2xl border border-gray-200/70 bg-white/70 p-3 dark:border-white/[0.08] dark:bg-white/[0.04]"
                       >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
                             <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${
                               ended
                                 ? 'bg-red-50 text-red-500 dark:bg-red-500/10 dark:text-red-300'
@@ -1651,19 +1682,17 @@ export default function SettingsModal() {
                               每天最多提醒 {reminder.maxDailyShows} 次
                             </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {ended && (
-                              <button
-                                type="button"
-                                onClick={() => toggleReminderExpanded(reminder.id)}
-                                className="relative rounded-lg bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
-                              >
-                                {expanded ? '收起' : '展开'}
-                                {unreadEnded && !expanded && (
-                                  <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" />
-                                )}
-                              </button>
-                            )}
+                          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                            <button
+                              type="button"
+                              onClick={() => toggleReminderExpanded(reminder.id)}
+                              className="relative rounded-lg bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]"
+                            >
+                              {expanded ? '收起' : '展开'}
+                              {unreadEnded && !expanded && (
+                                <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" />
+                              )}
+                            </button>
                             {!ended && (
                               <Switch
                                 checked={reminder.enabled}
@@ -1679,7 +1708,7 @@ export default function SettingsModal() {
                             </button>
                           </div>
                         </div>
-                        {ended && !expanded ? (
+                        {!expanded ? (
                           <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
                             <div className="font-medium text-gray-700 dark:text-gray-200">{reminder.title || '未命名事项'}</div>
                             <div className="mt-1 break-words">
@@ -1897,17 +1926,28 @@ export default function SettingsModal() {
                     <div>
                       <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
                       <div className="flex flex-wrap gap-2">
+                        {(() => {
+                          const selectedIds = Array.isArray(newCodeAllowedProviderProfileIds) ? newCodeAllowedProviderProfileIds : null
+                          const allSelected = newCodeAllowedProviderProfileIds === null
+                            || (
+                              selectedIds !== null
+                              && selectedIds.length === profiles.length
+                              && profiles.every((profile) => selectedIds.includes(profile.id))
+                            )
+                          return (
                         <button
                           type="button"
-                          onClick={() => setNewCodeAllowedProviderProfileIds(null)}
+                          onClick={() => setNewCodeAllowedProviderProfileIds(allSelected ? [] : null)}
                           className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                            !newCodeAllowedProviderProfileIds?.length
+                            allSelected
                               ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
                               : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
                           }`}
                         >
                           全部可用
                         </button>
+                          )
+                        })()}
                         {profiles.map((profile) => {
                           const selected = newCodeAllowedProviderProfileIds?.includes(profile.id) ?? false
                           const nextIds = selected
@@ -2072,8 +2112,17 @@ export default function SettingsModal() {
                               <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
                                 最近使用：{code.lastUsedAt ? new Date(code.lastUsedAt).toLocaleString('zh-CN') : '从未使用'}
                               </p>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                {enabledProfiles.length > 0 ? enabledProfiles.map((profile) => (
+                            </div>
+                            <Switch
+                              checked={code.isEnabled}
+                              onChange={(checked) => handleUpdateUsageCode(code.id, { isEnabled: checked })}
+                            />
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {enabledProfiles.length > 0 ? enabledProfiles.map((profile) => (
+                              (() => {
+                                const providerStats = getUsageCodeProviderStats(code, profile)
+                                return (
                                   <ProviderProfileTag
                                     key={profile.id}
                                     name={profile.name}
@@ -2083,37 +2132,47 @@ export default function SettingsModal() {
                                     isDefault={Boolean(profile.isDefault)}
                                     includeMode={false}
                                     includeDefault={false}
-                                    className="max-w-[9rem]"
+                                    text={`${profile.name} ${providerStats.usedCount}/${providerStats.availableText}`}
+                                    detail={
+                                      <div>
+                                        <div className="font-medium text-gray-800 dark:text-gray-100">{profile.name}</div>
+                                        <div className="mt-1 whitespace-nowrap text-[11px] text-gray-600 dark:text-gray-300">
+                                          总额度 {providerStats.totalText} 已用 {providerStats.usedCount} 可用 {providerStats.availableDetailText}
+                                        </div>
+                                      </div>
+                                    }
+                                    content={(
+                                      <span className="flex min-w-0 items-baseline gap-1">
+                                        <span className="truncate">{profile.name}</span>
+                                        <span className="shrink-0 text-[9px] font-medium tabular-nums text-current/55">
+                                          {providerStats.usedCount}/{providerStats.totalText}
+                                        </span>
+                                      </span>
+                                    )}
+                                    compact
+                                    className="max-w-[14rem] brightness-90"
                                   />
-                                )) : (
-                                  <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
-                                    未启用 API
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <Switch
-                              checked={code.isEnabled}
-                              onChange={(checked) => handleUpdateUsageCode(code.id, { isEnabled: checked })}
-                            />
+                                )
+                              })()
+                            )) : (
+                              <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-white/[0.05] dark:text-gray-400">
+                                未启用 API
+                              </span>
+                            )}
                           </div>
                           <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <span className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800 dark:bg-black/20 dark:text-gray-100">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!code.code) return
+                                void copyTextToClipboard(code.code)
+                                  .then(() => useStore.getState().showToast('使用码已复制', 'success'))
+                                  .catch((err) => useStore.getState().showToast(getClipboardFailureMessage('复制失败', err), 'error'))
+                              }}
+                              className="rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs text-gray-800 transition hover:bg-gray-200 dark:bg-black/20 dark:text-gray-100 dark:hover:bg-black/30"
+                            >
                               {code.code ?? '旧使用码无法恢复'}
-                            </span>
-                            {code.code && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  void navigator.clipboard.writeText(code.code ?? '')
-                                    .then(() => useStore.getState().showToast('使用码已复制', 'success'))
-                                    .catch(() => useStore.getState().showToast('复制失败', 'error'))
-                                }}
-                                className="rounded-lg bg-blue-50 px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
-                              >
-                                复制
-                              </button>
-                            )}
+                            </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteUsageCode(code)}
@@ -2128,17 +2187,28 @@ export default function SettingsModal() {
                                 <div className="mt-3">
                                   <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">允许调用的 API 配置</span>
                                   <div className="flex flex-wrap gap-2">
+                                    {(() => {
+                                      const selectedIds = Array.isArray(code.allowedProviderProfileIds) ? code.allowedProviderProfileIds : null
+                                      const allSelected = code.allowedProviderProfileIds === null
+                                        || (
+                                          selectedIds !== null
+                                          && selectedIds.length === profiles.length
+                                          && profiles.every((profile) => selectedIds.includes(profile.id))
+                                        )
+                                      return (
                                     <button
                                       type="button"
-                                      onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: null })}
+                                      onClick={() => void handleUpdateUsageCode(code.id, { allowedProviderProfileIds: allSelected ? [] : null })}
                                       className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                                        !code.allowedProviderProfileIds?.length
+                                        allSelected
                                           ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
                                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
                                       }`}
                                     >
                                       全部可用
                                     </button>
+                                      )
+                                    })()}
                                     {profiles.map((profile) => {
                                       const selected = code.allowedProviderProfileIds?.includes(profile.id) ?? false
                                       const nextIds = selected
