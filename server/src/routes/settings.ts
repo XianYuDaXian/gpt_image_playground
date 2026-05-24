@@ -1497,6 +1497,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const apiKey = payload.apiKey?.trim()
     if (!apiKey) throw new Error('新建 API 配置需要填写 API Key')
     const existingProviderProfileIds = app.db.listProviderProfiles().map((item) => item.id)
+    const shouldSetDefault = existingProviderProfileIds.length === 0 || payload.isDefault
     const profile = app.db.upsertProviderProfile({
       id: payload.id ?? crypto.randomUUID(),
       name: payload.name,
@@ -1511,7 +1512,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       responseFormatB64Json: payload.responseFormatB64Json,
       videoMaxResolution: payload.videoMaxResolution,
       videoMaxDuration: payload.videoMaxDuration,
-      isDefault: payload.isDefault,
+      isDefault: shouldSetDefault,
     })
     if (!profile) throw new Error('创建 API 配置失败')
     app.db.restrictUsageCodeAccessForNewProvider({

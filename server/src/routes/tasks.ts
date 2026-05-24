@@ -193,15 +193,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/tasks', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
-    const defaultProfile = app.db.getDefaultProviderProfile()
-    if (!defaultProfile) {
-      reply.code(400)
-      return { message: '后端尚未配置默认 provider profile' }
-    }
 
     const taskId = crypto.randomUUID()
     let prompt = ''
-    let providerProfileId = defaultProfile.id
+    let providerProfileId = ''
     let selectedUsageCodeId: string | null = null
     let taskType: 'image' | 'video' = 'image'
     let parsedParams = taskParamsSchema.parse({})
@@ -257,6 +252,15 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     if (!prompt) {
       reply.code(400)
       return { message: '提示词不能为空' }
+    }
+
+    if (!providerProfileId) {
+      const defaultProfile = app.db.getDefaultProviderProfile()
+      if (!defaultProfile) {
+        reply.code(400)
+        return { message: '后端尚未配置默认 provider profile' }
+      }
+      providerProfileId = defaultProfile.id
     }
 
     const providerProfile = app.db.getProviderProfile(providerProfileId)
