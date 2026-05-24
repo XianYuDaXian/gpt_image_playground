@@ -1,6 +1,6 @@
 import type { AuthRole } from './backendAuth'
 import { formatImageRatio } from './size'
-import type { TaskParams, TaskRecord } from '../types'
+import type { TaskParams, TaskRecord, VideoTaskParams } from '../types'
 
 export function matchesTaskFilters(
   task: TaskRecord,
@@ -12,9 +12,11 @@ export function matchesTaskFilters(
     role: AuthRole | null | undefined
     showUsageCodeTasksForAdmin: boolean
     query: string
+    tags?: string[]
   },
 ) {
   const queryText = options.query.trim()
+  const tags = options.tags?.map((tag) => tag.trim()).filter(Boolean) ?? []
   if (options.filterFavorite && !task.isFavorite) return false
   if (options.filterArchived ? !task.isArchived : task.isArchived) return false
   if (options.filterStatus !== 'all' && task.status !== options.filterStatus) return false
@@ -23,11 +25,13 @@ export function matchesTaskFilters(
     options.role === 'admin' &&
     !options.showUsageCodeTasksForAdmin &&
     task.ownerKind === 'usage_code' &&
-    !queryText
+    !queryText &&
+    tags.length === 0
   ) {
     return false
   }
-  return matchesTaskSearch(task, queryText, options.role)
+  if (!matchesTaskSearch(task, queryText, options.role)) return false
+  return tags.every((tag) => matchesTaskSearch(task, tag, options.role))
 }
 
 function normalizeSearchText(value: string) {
@@ -52,6 +56,49 @@ function buildOwnerSearchText(task: TaskRecord, role: AuthRole | null | undefine
     ownerTerms.push(task.ownerUsageCode?.name)
   }
   return ownerTerms.filter(Boolean).join(' ')
+}
+
+function getImageParamDisplayValue(task: TaskRecord, paramKey: keyof TaskParams, actualParams = task.actualParams) {
+  const params = task.params as TaskParams
+  const requestedValue = params[paramKey]
+  const actualValue = paramKey === 'n' && task.outputImages?.length > 0
+    ? task.outputImages.length
+    : actualParams?.[paramKey]
+  return String(actualValue ?? requestedValue ?? '')
+}
+
+function buildCardTagSearchText(task: TaskRecord, role: AuthRole | null | undefined) {
+  const isVideoTask = task.taskType === 'video'
+  const tagTerms = [
+    isVideoTask ? '视频 video' : '图片 image',
+    task.status === 'running' ? '生成中 running' : task.status === 'done' ? '已完成 done' : '失败 error',
+    task.maskImageId ? 'mask 遮罩' : '',
+    task.currentStep,
+    task.providerProfileName,
+    task.providerProfileId,
+    role === 'admin' ? task.providerProfileModel : null,
+    task.ownerLabel,
+    task.ownerUsageCode?.name,
+    task.ownerUsageCode?.code,
+  ]
+
+  if (isVideoTask) {
+    const videoParams = task.params as VideoTaskParams
+    tagTerms.push(videoParams.aspect_ratio)
+    tagTerms.push(videoParams.resolution)
+    tagTerms.push(String(videoParams.duration))
+    tagTerms.push(`${videoParams.duration}s`)
+  } else {
+    const aggregateActualParams = task.outputImages?.length > 0
+      ? { ...task.actualParams, n: task.outputImages.length }
+      : task.actualParams
+    tagTerms.push(getImageParamDisplayValue(task, 'quality'))
+    tagTerms.push(getImageParamDisplayValue(task, 'size'))
+    tagTerms.push(getImageParamDisplayValue(task, 'output_format'))
+    tagTerms.push(getImageParamDisplayValue(task, 'n', aggregateActualParams))
+  }
+
+  return tagTerms.filter(Boolean).join(' ')
 }
 
 export function matchesTaskSearch(task: TaskRecord, query: string, role: AuthRole | null | undefined) {
@@ -82,6 +129,7 @@ export function matchesTaskSearch(task: TaskRecord, query: string, role: AuthRol
     requestedSizeText,
     imageSearchText,
     ownerSearchText,
+    buildCardTagSearchText(task, role),
   ].join(' ')
 
   return normalizeSearchText(searchText).includes(q)

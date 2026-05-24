@@ -53,6 +53,7 @@ const taskListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
   query: z.string().optional(),
+  searchTag: z.union([z.string(), z.array(z.string())]).optional(),
   status: z.enum(['all', 'running', 'done', 'error']).default('all'),
   taskType: z.enum(['all', 'image', 'video']).default('all'),
   favorite: z.union([z.literal('1'), z.literal('true')]).optional(),
@@ -106,6 +107,52 @@ function buildOwnerSearchText(
   return ownerTerms.filter(Boolean).join(' ')
 }
 
+function getImageParamDisplayValue(
+  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
+  paramKey: keyof z.infer<typeof taskParamsSchema>,
+) {
+  const params = task.params as z.infer<typeof taskParamsSchema>
+  const requestedValue = params[paramKey]
+  const actualValue = paramKey === 'n' && task.outputImages?.length > 0
+    ? task.outputImages.length
+    : undefined
+  return String(actualValue ?? requestedValue ?? '')
+}
+
+function buildCardTagSearchText(
+  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
+  role: 'admin' | 'user',
+) {
+  const isVideoTask = task.taskType === 'video'
+  const tagTerms = [
+    isVideoTask ? '视频 video' : '图片 image',
+    task.status === 'running' ? '生成中 running' : task.status === 'done' ? '已完成 done' : '失败 error',
+    task.maskImageId ? 'mask 遮罩' : '',
+    task.currentStep,
+    task.providerProfileName,
+    task.providerProfileId,
+    role === 'admin' ? task.providerProfileModel : null,
+    task.ownerLabel,
+    task.ownerUsageCode?.name,
+    task.ownerUsageCode?.code,
+  ]
+
+  if (isVideoTask) {
+    const videoParams = task.params as z.infer<typeof videoParamsSchema>
+    tagTerms.push(videoParams.aspect_ratio)
+    tagTerms.push(videoParams.resolution)
+    tagTerms.push(String(videoParams.duration))
+    tagTerms.push(`${videoParams.duration}s`)
+  } else {
+    tagTerms.push(getImageParamDisplayValue(task, 'quality'))
+    tagTerms.push(getImageParamDisplayValue(task, 'size'))
+    tagTerms.push(getImageParamDisplayValue(task, 'output_format'))
+    tagTerms.push(getImageParamDisplayValue(task, 'n'))
+  }
+
+  return tagTerms.filter(Boolean).join(' ')
+}
+
 function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never, query: string, role: 'admin' | 'user') {
   const q = normalizeSearchText(query.trim())
   if (!q) return true
@@ -125,6 +172,7 @@ function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends i
     JSON.stringify(task.params),
     imageSearchText,
     ownerSearchText,
+    buildCardTagSearchText(task, role),
   ].join(' ')
 
   return normalizeSearchText(searchText).includes(q)
@@ -358,6 +406,9 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/tasks', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
     const query = taskListQuerySchema.parse(request.query)
+    const searchTags = Array.isArray(query.searchTag)
+      ? query.searchTag
+      : query.searchTag ? [query.searchTag] : []
     const rawTasks = auth.role === 'admin'
       ? app.db.listTasks(ADMIN_TASK_LIST_LIMIT)
       : app.db.listTasksForUsageCodes(auth.usageCodeIds, ADMIN_TASK_LIST_LIMIT)
@@ -373,10 +424,12 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
           && !query.showUsageCodeTasksForAdmin
           && task.ownerKind === 'usage_code'
           && !query.query?.trim()
+          && searchTags.length === 0
         ) {
           return false
         }
-        return matchesTaskSearch(task, query.query ?? '', auth.role)
+        if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
+        return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
       })
     const total = filteredTasks.length
     const start = (query.page - 1) * query.pageSize

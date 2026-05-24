@@ -596,6 +596,32 @@ input[type="number"] {
   font-variant-numeric: tabular-nums;
 }
 
+.detail-video-volume-group {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+}
+
+.detail-video-volume-popover {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.28rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 4.1rem;
+  padding: 0;
+  border-radius: 9999px;
+  background: rgb(0 0 0 / 0.78);
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
 .detail-video-progress {
   -webkit-appearance: none;
   appearance: none;
@@ -632,6 +658,67 @@ input[type="number"] {
   background: rgb(255 255 255 / 0.28);
 }
 
+.detail-video-volume {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 3.5rem;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.28);
+  pointer-events: auto;
+  touch-action: pan-x;
+}
+
+.detail-video-volume-vertical {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  transform-origin: center;
+}
+
+.detail-video-volume::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 0.75rem;
+  width: 0.75rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255);
+  border: 0;
+}
+
+.detail-video-volume::-moz-range-thumb {
+  height: 0.75rem;
+  width: 0.75rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255);
+  border: 0;
+}
+
+.detail-video-volume::-moz-range-track {
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.28);
+}
+
+.detail-video-volume-button {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255);
+  transition: background-color 0.2s ease;
+  touch-action: manipulation;
+}
+
+.detail-video-volume-button:hover {
+  background: rgb(255 255 255 / 0.2);
+}
+
 .detail-video-fullscreen-button {
   display: inline-flex;
   height: 2.25rem;
@@ -648,6 +735,31 @@ input[type="number"] {
 
 .detail-video-fullscreen-button:hover {
   background: rgb(255 255 255 / 0.2);
+}
+
+@media (max-width: 640px) {
+  .detail-video-controls {
+    gap: 0.5rem;
+    padding: 0.625rem;
+  }
+
+  .detail-video-time {
+    min-width: max-content;
+  }
+
+  .detail-video-progress {
+    min-width: 0;
+  }
+
+  .detail-video-volume-vertical {
+    width: 3rem;
+  }
+
+  .detail-video-volume-popover {
+    bottom: calc(100% + 0.22rem);
+    width: 1.4rem;
+    height: 3.8rem;
+  }
 }
 
 .safe-editor-header {

@@ -5,6 +5,10 @@ export default function SearchBar() {
   const authStatus = useStore((s) => s.authStatus)
   const searchQuery = useStore((s) => s.searchQuery)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
+  const searchTags = useStore((s) => s.searchTags)
+  const addSearchTag = useStore((s) => s.addSearchTag)
+  const removeSearchTag = useStore((s) => s.removeSearchTag)
+  const clearSearchTags = useStore((s) => s.clearSearchTags)
   const filterStatus = useStore((s) => s.filterStatus)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
   const filterTaskType = useStore((s) => s.filterTaskType)
@@ -18,6 +22,26 @@ export default function SearchBar() {
   const blurLoadedImages = useStore((s) => s.blurLoadedImages)
   const setBlurLoadedImages = useStore((s) => s.setBlurLoadedImages)
   const topButtonClass = 'flex h-11 w-11 items-center justify-center rounded-xl border transition-all'
+  const hasSearchContent = Boolean(searchQuery.trim() || searchTags.length > 0)
+
+  const commitSearchTag = () => {
+    const nextTag = searchQuery.trim()
+    if (!nextTag) return
+    addSearchTag(nextTag)
+    setSearchQuery('')
+  }
+
+  const commitSearchTagFromInput = (input: HTMLInputElement) => {
+    const nextTag = input.value.trim()
+    if (!nextTag) return
+    addSearchTag(nextTag)
+    setSearchQuery('')
+  }
+
+  const clearSearch = () => {
+    setSearchQuery('')
+    clearSearchTags()
+  }
 
   return (
     <div className="relative z-40 mt-6 mb-4 flex flex-col gap-3">
@@ -133,7 +157,7 @@ export default function SearchBar() {
       </div>
       <div className="relative z-10 w-full min-w-0">
         <svg
-          className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500"
+          className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -145,13 +169,66 @@ export default function SearchBar() {
             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
           />
         </svg>
-        <input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          type="text"
-          placeholder="搜索提示词、使用码、别名、参数、比例、分辨率..."
-          className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 dark:border-white/[0.08] bg-white dark:bg-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition"
-        />
+        <form
+          className="hide-scrollbar flex min-h-11 w-full items-center gap-2 overflow-x-auto rounded-xl border border-gray-200 bg-white py-1.5 pl-10 pr-10 text-sm transition focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/30 dark:border-white/[0.08] dark:bg-gray-900"
+          onSubmit={(event) => {
+            event.preventDefault()
+            commitSearchTag()
+          }}
+        >
+          {searchTags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex max-w-[10rem] shrink-0 items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-200"
+            >
+              <span className="truncate">{tag}</span>
+              <button
+                type="button"
+                onClick={() => removeSearchTag(tag)}
+                className="rounded-full p-0.5 text-blue-500 transition hover:bg-blue-100 hover:text-blue-700 dark:text-blue-200 dark:hover:bg-blue-400/20"
+                aria-label={`移除搜索标签 ${tag}`}
+              >
+                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          ))}
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              commitSearchTagFromInput(event.currentTarget)
+            }}
+            onKeyUp={(event) => {
+              if (event.key !== 'Enter') return
+              event.preventDefault()
+              commitSearchTagFromInput(event.currentTarget)
+            }}
+            onBlur={(event) => commitSearchTagFromInput(event.currentTarget)}
+            type="search"
+            enterKeyHint="done"
+            autoComplete="off"
+            placeholder={searchTags.length >= 2 ? '' : searchTags.length > 0 ? '继续输入并回车添加标签' : '搜索提示词、使用码、别名、参数、比例、分辨率...'}
+            className="min-w-[10rem] flex-1 shrink-0 bg-transparent py-1.5 text-sm outline-none placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
+          />
+        </form>
+        {hasSearchContent && (
+          <button
+            type="button"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={clearSearch}
+            className="absolute right-3 top-5 -translate-y-1/2 rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300"
+            aria-label="清空搜索"
+            title="清空搜索"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   )

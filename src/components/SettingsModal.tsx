@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from 'react'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
   fetchAdminBackendReminders,
@@ -151,6 +151,64 @@ function PreferenceRow({
       </span>
       <Switch checked={checked} onChange={onChange} />
     </label>
+  )
+}
+
+function ClearButton({ onClear, label }: { onClear: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClear}
+      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300"
+      aria-label={label}
+      title={label}
+    >
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    </button>
+  )
+}
+
+function ClearableInput({
+  value,
+  onClear,
+  className = '',
+  clearLabel = '清空输入',
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & {
+  value: string | number
+  onClear: () => void
+  clearLabel?: string
+}) {
+  const hasValue = String(value).length > 0
+  const inputClassName = /\bpr-\d+/.test(className) ? className : `${className} pr-10`
+  return (
+    <div className="relative min-w-0 flex-1">
+      <input value={value} className={inputClassName} {...props} />
+      {hasValue && <ClearButton onClear={onClear} label={clearLabel} />}
+    </div>
+  )
+}
+
+function ClearableTextarea({
+  value,
+  onClear,
+  className = '',
+  clearLabel = '清空输入',
+  ...props
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+  value: string
+  onClear: () => void
+  clearLabel?: string
+}) {
+  const hasValue = value.length > 0
+  const textareaClassName = /\bpr-\d+/.test(className) ? className : `${className} pr-10`
+  return (
+    <div className="relative">
+      <textarea value={value} className={textareaClassName} {...props} />
+      {hasValue && <ClearButton onClear={onClear} label={clearLabel} />}
+    </div>
   )
 }
 
@@ -1091,7 +1149,8 @@ export default function SettingsModal() {
       })
       setLatestPlainCode(result.code)
       setUsageCodes((prev) => [result.item, ...prev.filter((item) => item.id !== result.item.id)])
-      setNewCodeAllowedProviderProfileIds(null)
+      setNewCodeName('')
+      setNewCodeAllowedProviderProfileIds([])
       setNewCodeProviderImageQuotas({})
       setNewCodeProviderVideoQuotas({})
       useStore.getState().showToast('使用码已生成，明文只显示一次', 'success')
@@ -1443,18 +1502,20 @@ export default function SettingsModal() {
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">配置名称</span>
-                <input
+                <ClearableInput
                   value={profileDraft.name}
                   onChange={(event) => updateProfileDraft({ name: event.target.value })}
+                  onClear={() => updateProfileDraft({ name: '' })}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">API URL</span>
-                <input
+                <ClearableInput
                   value={profileDraft.baseUrl}
                   onChange={(event) => updateProfileDraft({ baseUrl: event.target.value })}
+                  onClear={() => updateProfileDraft({ baseUrl: '' })}
                   placeholder={DEFAULT_SETTINGS.baseUrl}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
@@ -1463,17 +1524,18 @@ export default function SettingsModal() {
               <div>
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">API Key</span>
                 <div className="relative">
-                  <input
+                  <ClearableInput
                     value={profileDraft.apiKey ?? ''}
                     onChange={(event) => updateProfileDraft({ apiKey: event.target.value })}
+                    onClear={() => updateProfileDraft({ apiKey: '' })}
                     type={showApiKey ? 'text' : 'password'}
                     placeholder={profileDraft.apiKeyMasked ?? '输入后保存到后端'}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 pr-10 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 pr-20 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                   />
                   <button
                     type="button"
                     onClick={() => setShowApiKey((value) => !value)}
-                    className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 transition hover:text-gray-600 dark:hover:text-gray-200"
+                    className="absolute inset-y-0 right-8 flex items-center px-3 text-gray-400 transition hover:text-gray-600 dark:hover:text-gray-200"
                     aria-label={showApiKey ? '隐藏 API Key' : '显示 API Key'}
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1515,9 +1577,10 @@ export default function SettingsModal() {
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">模型 ID</span>
-                <input
+                <ClearableInput
                   value={profileDraft.model}
                   onChange={(event) => updateProfileDraft({ model: event.target.value })}
+                  onClear={() => updateProfileDraft({ model: '' })}
                   placeholder={getDefaultModelForMode(profileDraft.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
@@ -1525,9 +1588,10 @@ export default function SettingsModal() {
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求超时 (秒)</span>
-                <input
+                <ClearableInput
                   value={profileDraft.timeoutSeconds}
                   onChange={(event) => updateProfileDraft({ timeoutSeconds: Number(event.target.value) })}
+                  onClear={() => updateProfileDraft({ timeoutSeconds: 0 })}
                   type="number"
                   min={10}
                   max={1800}
@@ -1626,12 +1690,13 @@ export default function SettingsModal() {
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-gray-800 dark:text-gray-100">同时执行任务数</span>
                   <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">超过该数量的任务会进入队列，按提交顺序执行。</span>
-                  <input
+                  <ClearableInput
                     value={distribution.maxConcurrentTasks}
                     onChange={(event) => setDistribution((prev) => ({
                       ...prev,
                       maxConcurrentTasks: Math.max(1, Number(event.target.value) || 1),
                     }))}
+                    onClear={() => setDistribution((prev) => ({ ...prev, maxConcurrentTasks: 1 }))}
                     onBlur={handleSaveConcurrency}
                     type="number"
                     min={1}
@@ -1769,18 +1834,20 @@ export default function SettingsModal() {
                           <>
                         <label className="block">
                           <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事项标题</span>
-                          <input
+                          <ClearableInput
                             value={reminder.title}
                             onChange={(event) => handleUpdateReminder(reminder.id, { title: event.target.value })}
+                            onClear={() => handleUpdateReminder(reminder.id, { title: '' })}
                             placeholder="数据备份提醒"
                             className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                           />
                         </label>
                         <label className="block">
                           <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事项正文</span>
-                          <textarea
+                          <ClearableTextarea
                             value={reminder.message}
                             onChange={(event) => handleUpdateReminder(reminder.id, { message: event.target.value })}
+                            onClear={() => handleUpdateReminder(reminder.id, { message: '' })}
                             onPaste={(event) => void handleReminderMessagePaste(reminder.id, event)}
                             rows={4}
                             placeholder="请先导出图片和视频，再准备后续清理。可直接粘贴多张图片。"
@@ -1790,18 +1857,20 @@ export default function SettingsModal() {
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                           <label className="block">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">开始时间</span>
-                            <input
+                            <ClearableInput
                               value={reminder.startAt}
                               onChange={(event) => handleUpdateReminder(reminder.id, { startAt: event.target.value })}
+                              onClear={() => handleUpdateReminder(reminder.id, { startAt: '' })}
                               type="datetime-local"
                               className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
                           <label className="block">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">结束时间</span>
-                            <input
+                            <ClearableInput
                               value={reminder.endAt}
                               onChange={(event) => handleUpdateReminder(reminder.id, { endAt: event.target.value })}
+                              onClear={() => handleUpdateReminder(reminder.id, { endAt: '' })}
                               type="datetime-local"
                               className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
@@ -1810,11 +1879,12 @@ export default function SettingsModal() {
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                           <label className="block">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">每天提醒次数</span>
-                            <input
+                            <ClearableInput
                               value={reminder.maxDailyShows}
                               onChange={(event) => handleUpdateReminder(reminder.id, {
                                 maxDailyShows: Math.min(24, Math.max(1, Number(event.target.value) || 1)),
                               })}
+                              onClear={() => handleUpdateReminder(reminder.id, { maxDailyShows: 1 })}
                               type="number"
                               min={1}
                               max={24}
@@ -1823,18 +1893,20 @@ export default function SettingsModal() {
                           </label>
                           <label className="block">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内开始</span>
-                            <input
+                            <ClearableInput
                               value={reminder.startTime}
                               onChange={(event) => handleUpdateReminder(reminder.id, { startTime: event.target.value })}
+                              onClear={() => handleUpdateReminder(reminder.id, { startTime: '' })}
                               type="time"
                               className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
                           <label className="block">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内结束</span>
-                            <input
+                            <ClearableInput
                               value={reminder.endTime}
                               onChange={(event) => handleUpdateReminder(reminder.id, { endTime: event.target.value })}
+                              onClear={() => handleUpdateReminder(reminder.id, { endTime: '' })}
                               type="time"
                               className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
@@ -1901,9 +1973,10 @@ export default function SettingsModal() {
 
               <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem]">
-                  <input
+                  <ClearableInput
                     value={newCodeName}
                     onChange={(event) => setNewCodeName(event.target.value)}
+                    onClear={() => setNewCodeName('')}
                     placeholder="使用码名称"
                     className="rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                   />
@@ -1916,9 +1989,20 @@ export default function SettingsModal() {
                   </button>
                 </div>
                 {latestPlainCode && (
-                  <div className="mt-3 rounded-xl bg-white px-3 py-2 text-sm dark:bg-black/20">
-                    <span className="text-gray-500 dark:text-gray-400">新使用码：</span>
-                    <span className="font-mono font-semibold tracking-wide text-gray-900 dark:text-gray-100">{latestPlainCode}</span>
+                  <div className="mt-3 flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-sm dark:bg-black/20">
+                    <span className="shrink-0 text-gray-500 dark:text-gray-400">新使用码：</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void copyTextToClipboard(latestPlainCode)
+                          .then(() => useStore.getState().showToast('新使用码已复制', 'success'))
+                          .catch((err) => useStore.getState().showToast(getClipboardFailureMessage('复制失败', err), 'error'))
+                      }}
+                      className="min-w-0 flex-1 truncate rounded-lg bg-gray-50 px-2 py-1 text-left font-mono font-semibold tracking-wide text-gray-900 transition hover:bg-gray-100 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:bg-white/[0.08]"
+                      title="点击复制新使用码"
+                    >
+                      {latestPlainCode}
+                    </button>
                   </div>
                 )}
                 {profiles.length > 0 && (
@@ -1986,7 +2070,7 @@ export default function SettingsModal() {
                             <span className="w-24 shrink-0 truncate text-xs text-gray-500 dark:text-gray-400">
                               {profile.name}
                             </span>
-                            <input
+                            <ClearableInput
                               value={newCodeProviderImageQuotas[profile.id] ?? ''}
                               onChange={(event) => {
                                 const value = event.target.value
@@ -1996,6 +2080,10 @@ export default function SettingsModal() {
                                 }
                                 setNewCodeProviderImageQuotas(nextProviderImageQuotas)
                               }}
+                              onClear={() => setNewCodeProviderImageQuotas((prev) => ({
+                                ...prev,
+                                [profile.id]: '',
+                              }))}
                               onBlur={() => {
                                 const quota = calculateQuotaExpression(newCodeProviderImageQuotas[profile.id] ?? '', 0)
                                 if (quota === undefined) {
@@ -2029,7 +2117,7 @@ export default function SettingsModal() {
                             <span className="w-24 shrink-0 truncate text-xs text-gray-500 dark:text-gray-400">
                               {profile.name}
                             </span>
-                            <input
+                            <ClearableInput
                               value={newCodeProviderVideoQuotas[profile.id] ?? ''}
                               onChange={(event) => {
                                 setNewCodeProviderVideoQuotas((prev) => ({
@@ -2037,6 +2125,10 @@ export default function SettingsModal() {
                                   [profile.id]: event.target.value,
                                 }))
                               }}
+                              onClear={() => setNewCodeProviderVideoQuotas((prev) => ({
+                                ...prev,
+                                [profile.id]: '',
+                              }))}
                               onBlur={() => {
                                 const quota = calculateQuotaExpression(newCodeProviderVideoQuotas[profile.id] ?? '', 0)
                                 if (quota === undefined) {
@@ -2067,9 +2159,10 @@ export default function SettingsModal() {
               </div>
 
               <div className="space-y-2">
-                <input
+                <ClearableInput
                   value={usageCodeSearchQuery}
                   onChange={(event) => setUsageCodeSearchQuery(event.target.value)}
+                  onClear={() => setUsageCodeSearchQuery('')}
                   placeholder="搜索使用码或别名"
                   className="w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                 />
@@ -2097,12 +2190,13 @@ export default function SettingsModal() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
-                              <input
+                              <ClearableInput
                                 value={code.name}
                                 onChange={(event) => {
                                   const name = event.target.value
                                   setUsageCodes((prev) => prev.map((item) => item.id === code.id ? { ...item, name } : item))
                                 }}
+                                onClear={() => setUsageCodes((prev) => prev.map((item) => item.id === code.id ? { ...item, name: '' } : item))}
                                 onBlur={() => handleUpdateUsageCode(code.id, { name: code.name.trim() || '未命名使用码' })}
                                 className="w-full rounded-lg bg-transparent pr-2 text-sm font-medium text-gray-800 outline-none dark:text-gray-100"
                               />
@@ -2258,13 +2352,20 @@ export default function SettingsModal() {
                                               已用：{code.providerUsedImageCredits?.[profile.id] ?? 0}
                                             </span>
                                           </div>
-                                          <input
+                                          <ClearableInput
                                             value={providerQuotaValue}
                                             onChange={(event) => setUsageCodeProviderImageQuotaDrafts((prev) => ({
                                               ...prev,
                                               [code.id]: {
                                                 ...(prev[code.id] ?? {}),
                                                 [profile.id]: event.target.value,
+                                              },
+                                            }))}
+                                            onClear={() => setUsageCodeProviderImageQuotaDrafts((prev) => ({
+                                              ...prev,
+                                              [code.id]: {
+                                                ...(prev[code.id] ?? {}),
+                                                [profile.id]: '',
                                               },
                                             }))}
                                             onBlur={() => void handleSubmitProviderQuota(code, profile.id, 'image')}
@@ -2301,13 +2402,20 @@ export default function SettingsModal() {
                                               已用：{code.providerUsedVideoCredits?.[profile.id] ?? 0}
                                             </span>
                                           </div>
-                                          <input
+                                          <ClearableInput
                                             value={providerQuotaValue}
                                             onChange={(event) => setUsageCodeProviderVideoQuotaDrafts((prev) => ({
                                               ...prev,
                                               [code.id]: {
                                                 ...(prev[code.id] ?? {}),
                                                 [profile.id]: event.target.value,
+                                              },
+                                            }))}
+                                            onClear={() => setUsageCodeProviderVideoQuotaDrafts((prev) => ({
+                                              ...prev,
+                                              [code.id]: {
+                                                ...(prev[code.id] ?? {}),
+                                                [profile.id]: '',
                                               },
                                             }))}
                                             onBlur={() => void handleSubmitProviderQuota(code, profile.id, 'video')}

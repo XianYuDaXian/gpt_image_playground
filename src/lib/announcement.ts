@@ -130,16 +130,21 @@ function getReminderShowSlotKey(item: BackendReminderItem, now: Date) {
 }
 
 export function getNextReminderToShow(items: BackendReminderItem[], now = new Date()) {
+  return getRemindersToShow(items, now)[0] ?? null
+}
+
+export function getRemindersToShow(items: BackendReminderItem[], now = new Date()) {
   const showState = getShowState()
   const shownSlotSet = new Set(showState.shownSlotKeys)
   const sorted = [...items].sort((a, b) => new Date(a.endAt).getTime() - new Date(b.endAt).getTime())
+  const results: BackendReminderItem[] = []
   for (const item of sorted) {
     if (!isReminderActive(item, now)) continue
     if (!item.message.trim()) continue
     if (shownSlotSet.has(getReminderShowSlotKey(item, now))) continue
-    return item
+    results.push(item)
   }
-  return null
+  return results
 }
 
 export function markReminderShown(item: BackendReminderItem, now = new Date()) {
@@ -149,6 +154,20 @@ export function markReminderShown(item: BackendReminderItem, now = new Date()) {
     state.shownSlotKeys.push(key)
   }
   writeJson(REMINDER_SHOW_STATE_KEY, state)
+}
+
+export function markRemindersShown(items: BackendReminderItem[], now = new Date()) {
+  const state = getShowState()
+  let changed = false
+  for (const item of items) {
+    const key = getReminderShowSlotKey(item, now)
+    if (state.shownSlotKeys.includes(key)) continue
+    state.shownSlotKeys.push(key)
+    changed = true
+  }
+  if (changed) {
+    writeJson(REMINDER_SHOW_STATE_KEY, state)
+  }
 }
 
 export function hasUnreadCompletedReminders(items: BackendReminderItem[], now = new Date()) {

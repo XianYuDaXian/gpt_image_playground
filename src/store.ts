@@ -339,6 +339,10 @@ interface AppState {
   // 搜索和筛选
   searchQuery: string
   setSearchQuery: (q: string) => void
+  searchTags: string[]
+  addSearchTag: (tag: string) => void
+  removeSearchTag: (tag: string) => void
+  clearSearchTags: () => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterTaskType: 'all' | 'image' | 'video'
@@ -607,6 +611,18 @@ export const useStore = create<AppState>()(
       // Search & Filter
       searchQuery: '',
       setSearchQuery: (searchQuery) => set({ searchQuery }),
+      searchTags: [],
+      addSearchTag: (tag) =>
+        set((state) => {
+          const nextTag = tag.trim()
+          if (!nextTag || state.searchTags.some((item) => item.toLowerCase() === nextTag.toLowerCase())) {
+            return {}
+          }
+          return { searchTags: [...state.searchTags, nextTag] }
+        }),
+      removeSearchTag: (tag) =>
+        set((state) => ({ searchTags: state.searchTags.filter((item) => item !== tag) })),
+      clearSearchTags: () => set({ searchTags: [] }),
       filterStatus: 'all',
       setFilterStatus: (filterStatus) => set({ filterStatus }),
       filterTaskType: 'all',
@@ -884,8 +900,8 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
   const { settings, prompt, inputImages, maskDraft, params, taskMode, videoAspectRatio, videoResolution, videoDuration, showToast, setConfirmDialog } =
     useStore.getState()
 
-  if (!settings.apiKey && !settings.apiKeyConfigured) {
-    showToast('请先在设置中完成后端 API 配置', 'error')
+  if (!settings.providerProfileId) {
+    showToast(taskMode === 'video' ? '请先在设置中完成视频 API 配置' : '请先在设置中完成图片 API 配置', 'error')
     useStore.getState().setShowSettings(true)
     return
   }
@@ -1520,6 +1536,7 @@ export async function refreshTasksFromServer(options: { silent?: boolean } = {})
       page: state.taskPage,
       pageSize: state.taskPageSize,
       query: state.searchQuery,
+      searchTags: state.searchTags,
       status: state.filterStatus,
       taskType: state.filterTaskType,
       favorite: state.filterFavorite,

@@ -375,6 +375,7 @@ export default function InputBar() {
   const filterArchived = useStore((s) => s.filterArchived)
   const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
   const searchQuery = useStore((s) => s.searchQuery)
+  const searchTags = useStore((s) => s.searchTags)
   const authStatus = useStore((s) => s.authStatus)
 
   const filteredTasks = useMemo(() => {
@@ -389,9 +390,10 @@ export default function InputBar() {
         role: authStatus?.role,
         showUsageCodeTasksForAdmin,
         query: q,
+        tags: searchTags,
       }),
     )
-  }, [authStatus?.role, tasks, searchQuery, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  }, [authStatus?.role, tasks, searchQuery, searchTags, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
   const visibleTasks = useMemo(
     () => filteredTasks.filter((task) => visibleTaskIds.includes(task.id)),
     [filteredTasks, visibleTaskIds],
@@ -559,14 +561,14 @@ export default function InputBar() {
   const isMobile = useIsMobile()
   const keyboardVisible = useKeyboardVisible()
 
-  const hasConfiguredProvider = Boolean(settings.apiKeyConfigured || settings.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
-  const quotaCost = taskMode === 'video' ? 1 : params.n
-  const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
   const modeProviderOptions = useMemo(
     () => providerOptions.filter((option) => taskMode === 'video' ? option.apiMode === 'videos' : option.apiMode !== 'videos'),
     [providerOptions, taskMode],
   )
+  const hasConfiguredProvider = modeProviderOptions.length > 0
+  const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
+  const quotaCost = taskMode === 'video' ? 1 : params.n
+  const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
   const activeProviderProfileId = modeProviderOptions.some((option) => option.id === settings.providerProfileId)
     ? settings.providerProfileId
     : modeProviderOptions.find((option) => option.isDefault)?.id
@@ -1127,6 +1129,16 @@ export default function InputBar() {
       e.preventDefault()
       void handleSubmit()
     }
+  }
+
+  const clearPromptText = () => {
+    setPrompt('')
+    setCursorPos(0)
+    window.setTimeout(() => {
+      const editor = textareaRef.current
+      if (!editor) return
+      editor.focus()
+    }, 0)
   }
 
   const handlePromptPaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
@@ -2093,7 +2105,7 @@ export default function InputBar() {
             </div>
           )}
 
-          <div className="relative">
+            <div className="relative">
             {showAtImageMenu && (
               <div className="glass-surface-strong absolute bottom-full left-0 z-[90] mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择当前参考图</div>
@@ -2173,8 +2185,21 @@ export default function InputBar() {
                 syncMentionTagSelection(el)
               }}
               data-placeholder={taskMode === 'video' ? '描述你想生成的视频。可添加参考图。' : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
-              className="w-full min-h-[42px] px-4 py-3 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
+              className="w-full min-h-[42px] px-4 py-3 pr-11 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />
+            {prompt.trim() && (
+              <button
+                type="button"
+                onClick={clearPromptText}
+                className="absolute right-3 top-3 rounded-full p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-white/[0.08] dark:hover:text-gray-300"
+                aria-label="清空提示词"
+                title="清空提示词"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
           </div>
 
           <div className="mt-3">

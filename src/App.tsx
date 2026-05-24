@@ -3,7 +3,7 @@ import { initStore } from './store'
 import { useStore } from './store'
 import { applyThemeMode, watchSystemTheme } from './lib/theme'
 import { fetchBackendReminders, type BackendReminderItem } from './lib/backendSettings'
-import { getNextReminderToShow, markReminderShown } from './lib/announcement'
+import { getRemindersToShow, markRemindersShown } from './lib/announcement'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
 import TaskGrid from './components/TaskGrid'
@@ -22,7 +22,8 @@ export default function App() {
   const themeMode = useStore((s) => s.themeMode)
   const authStatus = useStore((s) => s.authStatus)
   const authInitialized = useStore((s) => s.authInitialized)
-  const [announcement, setAnnouncement] = useState<BackendReminderItem | null>(null)
+  const [announcementQueue, setAnnouncementQueue] = useState<BackendReminderItem[]>([])
+  const announcement = announcementQueue[0] ?? null
   const hasOverlayOpen = useStore((s) =>
     Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog || announcement),
   )
@@ -74,27 +75,27 @@ export default function App() {
 
   useEffect(() => {
     if (!authStatus?.authenticated || authStatus.role !== 'user') {
-      setAnnouncement(null)
+      setAnnouncementQueue([])
       return
     }
 
     let cancelled = false
     const checkReminders = () => {
-      if (announcement) return
+      if (announcementQueue.length) return
       void fetchBackendReminders()
         .then((items) => {
           if (cancelled) return
-          const nextAnnouncement = getNextReminderToShow(items)
-          if (!nextAnnouncement) {
-            setAnnouncement(null)
+          const nextAnnouncements = getRemindersToShow(items)
+          if (!nextAnnouncements.length) {
+            setAnnouncementQueue([])
             return
           }
-          markReminderShown(nextAnnouncement)
-          setAnnouncement(nextAnnouncement)
+          markRemindersShown(nextAnnouncements)
+          setAnnouncementQueue(nextAnnouncements)
         })
         .catch(() => {
           if (cancelled) return
-          setAnnouncement(null)
+          setAnnouncementQueue([])
         })
     }
 
@@ -105,7 +106,7 @@ export default function App() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [authStatus?.authenticated, authStatus?.role, authStatus?.usageCodes, announcement])
+  }, [authStatus?.authenticated, authStatus?.role, authStatus?.usageCodes, announcementQueue.length])
 
   if (!authInitialized) {
     return (
@@ -139,7 +140,7 @@ export default function App() {
       {announcement && (
         <AnnouncementModal
           announcement={announcement}
-          onClose={() => setAnnouncement(null)}
+          onClose={() => setAnnouncementQueue((prev) => prev.slice(1))}
         />
       )}
       <Toast />

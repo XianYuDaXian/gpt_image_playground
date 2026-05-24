@@ -34,6 +34,7 @@ export async function fetchBackendTaskPage(input: {
   page: number
   pageSize: number
   query?: string
+  searchTags?: string[]
   status?: 'all' | 'running' | 'done' | 'error'
   taskType?: 'all' | 'image' | 'video'
   favorite?: boolean
@@ -44,6 +45,10 @@ export async function fetchBackendTaskPage(input: {
   params.set('page', String(input.page))
   params.set('pageSize', String(input.pageSize))
   if (input.query?.trim()) params.set('query', input.query.trim())
+  for (const tag of input.searchTags ?? []) {
+    const trimmedTag = tag.trim()
+    if (trimmedTag) params.append('searchTag', trimmedTag)
+  }
   if (input.status && input.status !== 'all') params.set('status', input.status)
   if (input.taskType && input.taskType !== 'all') params.set('taskType', input.taskType)
   if (input.favorite) params.set('favorite', '1')

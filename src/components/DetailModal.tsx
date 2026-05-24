@@ -35,11 +35,13 @@ export default function DetailModal() {
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const mainImageRef = useRef<HTMLImageElement>(null)
   const [imageLabelLeft, setImageLabelLeft] = useState(8)
-  const isIOS = useMemo(() => {
+  const useNativeVideoControls = useMemo(() => {
     if (typeof navigator === 'undefined') return false
     const ua = navigator.userAgent || ''
-    const platform = navigator.platform || ''
-    return /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+    const isIPhone = /iPhone/i.test(ua)
+    const isSafariEngine = /Safari/i.test(ua) && /Version\/[\d.]+/i.test(ua)
+    const isOtherIosBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo|Puffin|Mercury/i.test(ua)
+    return isIPhone && isSafariEngine && !isOtherIosBrowser
   }, [])
 
   const task = useMemo(
@@ -133,7 +135,7 @@ export default function DetailModal() {
     ? task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
     : ''
   const currentOutputVideoSrc = currentOutputVideoId
-    ? isIOS
+    ? useNativeVideoControls
       ? currentOutputVideoRemoteSrc || videoSrcs[currentOutputVideoId] || ''
       : videoSrcs[currentOutputVideoId] || currentOutputVideoRemoteSrc || ''
     : ''
@@ -365,7 +367,7 @@ export default function DetailModal() {
                 <VideoPlayer
                   src={currentOutputVideoSrc}
                   poster={currentOutputVideoPoster || undefined}
-                  nativeControls={isIOS}
+                  nativeControls={false}
                   blurred={isTaskBlurred}
                 />
               ) : (
