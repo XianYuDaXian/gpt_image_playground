@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 interface Option {
   label: ReactNode
@@ -17,15 +18,27 @@ interface SelectProps {
 export default function Select({ value, onChange, options, disabled, className, placement = 'auto' }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [openUp, setOpenUp] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<{ left: number; top: number; width: number }>({
+    left: 0,
+    top: 0,
+    width: 0,
+  })
   const containerRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const selectedOption = options.find((o) => o.value === value)
   const arrowPointsUp = isOpen ? !openUp : placement === 'top'
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      if (
+        containerRef.current?.contains(e.target as Node)
+        || menuRef.current?.contains(e.target as Node)
+      ) {
+        return
+      }
+      if (containerRef.current) {
         setIsOpen(false)
       }
     }
@@ -33,12 +46,30 @@ export default function Select({ value, onChange, options, disabled, className, 
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  const updateMenuPosition = useCallback((nextOpenUp: boolean) => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const viewportTop = window.visualViewport?.offsetTop ?? 0
+    const viewportLeft = window.visualViewport?.offsetLeft ?? 0
+    const estimatedMenuHeight = Math.min(options.length * 36 + 8, 240)
+    const top = nextOpenUp
+      ? Math.max(viewportTop + 8, rect.top - estimatedMenuHeight - 6)
+      : rect.bottom + 6
+
+    setMenuStyle({
+      left: rect.left + viewportLeft,
+      top,
+      width: rect.width,
+    })
+  }, [options.length])
+
   const handleToggle = useCallback((e: React.MouseEvent) => {
     if (disabled) return
     e.stopPropagation()
 
+    let nextOpenUp = openUp
     if (!isOpen && placement !== 'auto') {
-      setOpenUp(placement === 'top')
+      nextOpenUp = placement === 'top'
     } else if (!isOpen && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
       const viewportTop = window.visualViewport?.offsetTop ?? 0
@@ -46,11 +77,32 @@ export default function Select({ value, onChange, options, disabled, className, 
       const spaceAbove = rect.top - viewportTop
       const spaceBelow = viewportBottom - rect.bottom
       const estimatedMenuHeight = Math.min(options.length * 36 + 8, 240)
-      setOpenUp(spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow)
+      nextOpenUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow
     }
+    setOpenUp(nextOpenUp)
+    if (!isOpen) updateMenuPosition(nextOpenUp)
 
     setIsOpen(!isOpen)
-  }, [disabled, isOpen, options.length, placement])
+  }, [disabled, isOpen, openUp, options.length, placement, updateMenuPosition])
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const syncPosition = () => updateMenuPosition(openUp)
+    syncPosition()
+
+    window.addEventListener('resize', syncPosition)
+    window.addEventListener('scroll', syncPosition, true)
+    window.visualViewport?.addEventListener('resize', syncPosition)
+    window.visualViewport?.addEventListener('scroll', syncPosition)
+
+    return () => {
+      window.removeEventListener('resize', syncPosition)
+      window.removeEventListener('scroll', syncPosition, true)
+      window.visualViewport?.removeEventListener('resize', syncPosition)
+      window.visualViewport?.removeEventListener('scroll', syncPosition)
+    }
+  }, [isOpen, openUp, updateMenuPosition])
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -72,11 +124,17 @@ export default function Select({ value, onChange, options, disabled, className, 
         </svg>
       </div>
 
-      {isOpen && (
+      {isOpen && createPortal(
         <div
-          className={`glass-surface-strong select-menu-surface absolute z-[90] w-full border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10 ${
-            openUp ? 'bottom-full mb-1.5 animate-dropdown-up' : 'top-full mt-1.5 animate-dropdown-down'
+          ref={menuRef}
+          className={`glass-surface-strong select-menu-surface fixed z-[160] border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10 ${
+            openUp ? 'animate-dropdown-up' : 'animate-dropdown-down'
           }`}
+          style={{
+            left: menuStyle.left,
+            top: menuStyle.top,
+            width: menuStyle.width,
+          }}
         >
           {options.map((option) => (
             <div
@@ -94,7 +152,8 @@ export default function Select({ value, onChange, options, disabled, className, 
               <span className="block min-w-0">{option.label}</span>
             </div>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )

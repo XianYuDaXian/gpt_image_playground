@@ -46,7 +46,7 @@ import { useStore, clearAllData, clearLocalTaskCache } from '../store'
 import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import Select from './Select'
-import ProviderProfileTag from './ProviderProfileTag'
+import ProviderProfileTag, { getProviderProfileDisplayName } from './ProviderProfileTag'
 
 type SettingsTab = 'habits' | 'api' | 'data' | 'distribution'
 
@@ -54,11 +54,13 @@ function createEmptyProfile(): BackendProviderProfile {
   return {
     id: '',
     name: '新 API 配置',
+    remarkName: '',
     baseUrl: DEFAULT_SETTINGS.baseUrl,
     apiKey: '',
     apiKeyMasked: null,
     apiKeyConfigured: false,
     model: DEFAULT_IMAGES_MODEL,
+    modelOptions: [DEFAULT_IMAGES_MODEL],
     apiMode: 'images',
     timeoutSeconds: DEFAULT_SETTINGS.timeout,
     codexCli: false,
@@ -76,9 +78,11 @@ function createCopiedProfile(profile: BackendProviderProfile): BackendProviderPr
     ...profile,
     id: '',
     name: `${profile.name} 副本`,
+    remarkName: profile.remarkName ?? '',
     apiKey: '',
     apiKeyMasked: profile.apiKeyMasked ?? null,
     apiKeyConfigured: profile.apiKeyConfigured ?? false,
+    modelOptions: profile.modelOptions?.length ? [...profile.modelOptions] : [profile.model],
     isDefault: false,
   }
 }
@@ -363,6 +367,23 @@ export default function SettingsModal() {
     ),
   )
   const userUsageCodes = authStatus?.usageCodes ?? []
+  const getAdminProviderName = (profile: Pick<BackendProviderProfile, 'name' | 'remarkName'> | Pick<BackendProviderOption, 'name' | 'remarkName'>) =>
+    getProviderProfileDisplayName({
+      name: profile.name,
+      remarkName: profile.remarkName,
+      preferRemarkName: isAdmin,
+    })
+
+  const getProviderDistributedRemaining = (
+    profileId: string,
+    apiMode: AppSettings['apiMode'],
+  ) => usageCodes.reduce((sum, code) => {
+    const isVideoProvider = apiMode === 'videos'
+    const remaining = isVideoProvider
+      ? code.providerRemainingVideoCredits?.[profileId]
+      : code.providerRemainingImageCredits?.[profileId]
+    return sum + Math.max(0, remaining ?? 0)
+  }, 0)
   const hasUnreadEndedReminders = useMemo(
     () => reminderDrafts.some((item) => isCompletedReminderUnread(item)),
     [reminderDrafts, expandedReminderIds],
@@ -497,6 +518,46 @@ export default function SettingsModal() {
   }
 
   const findProfileByName = (name: string) => profiles.find((profile) => profile.name === name) ?? null
+
+  const renderProviderOptionLabel = (
+    profile: Pick<BackendProviderProfile, 'id' | 'name' | 'remarkName' | 'tagColor' | 'apiMode' | 'isDefault'>,
+    options: { showDistributedRemaining?: boolean; showUserRemaining?: boolean } = {},
+  ) => {
+    const distributedRemaining = options.showDistributedRemaining
+      ? getProviderDistributedRemaining(profile.id, profile.apiMode)
+      : null
+    const userRemaining = options.showUserRemaining
+      ? userUsageCodes.reduce((sum, code) => {
+          const remaining = profile.apiMode === 'videos'
+            ? code.providerRemainingVideoCredits?.[profile.id]
+            : code.providerRemainingImageCredits?.[profile.id]
+          return sum + Math.max(0, remaining ?? 0)
+        }, 0)
+      : null
+    return (
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <ProviderProfileTag
+          name={profile.name}
+          remarkName={profile.remarkName}
+          preferRemarkName={isAdmin}
+          colorKey={profile.id}
+          tagColor={profile.tagColor}
+          apiMode={profile.apiMode}
+          isDefault={profile.isDefault}
+        />
+        {distributedRemaining != null && (
+          <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
+            未用 {distributedRemaining}
+          </span>
+        )}
+        {userRemaining != null && (
+          <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
+            剩余 {userRemaining}
+          </span>
+        )}
+      </div>
+    )
+  }
 
   const parseUsageCodeAccessLabel = (label: string) => {
     const normalizedLabel = label.trim()
@@ -745,6 +806,25 @@ export default function SettingsModal() {
     setProfileDraft((prev) => ({ ...prev, ...patch }))
   }
 
+  const saveCurrentModelToDraft = () => {
+    const normalizedModel = profileDraft.model.trim()
+    if (!normalizedModel) return
+    updateProfileDraft({
+      model: normalizedModel,
+      modelOptions: Array.from(new Set([...(profileDraft.modelOptions ?? []), normalizedModel])),
+    })
+  }
+
+  const removeModelOptionFromDraft = (model: string) => {
+    const nextOptions = (profileDraft.modelOptions ?? []).filter((item) => item !== model)
+    updateProfileDraft({
+      model: profileDraft.model === model
+        ? (nextOptions[0] ?? '')
+        : profileDraft.model,
+      modelOptions: nextOptions,
+    })
+  }
+
   const refreshFromBackend = async () => {
     const [runtimeSettings, tasks] = await Promise.all([
       fetchBackendRuntimeSettings(),
@@ -804,8 +884,14 @@ export default function SettingsModal() {
     const normalizedProfile: BackendProviderProfile = {
       ...profileDraft,
       name: profileDraft.name.trim() || '默认节点',
+      remarkName: profileDraft.remarkName?.trim() || null,
       baseUrl: normalizeBaseUrl(profileDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
       model: profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
+      modelOptions: Array.from(new Set(
+        [profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode), ...(profileDraft.modelOptions ?? [])]
+          .map((item) => String(item ?? '').trim())
+          .filter(Boolean),
+      )),
       timeoutSeconds: Number(profileDraft.timeoutSeconds) || DEFAULT_SETTINGS.timeout,
       apiMode: profileDraft.apiMode === 'videos' ? 'videos' : profileDraft.apiMode === 'responses' ? 'responses' : 'images',
       codexCli: profileDraft.apiMode === 'videos' ? false : profileDraft.codexCli,
@@ -1426,15 +1512,7 @@ export default function SettingsModal() {
                   value={draft.providerProfileId ?? providerOptions.find((option) => option.isDefault)?.id ?? ''}
                   onChange={(value) => updateDraft({ providerProfileId: String(value) })}
                   options={providerOptions.map((option) => ({
-                    label: (
-                      <ProviderProfileTag
-                        name={option.name}
-                        colorKey={option.id}
-                        tagColor={option.tagColor}
-                        apiMode={option.apiMode}
-                        isDefault={option.isDefault}
-                      />
-                    ),
+                    label: renderProviderOptionLabel(option, { showUserRemaining: true }),
                     value: option.id,
                   }))}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
@@ -1552,15 +1630,7 @@ export default function SettingsModal() {
                   }}
                   options={[
                     ...profiles.map((profile) => ({
-                      label: (
-                        <ProviderProfileTag
-                          name={profile.name}
-                          colorKey={profile.id}
-                          tagColor={profile.tagColor}
-                          apiMode={profile.apiMode}
-                          isDefault={profile.isDefault}
-                        />
-                      ),
+                      label: renderProviderOptionLabel(profile, { showDistributedRemaining: true }),
                       value: profile.id,
                     })),
                     { label: '新增 API 配置', value: '__new__' },
@@ -1590,6 +1660,17 @@ export default function SettingsModal() {
                   value={profileDraft.name}
                   onChange={(event) => updateProfileDraft({ name: event.target.value })}
                   onClear={() => updateProfileDraft({ name: '' })}
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">API 备注名</span>
+                <ClearableInput
+                  value={profileDraft.remarkName ?? ''}
+                  onChange={(event) => updateProfileDraft({ remarkName: event.target.value })}
+                  onClear={() => updateProfileDraft({ remarkName: '' })}
+                  placeholder="只给管理员显示"
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
@@ -1664,11 +1745,61 @@ export default function SettingsModal() {
                 <ClearableInput
                   value={profileDraft.model}
                   onChange={(event) => updateProfileDraft({ model: event.target.value })}
+                  onBlur={saveCurrentModelToDraft}
                   onClear={() => updateProfileDraft({ model: '' })}
                   placeholder={getDefaultModelForMode(profileDraft.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
+
+              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">已保存模型</span>
+                  <button
+                    type="button"
+                    onClick={saveCurrentModelToDraft}
+                    className="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                  >
+                    保存当前模型
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(profileDraft.modelOptions ?? []).length > 0 ? (
+                    (profileDraft.modelOptions ?? []).map((model) => {
+                      const selected = model === profileDraft.model
+                      return (
+                        <div
+                          key={model}
+                          className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs ${
+                            selected
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-white text-gray-600 ring-1 ring-gray-200 dark:bg-white/[0.05] dark:text-gray-300 dark:ring-white/[0.08]'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => updateProfileDraft({ model })}
+                            className="truncate text-left"
+                            title={model}
+                          >
+                            {model}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removeModelOptionFromDraft(model)}
+                            className={selected ? 'text-white/80 hover:text-white' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'}
+                            aria-label={`删除模型 ${model}`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      )
+                    })
+                  ) : (
+                    <span className="text-xs text-gray-400 dark:text-gray-500">当前没有已保存模型</span>
+                  )}
+                </div>
+              </div>
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求超时 (秒)</span>
@@ -2134,6 +2265,8 @@ export default function SettingsModal() {
                             >
                               <ProviderProfileTag
                                 name={profile.name}
+                                remarkName={profile.remarkName}
+                                preferRemarkName
                                 colorKey={profile.id}
                                 tagColor={profile.tagColor}
                                 apiMode={profile.apiMode}
@@ -2315,16 +2448,18 @@ export default function SettingsModal() {
                                   <ProviderProfileTag
                                     key={profile.id}
                                     name={profile.name}
+                                    remarkName={profile.remarkName}
+                                    preferRemarkName
                                     colorKey={profile.id}
                                     tagColor={profile.tagColor}
                                     apiMode={profile.apiMode}
                                     isDefault={Boolean(profile.isDefault)}
                                     includeMode={false}
                                     includeDefault={false}
-                                    text={`${profile.name} ${providerStats.usedCount}/${providerStats.availableText}`}
+                                    text={`${getAdminProviderName(profile)} ${providerStats.usedCount}/${providerStats.availableText}`}
                                     detail={
                                       <div>
-                                        <div className="font-medium text-gray-800 dark:text-gray-100">{profile.name}</div>
+                                        <div className="font-medium text-gray-800 dark:text-gray-100">{getAdminProviderName(profile)}</div>
                                         <div className="mt-1 whitespace-nowrap text-[11px] text-gray-600 dark:text-gray-300">
                                           总额度 {providerStats.totalText} 已用 {providerStats.usedCount} 可用 {providerStats.availableDetailText}
                                         </div>
@@ -2412,6 +2547,8 @@ export default function SettingsModal() {
                                         >
                                           <ProviderProfileTag
                                             name={profile.name}
+                                            remarkName={profile.remarkName}
+                                            preferRemarkName
                                             colorKey={profile.id}
                                             tagColor={profile.tagColor}
                                             apiMode={profile.apiMode}

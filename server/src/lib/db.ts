@@ -7,10 +7,12 @@ import type { TaskEventRecord } from './eventBus.js'
 export interface ProviderProfileRecord {
   id: string
   name: string
+  remarkName: string | null
   tagColor: string | null
   baseUrl: string
   apiKeyEncrypted: string
   model: string
+  modelOptions: string[] | null
   apiMode: 'images' | 'responses' | 'videos'
   timeoutSeconds: number
   codexCli: number
@@ -262,6 +264,20 @@ function stringifyProviderImageQuotaMap(value: Record<string, number> | null | u
   return JSON.stringify(Object.fromEntries(entries))
 }
 
+function parseProviderModelOptions(value: string | null | undefined) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return null
+    const items = parsed
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+    return items.length ? Array.from(new Set(items)) : null
+  } catch {
+    return null
+  }
+}
+
 function quotaMapsEqual(
   left: Record<string, number> | null | undefined,
   right: Record<string, number> | null | undefined,
@@ -360,10 +376,12 @@ export class AppDatabase {
       CREATE TABLE IF NOT EXISTS provider_profiles (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        remark_name TEXT,
         tag_color TEXT,
         base_url TEXT NOT NULL,
         api_key_encrypted TEXT NOT NULL,
         model TEXT NOT NULL,
+        model_options_json TEXT,
         api_mode TEXT NOT NULL,
         timeout_seconds INTEGER NOT NULL,
         codex_cli INTEGER NOT NULL DEFAULT 0,
@@ -564,6 +582,17 @@ export class AppDatabase {
     if (!profileColumnNames.has('tag_color')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN tag_color TEXT")
     }
+    if (!profileColumnNames.has('remark_name')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN remark_name TEXT')
+    }
+    if (!profileColumnNames.has('model_options_json')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN model_options_json TEXT')
+      this.sqlite.exec(`
+        UPDATE provider_profiles
+        SET model_options_json = json_array(model)
+        WHERE COALESCE(model, '') <> ''
+      `)
+    }
     this.assignMissingProviderTagColors()
     const usageCodeColumns = this.sqlite.prepare('PRAGMA table_info(usage_codes)').all() as Array<{ name: string }>
     const usageCodeColumnNames = new Set(usageCodeColumns.map((column) => column.name))
@@ -721,15 +750,17 @@ export class AppDatabase {
   }
 
   listProviderProfiles() {
-    return this.sqlite
+    const rows = this.sqlite
       .prepare(`
         SELECT
           id,
           name,
+          remark_name as remarkName,
           tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
+          model_options_json as modelOptionsJson,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
           codex_cli as codexCli,
@@ -744,19 +775,28 @@ export class AppDatabase {
         FROM provider_profiles
         ORDER BY is_default DESC, updated_at DESC
       `)
-      .all() as ProviderProfileRecord[]
+      .all() as Array<ProviderProfileRecord & { modelOptionsJson: string | null }>
+    return rows.map((row) => {
+      const { modelOptionsJson, ...rest } = row
+      return {
+        ...rest,
+        modelOptions: parseProviderModelOptions(modelOptionsJson),
+      }
+    })
   }
 
   getProviderProfile(id: string) {
-    return this.sqlite
+    const row = this.sqlite
       .prepare(`
         SELECT
           id,
           name,
+          remark_name as remarkName,
           tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
+          model_options_json as modelOptionsJson,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
           codex_cli as codexCli,
@@ -771,19 +811,26 @@ export class AppDatabase {
         FROM provider_profiles
         WHERE id = ?
       `)
-      .get(id) as ProviderProfileRecord | undefined
+      .get(id) as (ProviderProfileRecord & { modelOptionsJson: string | null }) | undefined
+    if (!row) return undefined
+    return {
+      ...row,
+      modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+    }
   }
 
   getDefaultProviderProfile() {
-    return this.sqlite
+    const row = this.sqlite
       .prepare(`
         SELECT
           id,
           name,
+          remark_name as remarkName,
           tag_color as tagColor,
           base_url as baseUrl,
           api_key_encrypted as apiKeyEncrypted,
           model,
+          model_options_json as modelOptionsJson,
           api_mode as apiMode,
           timeout_seconds as timeoutSeconds,
           codex_cli as codexCli,
@@ -799,16 +846,23 @@ export class AppDatabase {
         WHERE is_default = 1
         LIMIT 1
       `)
-      .get() as ProviderProfileRecord | undefined
+      .get() as (ProviderProfileRecord & { modelOptionsJson: string | null }) | undefined
+    if (!row) return undefined
+    return {
+      ...row,
+      modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+    }
   }
 
   upsertProviderProfile(input: {
     id: string
     name: string
+    remarkName?: string | null
     tagColor?: string | null
     baseUrl: string
     apiKeyEncrypted: string
     model: string
+    modelOptions?: string[] | null
     apiMode: 'images' | 'responses' | 'videos'
     timeoutSeconds: number
     codexCli?: boolean
@@ -866,10 +920,12 @@ export class AppDatabase {
         )
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
+          remark_name = excluded.remark_name,
           tag_color = excluded.tag_color,
           base_url = excluded.base_url,
           api_key_encrypted = excluded.api_key_encrypted,
           model = excluded.model,
+          model_options_json = excluded.model_options_json,
           api_mode = excluded.api_mode,
           timeout_seconds = excluded.timeout_seconds,
           codex_cli = excluded.codex_cli,
@@ -882,7 +938,15 @@ export class AppDatabase {
           updated_at = excluded.updated_at
       `).run({
         ...input,
+        remarkName: input.remarkName?.trim() || null,
         tagColor: this.resolveProviderTagColor(input.tagColor, input.id),
+        modelOptionsJson: JSON.stringify(
+          Array.from(new Set(
+            [input.model, ...(input.modelOptions ?? [])]
+              .map((item) => String(item ?? '').trim())
+              .filter(Boolean),
+          )),
+        ),
         codexCli: input.codexCli ? 1 : 0,
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
@@ -2837,10 +2901,12 @@ ${selectUsageCodeFields()}
         INSERT INTO provider_profiles (
           id,
           name,
+          remark_name,
           tag_color,
           base_url,
           api_key_encrypted,
           model,
+          model_options_json,
           api_mode,
           timeout_seconds,
           codex_cli,
@@ -2856,10 +2922,12 @@ ${selectUsageCodeFields()}
         VALUES (
           @id,
           @name,
+          @remarkName,
           @tagColor,
           @baseUrl,
           @apiKeyEncrypted,
           @model,
+          @modelOptionsJson,
           @apiMode,
           @timeoutSeconds,
           @codexCli,
@@ -3064,7 +3132,11 @@ ${selectUsageCodeFields()}
       `)
 
       for (const profile of input.providerProfiles) {
-        insertProviderProfile.run(profile)
+        insertProviderProfile.run({
+          ...profile,
+          remarkName: profile.remarkName ?? null,
+          modelOptionsJson: JSON.stringify(profile.modelOptions ?? [profile.model]),
+        })
       }
       for (const setting of input.appSettings) {
         insertAppSetting.run(setting)

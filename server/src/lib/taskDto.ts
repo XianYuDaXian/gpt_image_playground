@@ -93,7 +93,8 @@ export function serializeTaskRecord(
   options: {
     appSecret?: string
     exposeUsageCodeAlias?: boolean
-    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'model' | 'tagColor'> | null
+    preferProviderRemark?: boolean
+    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'remarkName' | 'model' | 'tagColor'> | null
   } = {},
 ) {
   const inputImages = images.filter((image) => image.kind === 'input' || image.kind === 'video_input')
@@ -131,7 +132,9 @@ export function serializeTaskRecord(
     taskType: task.taskType ?? 'image',
     params: JSON.parse(task.paramsJson),
     providerProfileId: task.providerProfileId,
-    providerProfileName: options.providerProfile?.name ?? null,
+    providerProfileName: options.preferProviderRemark
+      ? (options.providerProfile?.remarkName ?? options.providerProfile?.name ?? null)
+      : (options.providerProfile?.name ?? null),
     providerProfileTagColor: options.providerProfile?.tagColor ?? null,
     providerProfileModel: options.providerProfile?.model ?? null,
     inputImageIds: inputImages.map((image) => image.id),
@@ -196,7 +199,7 @@ export function serializeTaskRecord(
   }
 }
 
-export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean } = {}) {
+export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean; preferProviderRemark?: boolean } = {}) {
   const task = db.getTask(taskId)
   if (!task) return null
   const providerProfile = task.providerProfileId ? db.getProviderProfile(task.providerProfileId) : null

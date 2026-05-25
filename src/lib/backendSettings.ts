@@ -29,12 +29,14 @@ export interface BackendRuntimeSettings {
 export interface BackendProviderProfile {
   id: string
   name: string
+  remarkName?: string | null
   tagColor?: string | null
   baseUrl: string
   apiKey?: string
   apiKeyMasked?: string | null
   apiKeyConfigured?: boolean
   model: string
+  modelOptions?: string[] | null
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
@@ -51,9 +53,11 @@ export interface BackendProviderProfile {
 export interface BackendProviderOption {
   id: string
   name: string
+  remarkName?: string | null
   tagColor?: string | null
   apiMode: AppSettings['apiMode']
   model: string
+  modelOptions?: string[] | null
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean

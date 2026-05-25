@@ -239,25 +239,6 @@ export default function TaskCard({
           if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
             setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
           }
-          return
-        }
-
-        const fallbackImageId = task.taskType === 'video' ? firstOutputVideoId : firstOutputImageId
-        const fallbackRemoteUrl = task.taskType === 'video'
-          ? firstOutputVideoPosterUrl
-          : (firstOutputImageId ? task.imageUrlsById?.[firstOutputImageId] : '')
-        if (fallbackImageId && fallbackRemoteUrl) {
-          void ensureTaskImageThumbnailAvailable(fallbackImageId, fallbackRemoteUrl)
-            .then((generatedThumbnail) => {
-              if (cancelled || !generatedThumbnail) return
-              setThumbSrc((prev) => prev === generatedThumbnail.dataUrl ? prev : generatedThumbnail.dataUrl)
-              if (!firstOutputSize?.width && !firstOutputSize?.height && generatedThumbnail.width && generatedThumbnail.height) {
-                setCoverRatio(formatImageRatio(generatedThumbnail.width, generatedThumbnail.height))
-              }
-            })
-            .catch(() => {
-              /* 主界面不回退到远端海报或原图，缩略图生成失败时保留占位 */
-            })
         }
       })
       return () => {
@@ -332,8 +313,8 @@ export default function TaskCard({
   const taskModelLabel = isUsageCodeUser ? null : (task.providerProfileModel ?? null)
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
-  const showDeferredPlaceholder =
-    task.status === 'done' && hasOutputImage && Boolean(firstOutputImageId) && deferImageLoading && !firstOutputImageLoaded && !thumbSrc
+  const showThumbnailPlaceholder =
+    task.status === 'done' && (hasOutputImage || hasOutputVideo) && !thumbSrc
   const isCoverBlurred = Boolean(thumbSrc) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -382,6 +363,21 @@ export default function TaskCard({
             e.preventDefault()
             e.stopPropagation()
             return
+          }
+          const fallbackImageId = task.taskType === 'video' ? firstOutputVideoId : firstOutputImageId
+          const fallbackRemoteUrl = task.taskType === 'video'
+            ? firstOutputVideoPosterUrl
+            : (firstOutputImageId ? task.imageUrlsById?.[firstOutputImageId] : '')
+          if (!thumbSrc && fallbackImageId && fallbackRemoteUrl) {
+            void ensureTaskImageThumbnailAvailable(fallbackImageId, fallbackRemoteUrl).then((generatedThumbnail) => {
+              if (!generatedThumbnail) return
+              setThumbSrc((prev) => prev === generatedThumbnail.dataUrl ? prev : generatedThumbnail.dataUrl)
+              if (!firstOutputSize?.width && !firstOutputSize?.height && generatedThumbnail.width && generatedThumbnail.height) {
+                setCoverRatio(formatImageRatio(generatedThumbnail.width, generatedThumbnail.height))
+              }
+            }).catch(() => {
+              /* 详情弹窗会继续按原图链路加载，这里忽略缩略图补全失败。 */
+            })
           }
           onClick(e)
         }}
@@ -479,23 +475,16 @@ export default function TaskCard({
               )}
             </>
           )}
-          {showDeferredPlaceholder && (
+          {showThumbnailPlaceholder && (
             <div
-              onClick={(e) => {
-                e.preventDefault()
-                e.stopPropagation()
-                if (firstOutputImageId) {
-                  markTaskImageLoaded(firstOutputImageId)
-                }
-              }}
-              className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-gray-100 text-gray-500 transition hover:bg-gray-200 dark:bg-black/20 dark:text-gray-300 dark:hover:bg-black/30"
-              title="点击加载图片"
+              className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-gray-100 text-gray-500 dark:bg-black/20 dark:text-gray-300"
+              title="点击卡片后再加载缩略图"
             >
               <svg className="w-9 h-9" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 3v11m0 0l-4-4m4 4l4-4M5 17v1a2 2 0 002 2h10a2 2 0 002-2v-1" />
               </svg>
               <span className="rounded-full bg-white/85 px-2.5 py-1 text-xs font-medium text-gray-600 shadow-sm dark:bg-white/10 dark:text-gray-200">
-                点击加载
+                点击查看
               </span>
             </div>
           )}
@@ -609,6 +598,19 @@ export default function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
+              {task.ownerLabel && (
+                <UsageCodeBadge task={task} />
+              )}
+              {taskSourceLabel && (
+                <ProviderProfileTag
+                  name={taskSourceLabel}
+                  colorKey={task.providerProfileId ?? taskSourceLabel}
+                  tagColor={task.providerProfileTagColor}
+                  includeMode={false}
+                  includeDefault={false}
+                  className="max-w-[7rem] flex-shrink-0 rounded px-1.5 py-0.5 text-xs leading-4"
+                />
+              )}
               {isVideoTask ? (
                 <>
                   <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 flex-shrink-0">视频</span>
@@ -629,16 +631,6 @@ export default function TaskCard({
                   mask
                 </span>
               )}
-              {taskSourceLabel && (
-                <ProviderProfileTag
-                  name={taskSourceLabel}
-                  colorKey={task.providerProfileId ?? taskSourceLabel}
-                  tagColor={task.providerProfileTagColor}
-                  includeMode={false}
-                  includeDefault={false}
-                  className="max-w-[7rem] flex-shrink-0 rounded px-1.5 py-0.5 text-xs leading-4"
-                />
-              )}
               {taskModelLabel && (
                 <span
                   className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0"
@@ -646,9 +638,6 @@ export default function TaskCard({
                 >
                   {taskModelLabel}
                 </span>
-              )}
-              {task.ownerLabel && (
-                <UsageCodeBadge task={task} />
               )}
               </div>
             {/* 操作按钮 */}

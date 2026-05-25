@@ -187,6 +187,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     return serializeTaskRecord(task, app.db.listTaskImages(task.id), {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
+      preferProviderRemark: exposeUsageCodeAlias,
       providerProfile,
     })
   }
@@ -211,6 +212,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     return tasks.map((task) => serializeTaskRecord(task, imagesByTaskId.get(task.id) ?? [], {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
+      preferProviderRemark: exposeUsageCodeAlias,
       providerProfile: task.providerProfileId ? providerMap.get(task.providerProfileId) ?? null : null,
     }))
   }
@@ -425,7 +427,11 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     reply.code(201)
     return {
-      task: loadSerializedTask(app.db, taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' }),
+      task: loadSerializedTask(app.db, taskId, {
+        appSecret: app.config.appSecret,
+        exposeUsageCodeAlias: auth.role === 'admin',
+        preferProviderRemark: auth.role === 'admin',
+      }),
       event,
       auth: buildAuthStatus(app, await requireAuth(app, request, reply)),
     }
@@ -493,7 +499,11 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       reply.code(404)
       return { message: '任务不存在' }
     }
-    const task = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
+    const task = loadSerializedTask(app.db, params.taskId, {
+      appSecret: app.config.appSecret,
+      exposeUsageCodeAlias: auth.role === 'admin',
+      preferProviderRemark: auth.role === 'admin',
+    })
 
     return {
       task,
@@ -652,7 +662,11 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
 
     const unsubscribe = app.taskEvents.subscribe(params.taskId, (event) => {
       reply.raw.write(formatSseEvent('progress', event))
-      const latestTask = loadSerializedTask(app.db, params.taskId, { appSecret: app.config.appSecret, exposeUsageCodeAlias: auth.role === 'admin' })
+      const latestTask = loadSerializedTask(app.db, params.taskId, {
+        appSecret: app.config.appSecret,
+        exposeUsageCodeAlias: auth.role === 'admin',
+        preferProviderRemark: auth.role === 'admin',
+      })
       if (latestTask) {
         reply.raw.write(formatSseEvent('snapshot', { task: latestTask }))
       }

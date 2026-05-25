@@ -1344,6 +1344,8 @@ export default function InputBar() {
             label: (
               <ProviderProfileTag
                 name={option.name}
+                remarkName={option.remarkName}
+                preferRemarkName={authStatus?.role === 'admin'}
                 colorKey={option.id}
                 tagColor={option.tagColor}
                 includeMode={false}

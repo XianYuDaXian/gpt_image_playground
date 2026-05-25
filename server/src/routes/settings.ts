@@ -41,9 +41,11 @@ import type {
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
+  remarkName: z.string().trim().optional().nullable(),
   baseUrl: z.string().url(),
   apiKey: z.string().optional(),
   model: z.string().min(1),
+  modelOptions: z.array(z.string().trim().min(1)).max(32).optional().nullable(),
   apiMode: z.enum(['images', 'responses', 'videos']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
@@ -149,10 +151,12 @@ const backupImportSchema = z.object({
 const fullBackupProviderProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
+  remarkName: z.string().nullable().optional(),
   tagColor: z.string().nullable().optional(),
   baseUrl: z.string().url(),
   apiKey: z.string(),
   model: z.string().min(1),
+  modelOptions: z.array(z.string().min(1)).nullable().optional(),
   apiMode: z.enum(['images', 'responses', 'videos']),
   timeoutSeconds: z.number().int().positive(),
   codexCli: z.boolean(),
@@ -413,7 +417,10 @@ function formatQuotaEventLabel(event: { eventType: string; reason?: string | nul
 function formatUsageCodeAccessLabel(app: Parameters<FastifyPluginAsync>[0], providerIds: string[] | null | undefined) {
   if (!providerIds?.length) return '全部 API'
   const names = providerIds
-    .map((id) => app.db.getProviderProfile(id)?.name ?? id)
+    .map((id) => {
+      const profile = app.db.getProviderProfile(id)
+      return profile?.remarkName ?? profile?.name ?? id
+    })
     .filter(Boolean)
   return names.length ? names.join('、') : '未匹配 API'
 }
@@ -590,7 +597,7 @@ async function listBackupImportCandidates(rootDir: string): Promise<BackupImport
     .sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
 }
 
-function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNullable<ReturnType<typeof app.db.getDefaultProviderProfile>>, includeApiKey = false) {
+function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: ProviderProfileRecord, includeApiKey = false) {
   let apiKey = ''
   let apiKeyConfigured = true
   let apiKeyMasked: string | null = null
@@ -604,12 +611,14 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: NonNu
   return {
     id: profile.id,
     name: profile.name,
+    remarkName: profile.remarkName,
     tagColor: profile.tagColor,
     baseUrl: profile.baseUrl,
     apiKey: includeApiKey ? apiKey : '',
     apiKeyMasked,
     apiKeyConfigured,
     model: profile.model,
+    modelOptions: profile.modelOptions ?? [profile.model],
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
@@ -628,9 +637,11 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
   return {
     id: profile.id,
     name: profile.name,
+    remarkName: profile.remarkName,
     tagColor: profile.tagColor,
     apiMode: profile.apiMode,
     model: profile.model,
+    modelOptions: profile.modelOptions ?? [profile.model],
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
@@ -688,6 +699,11 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
       codePlain = null
     }
   }
+  const getProviderDisplayName = (providerProfileId: string | null, fallbackName: string | null) => {
+    if (!providerProfileId) return fallbackName
+    const profile = app.db.getProviderProfile(providerProfileId)
+    return profile?.remarkName ?? profile?.name ?? fallbackName
+  }
 
   return {
     id: code.id,
@@ -723,7 +739,7 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
         eventType: event.eventType,
         credits: event.credits,
         providerProfileId: event.providerProfileId,
-        providerProfileName: event.providerProfileName,
+        providerProfileName: getProviderDisplayName(event.providerProfileId, event.providerProfileName),
         providerProfileTagColor: event.providerProfileTagColor,
       })),
       ...activityLogs
@@ -997,10 +1013,12 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
   const providerProfiles = app.db.listProviderProfiles().map((profile) => ({
     id: profile.id,
     name: profile.name,
+    remarkName: profile.remarkName,
     tagColor: profile.tagColor,
     baseUrl: profile.baseUrl,
     apiKey: decryptText(profile.apiKeyEncrypted, app.config.appSecret),
     model: profile.model,
+    modelOptions: profile.modelOptions ?? [profile.model],
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
@@ -1797,10 +1815,12 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
   const providerProfiles: ProviderProfileRecord[] = [{
     id: providerProfileId,
     name: '导入的默认节点',
+    remarkName: null,
     tagColor: 'blue',
     baseUrl: payload.runtimeSettings.baseUrl,
     apiKeyEncrypted: encryptText(payload.runtimeSettings.apiKey, app.config.appSecret),
     model: payload.runtimeSettings.model,
+    modelOptions: [payload.runtimeSettings.model],
     apiMode: payload.runtimeSettings.apiMode,
     timeoutSeconds: payload.runtimeSettings.timeoutSeconds,
     codexCli: payload.runtimeSettings.codexCli ? 1 : 0,
@@ -1953,10 +1973,12 @@ function buildParsedPayloadFromFullManifest(
     providerProfiles: manifest.providerProfiles.map((profile) => ({
       id: profile.id,
       name: profile.name,
+      remarkName: profile.remarkName ?? null,
       tagColor: profile.tagColor ?? null,
       baseUrl: profile.baseUrl,
       apiKeyEncrypted: encryptText(profile.apiKey, app.config.appSecret),
       model: profile.model,
+      modelOptions: profile.modelOptions ?? [profile.model],
       apiMode: profile.apiMode,
       timeoutSeconds: profile.timeoutSeconds,
       codexCli: profile.codexCli ? 1 : 0,
@@ -2648,11 +2670,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const profile = app.db.upsertProviderProfile({
       id: payload.id ?? currentDefaultProfile?.id ?? crypto.randomUUID(),
       name: payload.name,
+      remarkName: payload.remarkName,
       baseUrl: payload.baseUrl,
       apiKeyEncrypted: apiKey
         ? encryptText(apiKey, app.config.appSecret)
         : currentProfile?.apiKeyEncrypted ?? '',
       model: payload.model,
+      modelOptions: payload.modelOptions ?? [payload.model],
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
@@ -2681,9 +2705,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const profile = app.db.upsertProviderProfile({
       id: payload.id ?? crypto.randomUUID(),
       name: payload.name,
+      remarkName: payload.remarkName,
       baseUrl: payload.baseUrl,
       apiKeyEncrypted: encryptText(apiKey, app.config.appSecret),
       model: payload.model,
+      modelOptions: payload.modelOptions ?? [payload.model],
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,
@@ -2704,13 +2730,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       apiMode: profile.apiMode,
     })
     for (const code of app.db.listUsageCodesWithStats()) {
-      app.db.insertUsageCodeActivityLog({
-        usageCodeId: code.id,
-        actorKind: 'admin',
-        eventType: 'usage_code_provider_quota_initialized',
-        message: `管理员新增 API 配置「${profile.name}」，该端点默认未授权，额度设为 0`,
-      })
-    }
+        app.db.insertUsageCodeActivityLog({
+          usageCodeId: code.id,
+          actorKind: 'admin',
+          eventType: 'usage_code_provider_quota_initialized',
+          message: `管理员新增 API 配置「${profile.remarkName ?? profile.name}」，该端点默认未授权，额度设为 0`,
+        })
+      }
     return serializeProfile(app, profile)
   })
 
@@ -2727,11 +2753,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const profile = app.db.upsertProviderProfile({
       id: params.profileId,
       name: payload.name,
+      remarkName: payload.remarkName,
       baseUrl: payload.baseUrl,
       apiKeyEncrypted: apiKey
         ? encryptText(apiKey, app.config.appSecret)
         : currentProfile.apiKeyEncrypted,
       model: payload.model,
+      modelOptions: payload.modelOptions ?? [payload.model],
       apiMode: payload.apiMode,
       timeoutSeconds: payload.timeoutSeconds,
       codexCli: payload.codexCli,

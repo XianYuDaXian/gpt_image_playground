@@ -12,6 +12,8 @@ export default function Header() {
   const themeMode = useStore((s) => s.themeMode)
   const setThemeMode = useStore((s) => s.setThemeMode)
   const authStatus = useStore((s) => s.authStatus)
+  const settings = useStore((s) => s.settings)
+  const taskMode = useStore((s) => s.taskMode)
   const [showHelp, setShowHelp] = useState(false)
   const [hasUnreadReminderDot, setHasUnreadReminderDot] = useState(false)
   const [adminReminders, setAdminReminders] = useState<Awaited<ReturnType<typeof fetchAdminBackendReminders>>>([])
@@ -62,6 +64,20 @@ export default function Header() {
     setShowSettings(true)
   }
 
+  const currentUsageRemaining = authStatus?.role === 'user'
+    ? authStatus.usageCodes.reduce((sum, code) => {
+        const providerId = settings.providerProfileId
+        if (!providerId) {
+          const totalRemaining = taskMode === 'video' ? code.remainingVideoCredits : code.remainingImageCredits
+          return sum + Math.max(0, totalRemaining ?? 0)
+        }
+        const providerRemaining = taskMode === 'video'
+          ? code.providerRemainingVideoCredits?.[providerId]
+          : code.providerRemainingImageCredits?.[providerId]
+        return sum + Math.max(0, providerRemaining ?? 0)
+      }, 0)
+    : null
+
   return (
     <header className="safe-area-top glass-surface sticky top-0 z-40 border-b border-gray-200 dark:border-white/[0.08]">
       <div className="safe-area-x safe-header-inner max-w-7xl mx-auto flex items-center justify-between gap-2">
@@ -96,9 +112,7 @@ export default function Header() {
               onClick={openSettings}
               className="inline-flex max-w-[5.5rem] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-600 transition hover:bg-gray-200 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.12]"
             >
-              {authStatus.user?.remainingImageCredits == null
-                ? '额度不限'
-                : `剩余 ${authStatus.user.remainingImageCredits}`}
+              {currentUsageRemaining == null ? '额度不限' : `剩余 ${currentUsageRemaining}`}
             </button>
           )}
           <button

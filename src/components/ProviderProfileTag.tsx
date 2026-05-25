@@ -35,10 +35,12 @@ export function getProviderProfileTagClass(colorKey: string, tagColor?: string |
 
 export function formatProviderProfileTagText(input: {
   name: string
+  remarkName?: string | null
   apiMode?: AppSettings['apiMode'] | null
   isDefault?: boolean
   includeMode?: boolean
   includeDefault?: boolean
+  preferRemarkName?: boolean
 }) {
   const parts: string[] = []
   if (input.includeDefault !== false && input.isDefault) {
@@ -47,8 +49,16 @@ export function formatProviderProfileTagText(input: {
   if (input.includeMode !== false && input.apiMode) {
     parts.push(input.apiMode === 'videos' ? '视频' : '图片')
   }
-  parts.push(input.name)
+  parts.push(input.preferRemarkName && input.remarkName ? input.remarkName : input.name)
   return parts.join(' · ')
+}
+
+export function getProviderProfileDisplayName(input: {
+  name: string
+  remarkName?: string | null
+  preferRemarkName?: boolean
+}) {
+  return input.preferRemarkName && input.remarkName ? input.remarkName : input.name
 }
 
 export default function ProviderProfileTag(props: {
@@ -59,6 +69,8 @@ export default function ProviderProfileTag(props: {
   isDefault?: boolean
   includeMode?: boolean
   includeDefault?: boolean
+  remarkName?: string | null
+  preferRemarkName?: boolean
   text?: string
   className?: string
   disabled?: boolean

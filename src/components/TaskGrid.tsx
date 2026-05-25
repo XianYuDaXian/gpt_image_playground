@@ -296,9 +296,9 @@ export default function TaskGrid() {
 
     return (
       <div
-        className={`glass-surface-strong relative z-30 mb-4 rounded-2xl border border-gray-200/70 p-3 dark:border-white/[0.08] ${
+        className={`glass-surface-strong relative mb-4 overflow-visible rounded-2xl border border-gray-200/70 p-3 dark:border-white/[0.08] ${
           position === 'bottom' ? 'mt-4 mb-28 sm:mb-36 md:mb-44' : ''
-        }`}
+        } ${position === 'top' ? 'z-40' : 'z-20'}`}
       >
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="text-xs text-gray-500 dark:text-gray-400">
