@@ -2,7 +2,6 @@ import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord, VideoTaskParams } from '../types'
 import {
   ensureMediaThumbnailCached,
-  ensureTaskImageThumbnailAvailable,
   subscribeMediaThumbnail,
   updateTaskInStore,
   useStore,
@@ -47,6 +46,7 @@ export default function TaskCard({
   const toggleTaskImageBlur = useStore((s) => s.toggleTaskImageBlur)
   const firstOutputImageId = task.outputImages?.[0]
   const firstOutputVideoId = task.outputVideos?.[0]
+  const firstOutputImagePreviewUrl = firstOutputImageId ? task.imagePreviewUrlsById?.[firstOutputImageId] || '' : ''
   const firstOutputVideoPosterUrl = firstOutputVideoId ? task.videoPosterUrlsById?.[firstOutputVideoId] || '' : ''
   const firstOutputSize = task.taskType === 'video'
     ? (firstOutputVideoId ? task.imageSizesById?.[firstOutputVideoId] : undefined)
@@ -219,9 +219,14 @@ export default function TaskCard({
     let unsubscribe: (() => void) | undefined
 
     const mediaId = task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
-    if (!mediaId && !firstOutputVideoPosterUrl) {
+    const remoteThumbnailUrl = task.taskType === 'video' ? firstOutputVideoPosterUrl : firstOutputImagePreviewUrl
+
+    if (!mediaId && !remoteThumbnailUrl) {
       setCoverRatio('')
       setThumbSrc('')
+    }
+    if (remoteThumbnailUrl) {
+      setThumbSrc((prev) => prev === remoteThumbnailUrl ? prev : remoteThumbnailUrl)
     }
     if (mediaId) {
       unsubscribe = subscribeMediaThumbnail(mediaId, (thumbnail) => {
@@ -255,6 +260,7 @@ export default function TaskCard({
     firstOutputSize?.height,
     firstOutputSize?.width,
     firstOutputVideoId,
+    firstOutputImagePreviewUrl,
     firstOutputVideoPosterUrl,
     firstOutputImageId,
     task.imageUrlsById,
@@ -363,21 +369,6 @@ export default function TaskCard({
             e.preventDefault()
             e.stopPropagation()
             return
-          }
-          const fallbackImageId = task.taskType === 'video' ? firstOutputVideoId : firstOutputImageId
-          const fallbackRemoteUrl = task.taskType === 'video'
-            ? firstOutputVideoPosterUrl
-            : (firstOutputImageId ? task.imageUrlsById?.[firstOutputImageId] : '')
-          if (!thumbSrc && fallbackImageId && fallbackRemoteUrl) {
-            void ensureTaskImageThumbnailAvailable(fallbackImageId, fallbackRemoteUrl).then((generatedThumbnail) => {
-              if (!generatedThumbnail) return
-              setThumbSrc((prev) => prev === generatedThumbnail.dataUrl ? prev : generatedThumbnail.dataUrl)
-              if (!firstOutputSize?.width && !firstOutputSize?.height && generatedThumbnail.width && generatedThumbnail.height) {
-                setCoverRatio(formatImageRatio(generatedThumbnail.width, generatedThumbnail.height))
-              }
-            }).catch(() => {
-              /* 详情弹窗会继续按原图链路加载，这里忽略缩略图补全失败。 */
-            })
           }
           onClick(e)
         }}

@@ -39,6 +39,43 @@ function buildVideoPosterUrlMap(images: TaskImageRecord[]) {
   }, {})
 }
 
+function buildImageThumbnailUrlMap(images: TaskImageRecord[]) {
+  return images.reduce<Record<string, string>>((acc, image) => {
+    if (image.kind !== 'thumb' || !image.metadataJson) return acc
+    try {
+      const metadata = JSON.parse(image.metadataJson) as { imageId?: string | null }
+      if (metadata.imageId) {
+        acc[metadata.imageId] = buildMediaUrl(image.filePath)
+      }
+    } catch {
+      return acc
+    }
+    return acc
+  }, {})
+}
+
+const DIRECT_IMAGE_PREVIEW_MAX_BYTES = 1024 * 1024
+
+function buildImagePreviewUrlMap(images: TaskImageRecord[]) {
+  const originalUrlMap = buildImageUrlMap(images)
+  const thumbnailUrlMap = buildImageThumbnailUrlMap(images)
+
+  return images.reduce<Record<string, string>>((acc, image) => {
+    if (image.kind !== 'output') return acc
+
+    if (image.bytes <= DIRECT_IMAGE_PREVIEW_MAX_BYTES) {
+      acc[image.id] = originalUrlMap[image.id] || ''
+      return acc
+    }
+
+    const thumbnailUrl = thumbnailUrlMap[image.id]
+    if (thumbnailUrl) {
+      acc[image.id] = thumbnailUrl
+    }
+    return acc
+  }, {})
+}
+
 function decryptUsageCode(task: TaskRecord, appSecret?: string) {
   if (!appSecret || !task.ownerUsageCodeCodeEncrypted) return null
   try {
@@ -83,6 +120,13 @@ function buildImageSizeMap(images: TaskImageRecord[]) {
       width: image.width,
       height: image.height,
     }
+    return acc
+  }, {})
+}
+
+function buildImageBytesMap(images: TaskImageRecord[]) {
+  return images.reduce<Record<string, number>>((acc, image) => {
+    acc[image.id] = image.bytes
     return acc
   }, {})
 }
@@ -143,9 +187,12 @@ export function serializeTaskRecord(
     maskImageId: maskImage?.id ?? null,
     maskTargetImageId: maskImage ? inputImages[0]?.id ?? null : null,
     imageUrlsById: buildImageUrlMap(images),
+    imageThumbnailUrlsById: buildImageThumbnailUrlMap(images),
+    imagePreviewUrlsById: buildImagePreviewUrlMap(images),
     mediaUrlsById: buildImageUrlMap(images),
     videoPosterUrlsById: buildVideoPosterUrlMap(images),
     imageSizesById: buildImageSizeMap(images),
+    imageBytesById: buildImageBytesMap(images),
     videoMetadataById: buildVideoMetadataMap(outputVideos),
     status: toUiStatus(task.status),
     serverStatus: task.status,

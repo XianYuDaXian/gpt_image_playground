@@ -1,15 +1,12 @@
 import type { TaskRecord } from '../types'
 
-export function formatUsageCodeTooltip(task: TaskRecord, options: { showAlias?: boolean } = {}) {
+export function formatUsageCodeTooltip(task: TaskRecord) {
   const code = task.ownerUsageCode
   if (!code) return task.ownerLabel ?? ''
 
   const isVideoTask = task.taskType === 'video'
-  const showAlias = options.showAlias !== false
   return [
-    showAlias
-      ? `使用码别名：${code.name}`
-      : `使用码：${code.code ?? task.ownerLabel ?? '未知'}`,
+    `使用码：${code.code ?? task.ownerLabel ?? '未知'}`,
     isVideoTask
       ? `当前 API 已生成视频：${code.providerOutputVideoCount}`
       : `当前 API 已生成图片：${code.providerOutputImageCount}`,

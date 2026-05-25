@@ -129,9 +129,12 @@ export interface TaskRecord {
   /** 输出视频的 media store id 列表 */
   outputVideos?: string[]
   imageUrlsById?: Record<string, string>
+  imageThumbnailUrlsById?: Record<string, string>
+  imagePreviewUrlsById?: Record<string, string>
   mediaUrlsById?: Record<string, string>
   videoPosterUrlsById?: Record<string, string>
   imageSizesById?: Record<string, { width: number | null; height: number | null }>
+  imageBytesById?: Record<string, number>
   videoMetadataById?: Record<string, { duration?: number | null }>
   status: TaskStatus
   serverStatus?: string

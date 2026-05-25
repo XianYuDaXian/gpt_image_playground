@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import sharp from 'sharp'
 import type { AppDatabase, ProviderProfileRecord } from './db.js'
 
 const MIME_MAP: Record<string, string> = {
@@ -648,6 +649,41 @@ export async function writeOutputImage(outputDir: string, index: number, image: 
     sha256,
     width: size?.width ?? null,
     height: size?.height ?? null,
+  }
+}
+
+const IMAGE_THUMBNAIL_MAX_SIZE = 720
+const IMAGE_THUMBNAIL_QUALITY = 90
+
+export async function writeOutputImageThumbnail(
+  thumbsDir: string,
+  index: number,
+  image: GeneratedImageResult,
+) {
+  const filename = `output-${index + 1}.webp`
+  const absolutePath = path.join(thumbsDir, filename)
+  await fs.mkdir(thumbsDir, { recursive: true })
+
+  const thumbnailBuffer = await sharp(image.buffer, { animated: false })
+    .rotate()
+    .resize(IMAGE_THUMBNAIL_MAX_SIZE, IMAGE_THUMBNAIL_MAX_SIZE, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .webp({ quality: IMAGE_THUMBNAIL_QUALITY })
+    .toBuffer()
+
+  await fs.writeFile(absolutePath, thumbnailBuffer)
+  const metadata = await sharp(thumbnailBuffer, { animated: false }).metadata()
+  const sha256 = crypto.createHash('sha256').update(thumbnailBuffer).digest('hex')
+
+  return {
+    fileName: filename,
+    bytes: thumbnailBuffer.byteLength,
+    mimeType: 'image/webp',
+    sha256,
+    width: metadata.width ?? null,
+    height: metadata.height ?? null,
   }
 }
 

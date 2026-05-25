@@ -2,7 +2,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
-import { executeImageTask, writeOutputImage } from './imageApi.js'
+import { executeImageTask, writeOutputImage, writeOutputImageThumbnail } from './imageApi.js'
 import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
 
@@ -159,8 +159,9 @@ export class TaskWorker {
           if (this.isTaskInactive(taskId)) return false
 
           const written = await writeOutputImage(outputDir, persistedImages, image)
+          const outputImageId = crypto.randomUUID()
           const saved = this.db.addTaskImage({
-            id: crypto.randomUUID(),
+            id: outputImageId,
             taskId,
             kind: 'output',
             filePath: path.join('outputs', taskId, written.fileName),
@@ -171,6 +172,23 @@ export class TaskWorker {
             height: written.height,
           })
           if (!saved) return false
+
+          const thumbnailDir = path.join(this.config.thumbsDir, taskId)
+          const thumbnail = await writeOutputImageThumbnail(thumbnailDir, persistedImages, image)
+          const thumbnailSaved = this.db.addTaskImage({
+            id: crypto.randomUUID(),
+            taskId,
+            kind: 'thumb',
+            filePath: path.join('thumbs', taskId, thumbnail.fileName),
+            mimeType: thumbnail.mimeType,
+            bytes: thumbnail.bytes,
+            sha256: thumbnail.sha256,
+            width: thumbnail.width,
+            height: thumbnail.height,
+            metadataJson: JSON.stringify({ imageId: outputImageId }),
+          })
+          if (!thumbnailSaved) return false
+
           persistedImages += 1
         }
 

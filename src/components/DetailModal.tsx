@@ -9,6 +9,18 @@ import UsageCodeBadge from './UsageCodeBadge'
 import VideoPlayer from './VideoPlayer'
 import type { VideoTaskParams } from '../types'
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
+}
+
 export default function DetailModal() {
   const tasks = useStore((s) => s.tasks)
   const detailTaskId = useStore((s) => s.detailTaskId)
@@ -129,6 +141,7 @@ export default function DetailModal() {
   }, [task])
 
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
+  const currentOutputImageBytes = currentOutputImageId ? task?.imageBytesById?.[currentOutputImageId] ?? null : null
   const currentOutputImageSrc = currentOutputImageId ? imageSrcs[currentOutputImageId] || '' : ''
   const currentOutputVideoId = task?.outputVideos?.[0] || ''
   const currentOutputVideoRemoteSrc = currentOutputVideoId
@@ -741,11 +754,11 @@ export default function DetailModal() {
                   <span className="font-medium break-all">{task.providerProfileName}</span>
                 </div>
               )}
-              {task.ownerUsageCode && task.providerProfileName && !isVideoTask && (
+              {!isVideoTask && currentOutputImageBytes != null && (
                 <div className="bg-gray-50 dark:bg-white/[0.03] rounded-lg px-3 py-2">
-                  <span className="text-gray-400 dark:text-gray-500">当前 API 已生成</span>
+                  <span className="text-gray-400 dark:text-gray-500">图片大小</span>
                   <br />
-                  <span className="font-medium break-all">{task.ownerUsageCode.providerOutputImageCount} 张</span>
+                  <span className="font-medium break-all">{formatBytes(currentOutputImageBytes)}</span>
                 </div>
               )}
               {task.providerProfileModel && !isUsageCodeUser && (
