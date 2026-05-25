@@ -165,7 +165,7 @@ export default function ImageContextMenu() {
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 py-1 w-[120px] overflow-hidden animate-fade-in"
+      className="dropdown-glass-surface fixed z-[9999] w-[120px] overflow-hidden rounded-lg border border-gray-100/80 py-1 shadow-xl animate-fade-in dark:border-white/[0.08]"
       style={{ left, top }}
       onContextMenu={(e) => e.preventDefault()}
     >

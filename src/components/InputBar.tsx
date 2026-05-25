@@ -29,9 +29,9 @@ function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
   if (!visible) return null
   return (
     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 pointer-events-none z-10 whitespace-nowrap">
-      <div className="relative bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg">
+      <div className="dropdown-glass-surface relative rounded-lg border border-white/10 px-3 py-2 text-xs text-gray-800 shadow-lg dark:text-white">
         {text}
-        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800" />
+        <div className="dropdown-glass-surface absolute top-full left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-gray-200/70 dark:border-white/[0.08]" />
       </div>
     </div>
   )
@@ -793,7 +793,7 @@ export default function InputBar() {
   const renderUsageCodePicker = () => {
     if (!showUsageCodePicker || authStatus?.role !== 'user' || userUsageCodes.length <= 1) return null
     return (
-      <div className="absolute bottom-full right-0 z-30 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white p-2 text-sm shadow-xl dark:border-white/[0.08] dark:bg-gray-900">
+      <div className="dropdown-glass-surface absolute bottom-full right-0 z-30 mb-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200/70 p-2 text-sm shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10">
         <div className="px-2 pb-2 text-xs text-gray-500 dark:text-gray-400">选择本次使用码</div>
         <div className="space-y-1">
           {userUsageCodes.map((code) => {
@@ -2047,7 +2047,7 @@ export default function InputBar() {
             </div>
           </div>
         )}
-        <div ref={cardRef} className="safe-input-card overflow-visible rounded-2xl border border-white/50 p-3 shadow-[0_8px_30px_rgb(0,0,0,0.08)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] dark:ring-white/10 sm:rounded-3xl sm:p-4">
+        <div ref={cardRef} className="input-card-surface safe-input-card overflow-visible rounded-2xl border border-white/50 p-3 shadow-[0_8px_30px_rgb(0,0,0,0.08)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] dark:ring-white/10 sm:rounded-3xl sm:p-4">
           {inputImages.length > 0 && (
             <div
               ref={handleRef}
@@ -2115,7 +2115,7 @@ export default function InputBar() {
 
             <div className="relative">
             {showAtImageMenu && (
-              <div className="glass-surface-strong absolute bottom-full left-0 z-[90] mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10">
+              <div className="dropdown-glass-surface absolute bottom-full left-0 z-[90] mb-2 w-64 overflow-hidden rounded-2xl border border-gray-200/70 p-1.5 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10">
                 <div className="px-2 pb-1 pt-0.5 text-[11px] text-gray-400 dark:text-gray-500">选择当前参考图</div>
                 <div className="tiny-scrollbar max-h-56 overflow-y-auto">
                   {atImageOptions.map(({ img, index }, optionIndex) => (
@@ -2350,7 +2350,7 @@ export default function InputBar() {
               </div>
             </div>
 
-            <div className="mt-2 flex items-center gap-2 sm:hidden">
+            <div className="mobile-submit-row mt-2 flex items-center gap-2 sm:hidden">
               {!keyboardVisible && (
                 <>
                   <div
@@ -2362,7 +2362,7 @@ export default function InputBar() {
                     <button
                       type="button"
                       onClick={() => !atImageLimit && fileInputRef.current?.click()}
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
+                      className={`mobile-media-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
                         atImageLimit
                           ? 'cursor-not-allowed bg-gray-200 text-gray-300 dark:bg-white/[0.04] dark:text-gray-500'
                           : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
@@ -2384,7 +2384,7 @@ export default function InputBar() {
                     <button
                       type="button"
                       onClick={() => !atImageLimit && cameraInputRef.current?.click()}
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
+                      className={`mobile-media-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
                         atImageLimit
                           ? 'cursor-not-allowed bg-gray-200 text-gray-300 dark:bg-white/[0.04] dark:text-gray-500'
                           : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
@@ -2400,8 +2400,8 @@ export default function InputBar() {
                 </>
               )}
 
-              <div className={`flex items-center gap-2 ${keyboardVisible ? 'w-full' : 'flex-1'}`}>
-                {!keyboardVisible && renderProviderSelector('w-[104px] shrink-0')}
+              <div className={`mobile-submit-main flex min-w-0 items-center gap-2 ${keyboardVisible ? 'w-full' : 'flex-1'}`}>
+                {!keyboardVisible && renderProviderSelector('mobile-provider-selector w-[104px] shrink-0')}
                 <div
                   className="relative flex-1"
                   onMouseEnter={() => setSubmitHover(true)}
@@ -2413,7 +2413,7 @@ export default function InputBar() {
                     type="button"
                     onClick={handleSubmit}
                     disabled={hasConfiguredProvider ? !canSubmit : false}
-                    className={`flex h-10 w-full min-w-[136px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
+                    className={`mobile-submit-button flex h-10 w-full min-w-[136px] items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium shadow-sm transition-all ${
                       !hasConfiguredProvider
                         ? 'cursor-pointer bg-gray-300 text-white dark:bg-white/[0.06]'
                         : 'bg-blue-500 text-white hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:opacity-50 dark:disabled:bg-white/[0.04]'

@@ -11,19 +11,18 @@ try {
   const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent : ''
   const iosMatch = userAgent.match(/OS (\d+)_\d+(?:_\d+)?/)
   const iosMajorVersion = iosMatch ? Number(iosMatch[1]) : null
-  const shouldForceBackdropFallback = Number.isFinite(iosMajorVersion) && iosMajorVersion != null && iosMajorVersion <= 16
+  const isIosWebKit = Number.isFinite(iosMajorVersion) && iosMajorVersion != null
   const supportsBackdropFilter =
     typeof window !== 'undefined'
     && typeof CSS !== 'undefined'
     && typeof CSS.supports === 'function'
-    && !shouldForceBackdropFallback
     && (
       CSS.supports('backdrop-filter: blur(24px)')
       || CSS.supports('-webkit-backdrop-filter: blur(24px)')
     )
-  document.documentElement.classList.toggle('supports-backdrop-filter', supportsBackdropFilter)
-  document.documentElement.classList.toggle('no-backdrop-filter', !supportsBackdropFilter)
-  document.documentElement.classList.toggle('legacy-backdrop-fallback', Boolean(shouldForceBackdropFallback))
+  const shouldUseBackdropFilter = supportsBackdropFilter || isIosWebKit
+  document.documentElement.classList.toggle('supports-backdrop-filter', shouldUseBackdropFilter)
+  document.documentElement.classList.toggle('no-backdrop-filter', !shouldUseBackdropFilter)
 } catch {
   document.documentElement.classList.add('no-backdrop-filter')
 }

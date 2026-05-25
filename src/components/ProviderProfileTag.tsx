@@ -182,7 +182,7 @@ export default function ProviderProfileTag(props: {
         </button>
         {open && createPortal(
           <div
-            className="fixed z-[100] w-64 whitespace-pre-line rounded-xl border border-gray-200 bg-white p-3 text-left text-xs leading-6 text-gray-700 shadow-xl dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-200"
+            className="dropdown-glass-surface fixed z-[100] w-64 whitespace-pre-line rounded-xl border border-gray-200/70 p-3 text-left text-xs leading-6 text-gray-700 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:text-gray-200 dark:ring-white/10"
             style={{ left: position.left, top: position.top }}
             onMouseEnter={openDetail}
             onMouseLeave={closeDetail}

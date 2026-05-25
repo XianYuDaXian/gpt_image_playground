@@ -307,7 +307,7 @@ export default function TaskGrid() {
           <div
             className={
               paginationLayout.compact
-                ? 'grid w-full grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.85fr)] items-center gap-2'
+                ? 'mobile-pagination-controls grid w-full grid-cols-[minmax(0,0.85fr)_minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,0.85fr)] items-center gap-2'
                 : 'flex items-center justify-end gap-2'
             }
           >
@@ -315,7 +315,7 @@ export default function TaskGrid() {
               type="button"
               onClick={() => goToPage(safeCurrentPage - 1)}
               disabled={safeCurrentPage <= 1}
-              className="h-12 min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+              className="pagination-button h-12 min-w-0 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
             >
               上一页
             </button>
@@ -324,11 +324,11 @@ export default function TaskGrid() {
                 value={safeCurrentPage}
                 onChange={(value) => goToPage(Number(value))}
                 options={pageOptions}
-                className="flex h-12 items-center rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                className="pagination-select flex h-12 items-center rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
               />
             </div>
-            <label className="flex h-12 min-w-0 items-center gap-2 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200">
-              <span className="text-xs text-gray-500 dark:text-gray-400">跳转</span>
+            <label className="pagination-jump flex h-12 min-w-0 items-center gap-2 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200">
+              <span className="pagination-jump-label text-xs text-gray-500 dark:text-gray-400">跳转</span>
               <input
                 type="number"
                 min={1}
@@ -349,7 +349,7 @@ export default function TaskGrid() {
               type="button"
               onClick={() => goToPage(safeCurrentPage + 1)}
               disabled={safeCurrentPage >= totalPages}
-              className="h-12 min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+              className="pagination-button h-12 min-w-0 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/80 px-3 text-sm text-gray-700 transition disabled:cursor-not-allowed disabled:opacity-40 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
             >
               下一页
             </button>

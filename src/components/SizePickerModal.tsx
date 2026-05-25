@@ -359,9 +359,9 @@ export default function SizePickerModal({ currentSize, onSelect, onClose }: Prop
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                   {hintVisible && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-20 w-56 bg-gray-800 text-white text-xs rounded-lg px-3 py-2 shadow-lg whitespace-normal text-center pointer-events-none">
+                    <div className="dropdown-glass-surface absolute bottom-full left-1/2 z-20 mb-2 w-56 -translate-x-1/2 rounded-lg border border-gray-200/70 px-3 py-2 text-center text-xs text-gray-800 shadow-lg pointer-events-none whitespace-normal dark:border-white/[0.08] dark:text-white">
                       {SIZE_LIMIT_TEXT}
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-800" />
+                      <div className="dropdown-glass-surface absolute top-full left-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-gray-200/70 dark:border-white/[0.08]" />
                     </div>
                   )}
                 </div>

@@ -975,8 +975,8 @@ export default function MaskEditorModal() {
               </svg>
             </button>
             {showMaskInfo && (
-              <div className="absolute left-0 top-full mt-2 w-64 rounded-xl border border-gray-200/80 bg-white px-3 py-2 text-xs leading-5 text-gray-600 shadow-lg dark:border-white/[0.08] dark:bg-gray-900 dark:text-gray-300">
-                <div className="absolute -top-1.5 left-16 h-3 w-3 rotate-45 border-l border-t border-gray-200/80 bg-white dark:border-white/[0.08] dark:bg-gray-900" />
+              <div className="dropdown-glass-surface absolute left-0 top-full mt-2 w-64 rounded-xl border border-gray-200/80 px-3 py-2 text-xs leading-5 text-gray-600 shadow-lg ring-1 ring-black/5 dark:border-white/[0.08] dark:text-gray-300 dark:ring-white/10">
+                <div className="dropdown-glass-surface absolute -top-1.5 left-16 h-3 w-3 rotate-45 border-l border-t border-gray-200/80 dark:border-white/[0.08]" />
                 根据官方文档说明，此功能仅基于提示词，无法完全控制模型编辑区域
               </div>
             )}
@@ -1143,7 +1143,7 @@ export default function MaskEditorModal() {
       {showBrushControls && sliderAnchor && createPortal(
         <div
           ref={brushSizePanelRef}
-          className="fixed z-[100] h-44 w-14 -translate-x-1/2 bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700"
+          className="dropdown-glass-surface fixed z-[100] h-44 w-14 -translate-x-1/2 rounded-xl border border-gray-200/80 shadow-xl ring-1 ring-black/5 dark:border-white/[0.08] dark:ring-white/10"
           style={{ left: sliderAnchor.left, bottom: sliderAnchor.bottom }}
         >
           <input

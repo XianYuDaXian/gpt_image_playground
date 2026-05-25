@@ -220,6 +220,11 @@ input[type="number"] {
   animation: fade-in-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+@keyframes volume-feedback-in {
+  from { opacity: 0; transform: translateY(calc(-50% + 12px)); }
+  to   { opacity: 1; transform: translateY(-50%); }
+}
+
 /* 移动端折叠区域收起/展开 */
 .collapse-section {
   display: grid;
@@ -293,39 +298,51 @@ input[type="number"] {
 
 .safe-input-card {
   padding-bottom: max(0.75rem, calc(var(--safe-area-bottom) + 0.25rem));
-  background: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.88);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .dark .safe-input-card {
-  background: rgba(24, 24, 27, 0.94);
+  background: rgba(24, 24, 27, 0.72);
 }
 
 .glass-surface {
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.9);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .glass-surface-strong {
-  background: rgba(255, 255, 255, 0.98);
+  background: rgba(255, 255, 255, 0.94);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .glass-surface-dark {
-  background: rgba(18, 22, 29, 0.96);
+  background: rgba(18, 22, 29, 0.92);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .glass-overlay-soft {
-  background: rgba(0, 0, 0, 0.36);
+  background: rgba(0, 0, 0, 0.3);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
 }
 
 .glass-overlay {
   background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
 }
 
 .dark .glass-surface {
-  background: rgba(24, 24, 27, 0.94);
+  background: rgba(24, 24, 27, 0.8);
 }
 
 .dark .glass-surface-strong {
-  background: rgba(24, 24, 27, 0.97);
+  background: rgba(24, 24, 27, 0.9);
 }
 
 .dark .glass-surface-dark {
@@ -390,6 +407,8 @@ input[type="number"] {
 
 .no-backdrop-filter .safe-input-card {
   background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
   position: relative;
   overflow: visible;
   isolation: isolate;
@@ -461,70 +480,72 @@ input[type="number"] {
   background: rgba(24, 24, 27, 0.94);
 }
 
-@supports ((-webkit-backdrop-filter: blur(24px)) or (backdrop-filter: blur(24px))) {
-  .safe-input-card {
-    background: rgba(255, 255, 255, 0.88);
-    -webkit-backdrop-filter: blur(24px);
-    backdrop-filter: blur(24px);
-  }
-
-  .glass-surface {
-    background: rgba(255, 255, 255, 0.9);
-    -webkit-backdrop-filter: blur(24px);
-    backdrop-filter: blur(24px);
-  }
-
-  .glass-surface-strong {
-    background: rgba(255, 255, 255, 0.94);
-    -webkit-backdrop-filter: blur(24px);
-    backdrop-filter: blur(24px);
-  }
-
-  .glass-surface-dark {
-    background: rgba(18, 22, 29, 0.92);
-    -webkit-backdrop-filter: blur(24px);
-    backdrop-filter: blur(24px);
-  }
-
-  .glass-overlay-soft {
-    background: rgba(0, 0, 0, 0.3);
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-  }
-
-  .glass-overlay {
-    background: rgba(0, 0, 0, 0.55);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
-  }
+.select-trigger-surface {
+  background: rgba(255, 255, 255, 0.88);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
-.dark .safe-input-card {
+.dark .select-trigger-surface {
   background: rgba(24, 24, 27, 0.72);
 }
 
-.dark .glass-surface {
-  background: rgba(24, 24, 27, 0.8);
+.select-trigger-surface:hover {
+  background: rgba(255, 255, 255, 0.9);
 }
 
-.dark .glass-surface-strong {
-  background: rgba(24, 24, 27, 0.9);
+.dark .select-trigger-surface:hover {
+  background: rgba(24, 24, 27, 0.78);
 }
 
 .select-menu-surface {
-  background: rgba(255, 255, 255, 0.985);
+  background: rgba(255, 255, 255, 0.88);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
 }
 
 .dark .select-menu-surface {
-  background: rgba(18, 18, 21, 0.975);
+  background: rgba(24, 24, 27, 0.72);
+}
+
+.dropdown-glass-surface {
+  background: rgba(255, 255, 255, 0.88);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.dark .dropdown-glass-surface {
+  background: rgba(24, 24, 27, 0.72);
+}
+
+.no-backdrop-filter .select-trigger-surface {
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 .no-backdrop-filter .select-menu-surface {
   background: rgba(255, 255, 255, 0.995);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.no-backdrop-filter .dropdown-glass-surface {
+  background: rgba(255, 255, 255, 0.96);
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+.no-backdrop-filter.dark .select-trigger-surface {
+  background: rgba(24, 24, 27, 0.94);
 }
 
 .no-backdrop-filter.dark .select-menu-surface {
   background: rgba(18, 18, 21, 0.995);
+}
+
+.no-backdrop-filter.dark .dropdown-glass-surface {
+  background: rgba(18, 18, 21, 0.96);
 }
 
 .detail-video-player {
@@ -664,7 +685,7 @@ input[type="number"] {
   align-items: center;
   justify-content: center;
   transform: translateY(-50%);
-  animation: fade-in-up 0.18s ease-out both;
+  animation: volume-feedback-in 0.18s ease-out both;
   pointer-events: none;
 }
 
@@ -969,6 +990,84 @@ input[type="number"] {
   textarea,
   select {
     font-size: 16px;
+  }
+}
+
+@media (max-width: 380px) {
+  .input-card-surface {
+    padding: 0.625rem;
+  }
+
+  .mobile-submit-row {
+    gap: 0.375rem;
+  }
+
+  .mobile-submit-main {
+    gap: 0.375rem;
+  }
+
+  .mobile-media-button {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.75rem;
+  }
+
+  .mobile-media-button svg {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+
+  .mobile-provider-selector {
+    width: 4.85rem;
+  }
+
+  .mobile-provider-selector .select-trigger-surface {
+    height: 2.25rem;
+    padding-left: 0.5rem;
+    padding-right: 0.45rem;
+    font-size: 0.75rem;
+  }
+
+  .mobile-submit-button {
+    min-width: 0;
+    height: 2.25rem;
+    gap: 0.375rem;
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  .mobile-submit-button svg {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+
+  .mobile-pagination-controls {
+    grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.08fr) minmax(0, 0.86fr) minmax(0, 0.72fr);
+    gap: 0.375rem;
+  }
+
+  .pagination-button,
+  .pagination-select,
+  .pagination-jump {
+    height: 2.75rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1;
+  }
+
+  .pagination-select .select-trigger-surface {
+    font-size: 0.75rem;
+  }
+
+  .pagination-jump {
+    gap: 0.25rem;
+  }
+
+  .pagination-jump-label {
+    font-size: 0.7rem;
   }
 }
 
