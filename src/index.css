@@ -558,6 +558,36 @@ input[type="number"] {
   pointer-events: auto;
 }
 
+.detail-video-element-hidden {
+  opacity: 0;
+}
+
+.detail-video-poster-button {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: rgb(0 0 0);
+}
+
+.detail-video-poster-play-icon {
+  position: absolute;
+  display: inline-flex;
+  height: 3.5rem;
+  width: 3.5rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 9999px;
+  color: rgb(255 255 255);
+  background: rgb(0 0 0 / 0.45);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  backdrop-filter: blur(8px);
+}
+
 .detail-video-controls {
   position: absolute;
   inset: auto 0 0 0;

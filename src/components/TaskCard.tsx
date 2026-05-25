@@ -1,8 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import type { TaskRecord, VideoTaskParams } from '../types'
 import {
-  ensureMediaThumbnailCached,
-  subscribeMediaThumbnail,
   updateTaskInStore,
   useStore,
 } from '../store'
@@ -215,56 +213,20 @@ export default function TaskCard({
 
   // 加载缩略图
   useEffect(() => {
-    let cancelled = false
-    let unsubscribe: (() => void) | undefined
-
-    const mediaId = task.taskType === 'video' ? firstOutputVideoId : task.outputImages?.[0]
     const remoteThumbnailUrl = task.taskType === 'video' ? firstOutputVideoPosterUrl : firstOutputImagePreviewUrl
 
-    if (!mediaId && !remoteThumbnailUrl) {
+    if (!remoteThumbnailUrl) {
       setCoverRatio('')
       setThumbSrc('')
-    }
-    if (remoteThumbnailUrl) {
+      return
+    } else {
       setThumbSrc((prev) => prev === remoteThumbnailUrl ? prev : remoteThumbnailUrl)
-    }
-    if (mediaId) {
-      unsubscribe = subscribeMediaThumbnail(mediaId, (thumbnail) => {
-        if (cancelled) return
-        setThumbSrc((prev) => prev === thumbnail.dataUrl ? prev : thumbnail.dataUrl)
-        if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
-          setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
-        }
-      })
-
-      ensureMediaThumbnailCached(mediaId).then((thumbnail) => {
-        if (cancelled) return
-        if (thumbnail) {
-          setThumbSrc((prev) => prev === thumbnail.dataUrl ? prev : thumbnail.dataUrl)
-          if (!firstOutputSize?.width && !firstOutputSize?.height && thumbnail.width && thumbnail.height) {
-            setCoverRatio(formatImageRatio(thumbnail.width, thumbnail.height))
-          }
-        }
-      })
-      return () => {
-        cancelled = true
-        unsubscribe?.()
-      }
-    }
-
-    return () => {
-      cancelled = true
-      unsubscribe?.()
     }
   }, [
     firstOutputSize?.height,
     firstOutputSize?.width,
-    firstOutputVideoId,
     firstOutputImagePreviewUrl,
     firstOutputVideoPosterUrl,
-    firstOutputImageId,
-    task.imageUrlsById,
-    task.outputImages,
     task.taskType,
   ])
 

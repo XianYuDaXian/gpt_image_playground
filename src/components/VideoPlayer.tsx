@@ -26,11 +26,13 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
   const [duration, setDuration] = useState(0)
   const [currentTime, setCurrentTime] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
+  const [hasEnded, setHasEnded] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [volume, setVolume] = useState(1)
   const [isMuted, setIsMuted] = useState(false)
   const [isVolumePinned, setIsVolumePinned] = useState(false)
   const [isVolumeHovered, setIsVolumeHovered] = useState(false)
+  const shouldShowPosterOverlay = Boolean(poster) && !isPlaying && (hasEnded || currentTime <= 0.05)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -56,9 +58,21 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
 
     const syncDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0)
     const syncTime = () => setCurrentTime(video.currentTime || 0)
-    const syncPlay = () => setIsPlaying(!video.paused && !video.ended)
+    const syncPlay = () => {
+      setIsPlaying(!video.paused && !video.ended)
+      setHasEnded(false)
+    }
     const syncPause = () => setIsPlaying(false)
-    const syncEnded = () => setIsPlaying(false)
+    const syncEnded = () => {
+      setIsPlaying(false)
+      setHasEnded(true)
+      try {
+        video.currentTime = 0
+        setCurrentTime(0)
+      } catch {
+        /* ignore */
+      }
+    }
     const syncVolume = () => {
       const nextVolume = Number.isFinite(video.volume) ? video.volume : 1
       setVolume(nextVolume)
@@ -142,6 +156,14 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
     if (!video) return
 
     if (video.paused || video.ended) {
+      if (video.ended || hasEnded) {
+        try {
+          video.currentTime = 0
+          setCurrentTime(0)
+        } catch {
+          /* ignore */
+        }
+      }
       try {
         await video.play()
       } catch {
@@ -252,8 +274,35 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
         playsInline
         controls={nativeControls}
         preload="metadata"
-        className={`detail-video-element${nativeControls ? ' detail-video-element-native' : ''}${blurred ? ' blur-md scale-[1.02]' : ''}`}
+        className={`detail-video-element${nativeControls ? ' detail-video-element-native' : ''}${shouldShowPosterOverlay && !nativeControls ? ' detail-video-element-hidden' : ''}${blurred ? ' blur-md scale-[1.02]' : ''}`}
       />
+      {shouldShowPosterOverlay && (
+        nativeControls ? (
+          <img
+            src={poster}
+            alt=""
+            className={`pointer-events-none absolute inset-0 h-full w-full object-contain${blurred ? ' blur-md scale-[1.02]' : ''}`}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => void togglePlay()}
+            className="detail-video-poster-button"
+            aria-label="播放视频"
+          >
+            <img
+              src={poster}
+              alt=""
+              className={`h-full w-full object-contain${blurred ? ' blur-md scale-[1.02]' : ''}`}
+            />
+            <span className="detail-video-poster-play-icon" aria-hidden="true">
+              <svg className="ml-0.5 h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5.14v13.72c0 .72.78 1.17 1.4.82l10.54-6.86a.94.94 0 000-1.64L9.4 4.32A.95.95 0 008 5.14z" />
+              </svg>
+            </span>
+          </button>
+        )
+      )}
       {blurred && <div className="pointer-events-none absolute inset-0 bg-black/20" />}
       {!nativeControls && (
         <div

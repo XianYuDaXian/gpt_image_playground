@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
-import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureMediaThumbnailCached, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
@@ -115,14 +115,6 @@ export default function DetailModal() {
     }
 
     for (const videoId of task.outputVideos || []) {
-      if (!task.videoPosterUrlsById?.[videoId]) {
-        ensureMediaThumbnailCached(videoId).then((thumbnail) => {
-          if (!cancelled && thumbnail?.dataUrl) {
-            setImageSrcs((prev) => ({ ...prev, [videoId]: prev[videoId] || thumbnail.dataUrl }))
-          }
-        })
-      }
-
       ensureTaskVideoAvailable(videoId).then((url) => {
         if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
       })
