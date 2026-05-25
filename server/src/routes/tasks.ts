@@ -182,11 +182,13 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
   const serializeTask = (
     task: ReturnType<typeof app.db.getTask> extends infer T ? Exclude<T, undefined> : never,
     exposeUsageCodeAlias: boolean,
+    exposeDetailedError: boolean,
   ) => {
     const providerProfile = task.providerProfileId ? app.db.getProviderProfile(task.providerProfileId) : null
     return serializeTaskRecord(task, app.db.listTaskImages(task.id), {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
+      exposeDetailedError,
       preferProviderRemark: exposeUsageCodeAlias,
       providerProfile,
     })
@@ -195,6 +197,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
   const serializeTaskList = (
     tasks: Array<ReturnType<typeof app.db.listTaskPage>[number]>,
     exposeUsageCodeAlias: boolean,
+    exposeDetailedError: boolean,
   ) => {
     if (tasks.length === 0) return []
     const taskIds = tasks.map((task) => task.id)
@@ -212,6 +215,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     return tasks.map((task) => serializeTaskRecord(task, imagesByTaskId.get(task.id) ?? [], {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
+      exposeDetailedError,
       preferProviderRemark: exposeUsageCodeAlias,
       providerProfile: task.providerProfileId ? providerMap.get(task.providerProfileId) ?? null : null,
     }))
@@ -430,6 +434,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       task: loadSerializedTask(app.db, taskId, {
         appSecret: app.config.appSecret,
         exposeUsageCodeAlias: auth.role === 'admin',
+        exposeDetailedError: auth.role === 'admin',
         preferProviderRemark: auth.role === 'admin',
       }),
       event,
@@ -464,7 +469,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         limit: auth.role === 'admin' ? ADMIN_TASK_LIST_LIMIT : USER_TASK_LIST_LIMIT,
         offset: 0,
       })
-      const filteredTasks = serializeTaskList(rawTasks, auth.role === 'admin')
+      const filteredTasks = serializeTaskList(rawTasks, auth.role === 'admin', auth.role === 'admin')
         .filter((task) => {
           if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
           return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
@@ -480,7 +485,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         limit: query.pageSize,
         offset: start,
       })
-      items = serializeTaskList(rawTasks, auth.role === 'admin')
+      items = serializeTaskList(rawTasks, auth.role === 'admin', auth.role === 'admin')
     }
 
     return {
@@ -502,6 +507,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const task = loadSerializedTask(app.db, params.taskId, {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias: auth.role === 'admin',
+      exposeDetailedError: auth.role === 'admin',
       preferProviderRemark: auth.role === 'admin',
     })
 
@@ -531,7 +537,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return { message: '任务不存在' }
     }
 
-    const serializedTask = serializeTask(task, auth.role === 'admin')
+    const serializedTask = serializeTask(task, auth.role === 'admin', auth.role === 'admin')
     app.taskEvents.emitTaskChanged(task.id)
     return { task: serializedTask }
   })
@@ -555,7 +561,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         limit: auth.role === 'admin' ? ADMIN_TASK_LIST_LIMIT : USER_TASK_LIST_LIMIT,
         offset: 0,
       })
-      return serializeTaskList(tasks, auth.role === 'admin')
+      return serializeTaskList(tasks, auth.role === 'admin', auth.role === 'admin')
     }
 
     reply.raw.write(formatSseEvent('snapshot', { tasks: buildTaskList() }))
@@ -580,7 +586,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         } satisfies TaskListEventRecord))
         return
       }
-      const task = serializeTask(taskRecord, auth.role === 'admin')
+      const task = serializeTask(taskRecord, auth.role === 'admin', auth.role === 'admin')
 
       reply.raw.write(formatSseEvent('task', {
         type: 'upsert',
@@ -643,7 +649,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       reply.code(404)
       return { message: '任务不存在' }
     }
-    const task = serializeTask(taskRecord, auth.role === 'admin')
+    const task = serializeTask(taskRecord, auth.role === 'admin', auth.role === 'admin')
 
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -665,6 +671,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       const latestTask = loadSerializedTask(app.db, params.taskId, {
         appSecret: app.config.appSecret,
         exposeUsageCodeAlias: auth.role === 'admin',
+        exposeDetailedError: auth.role === 'admin',
         preferProviderRemark: auth.role === 'admin',
       })
       if (latestTask) {

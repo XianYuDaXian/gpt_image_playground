@@ -131,12 +131,23 @@ function buildImageBytesMap(images: TaskImageRecord[]) {
   }, {})
 }
 
+function getTaskErrorForViewer(task: TaskRecord, exposeDetailedError?: boolean) {
+  if (!task.errorMessage) return null
+  if (exposeDetailedError) return task.errorMessage
+  const httpMatch = task.errorMessage.match(/\bHTTP\s+(\d{3})\b/i)
+  if (httpMatch?.[1]) {
+    return `HTTP ${httpMatch[1]}`
+  }
+  return '生成失败，请联系管理员'
+}
+
 export function serializeTaskRecord(
   task: TaskRecord,
   images: TaskImageRecord[],
   options: {
     appSecret?: string
     exposeUsageCodeAlias?: boolean
+    exposeDetailedError?: boolean
     preferProviderRemark?: boolean
     providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'remarkName' | 'model' | 'tagColor'> | null
   } = {},
@@ -198,7 +209,7 @@ export function serializeTaskRecord(
     serverStatus: task.status,
     currentStep: task.currentStep,
     progressPercent: task.progressPercent,
-    error: task.errorMessage,
+    error: getTaskErrorForViewer(task, options.exposeDetailedError),
     ownerUsageCodeId: task.ownerUsageCodeId,
     ownerKind: task.ownerKind,
     ownerLabel,
@@ -246,7 +257,7 @@ export function serializeTaskRecord(
   }
 }
 
-export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean; preferProviderRemark?: boolean } = {}) {
+export function loadSerializedTask(db: AppDatabase, taskId: string, options: { appSecret?: string; exposeUsageCodeAlias?: boolean; exposeDetailedError?: boolean; preferProviderRemark?: boolean } = {}) {
   const task = db.getTask(taskId)
   if (!task) return null
   const providerProfile = task.providerProfileId ? db.getProviderProfile(task.providerProfileId) : null
