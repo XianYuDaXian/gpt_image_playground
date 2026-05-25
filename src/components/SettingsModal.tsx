@@ -916,6 +916,10 @@ export default function SettingsModal() {
             const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, apiKeyMasked: _apiKeyMasked, apiKeyConfigured: _apiKeyConfigured, ...payload } = normalizedProfile
             return payload
           })())
+      const [nextProfiles, nextProviderOptions] = await Promise.all([
+        fetchBackendProviderProfiles().catch(() => []),
+        fetchBackendProviderOptions().catch(() => []),
+      ])
 
       const savedPreferences = await saveBackendRuntimePreferences({
         clearInputAfterSubmit: draft.clearInputAfterSubmit,
@@ -926,20 +930,6 @@ export default function SettingsModal() {
       })
 
       const nextSettings: Partial<AppSettings> = {
-        baseUrl: savedProfile.baseUrl,
-        apiKey: '',
-        apiKeyMasked: savedProfile.apiKeyMasked ?? null,
-        apiKeyConfigured: savedProfile.apiKeyConfigured ?? true,
-        providerProfileId: savedProfile.id,
-        model: savedProfile.model,
-        apiMode: savedProfile.apiMode,
-        timeout: savedProfile.timeoutSeconds,
-        codexCli: savedProfile.codexCli,
-        grokApiCompat: savedProfile.grokApiCompat,
-        xaiImage2kEnabled: savedProfile.xaiImage2kEnabled,
-        responseFormatB64Json: savedProfile.responseFormatB64Json,
-        videoMaxResolution: savedProfile.videoMaxResolution ?? '480p',
-        videoMaxDuration: savedProfile.videoMaxDuration ?? 6,
         clearInputAfterSubmit: savedPreferences.clearInputAfterSubmit,
         persistInputOnRestart: savedPreferences.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: savedPreferences.reuseTaskApiProfileTemporarily,
@@ -947,9 +937,31 @@ export default function SettingsModal() {
         showUsageCodeAliasOnTaskCard: savedPreferences.showUsageCodeAliasOnTaskCard,
       }
 
+      const refreshedSavedProfile = nextProfiles.find((profile) => profile.id === savedProfile.id) ?? savedProfile
+      const activeProviderOption = settings.providerProfileId
+        ? nextProviderOptions.find((option) => option.id === settings.providerProfileId) ?? null
+        : null
+
+      if (activeProviderOption) {
+        Object.assign(nextSettings, {
+          providerProfileId: activeProviderOption.id,
+          model: activeProviderOption.model,
+          apiMode: activeProviderOption.apiMode,
+          timeout: activeProviderOption.timeoutSeconds,
+          codexCli: activeProviderOption.codexCli,
+          grokApiCompat: activeProviderOption.grokApiCompat,
+          xaiImage2kEnabled: activeProviderOption.xaiImage2kEnabled,
+          responseFormatB64Json: activeProviderOption.responseFormatB64Json,
+          videoMaxResolution: activeProviderOption.videoMaxResolution ?? '480p',
+          videoMaxDuration: activeProviderOption.videoMaxDuration ?? 6,
+        } satisfies Partial<AppSettings>)
+      }
+
       setSettings(nextSettings)
       setDraft((prev) => ({ ...prev, ...nextSettings }))
-      await loadSettings()
+      setProfiles(nextProfiles)
+      setProviderOptions(nextProviderOptions)
+      setProfileDraft(refreshedSavedProfile)
       useStore.getState().showToast('设置已保存', 'success')
     } catch (err) {
       useStore.getState().showToast(
