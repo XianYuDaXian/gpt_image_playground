@@ -349,7 +349,7 @@ export default function DetailModal() {
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[82dvh] overflow-hidden flex flex-col md:max-h-[90vh] md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="detail-modal-panel glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[82dvh] overflow-hidden flex flex-col md:max-h-[90vh] md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-end px-4 md:hidden">
