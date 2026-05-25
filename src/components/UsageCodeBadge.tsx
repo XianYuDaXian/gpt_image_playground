@@ -15,9 +15,10 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   if (!task.ownerLabel) return null
 
   const showAlias = authStatus?.role === 'admin' && showUsageCodeAliasOnTaskCard
-  const codeText = showAlias
+  const displayText = showAlias
     ? (task.ownerUsageCode?.name ?? task.ownerLabel)
     : (task.ownerUsageCode?.code ?? task.ownerLabel)
+  const copyText = task.ownerUsageCode?.code ?? task.ownerLabel
   const detail = formatUsageCodeTooltip(task, { showAlias: !showAlias })
   const updatePosition = () => {
     const rect = buttonRef.current?.getBoundingClientRect()
@@ -38,9 +39,9 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
   }
 
   const handleCopy = async () => {
-    if (!codeText) return
+    if (!copyText) return
     try {
-      await copyTextToClipboard(codeText)
+      await copyTextToClipboard(copyText)
       showToast('分发码已复制', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制分发码失败', err), 'error')
@@ -62,7 +63,7 @@ export default function UsageCodeBadge({ task }: { task: TaskRecord }) {
         onBlur={() => window.setTimeout(() => setOpen(false), 150)}
         className="inline-flex max-w-full items-center rounded-lg bg-gray-100 px-2 py-1 font-mono text-xs font-semibold text-gray-700 transition hover:bg-gray-200 dark:bg-white/[0.07] dark:text-gray-200 dark:hover:bg-white/[0.12]"
       >
-        <span className="truncate">{codeText}</span>
+        <span className="truncate">{displayText}</span>
       </button>
       {open && createPortal(
         <span
