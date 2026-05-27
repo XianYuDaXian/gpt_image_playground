@@ -100,6 +100,7 @@ export interface BackendReminderItem {
   message: string
   imageDataUrl?: string | null
   imageDataUrls: string[]
+  audienceTiers: BackendUsageCodeUserTier[]
   maxDailyShows: number
   startAt: string
   endAt: string
@@ -109,11 +110,14 @@ export interface BackendReminderItem {
   updatedAt?: string
 }
 
+export type BackendUsageCodeUserTier = 'free' | 'paid'
+
 export interface BackendUsageCode {
   id: string
   code: string | null
   codeRecoverable: boolean
   name: string
+  userTier: BackendUsageCodeUserTier
   isEnabled: boolean
   allowedProviderProfileIds: string[] | null
   imageQuota: number | null
@@ -161,6 +165,94 @@ export interface BackendUsageCode {
   lastUsedAt: string | null
 }
 
+export type BackendUsageCodeEventTimePreset = 'today' | 'yesterday' | 'last7days' | 'last30days' | 'custom'
+export type BackendUsageCodeEventBucket = 'month' | 'day' | 'hour' | '30m' | '15m' | '5m'
+export type BackendUsageCodeEventCategory =
+  | 'all'
+  | 'create'
+  | 'generate'
+  | 'delete'
+  | 'backup'
+  | 'api_access_change'
+  | 'quota_increase'
+  | 'quota_decrease'
+  | 'export'
+  | 'distribution_change'
+  | 'rename'
+  | 'enable_disable'
+
+export interface BackendUsageCodeEventSummary {
+  totalEvents: number
+  createCount: number
+  generatedImageCount: number
+  generatedVideoCount: number
+  deletedTaskCount: number
+  backupCount: number
+  apiAccessChangeCount: number
+  imageQuotaIncreasedCredits: number
+  videoQuotaIncreasedCredits: number
+  imageQuotaDecreasedCredits: number
+  videoQuotaDecreasedCredits: number
+  exportCount: number
+  distributionChangeCount: number
+  renameCount: number
+  enableDisableCount: number
+}
+
+export interface BackendUsageCodeEventItem {
+  id: string
+  source: 'quota' | 'activity'
+  sourceId: number
+  taskId: string | null
+  createdAt: string
+  label: string
+  eventType: string
+  eventCategory: Exclude<BackendUsageCodeEventCategory, 'all'>
+  credits: number | null
+  providerProfileId: string | null
+  providerProfileName: string | null
+  providerProfileTagColor: string | null
+  providerProfileApiMode?: AppSettings['apiMode'] | null
+}
+
+export interface BackendUsageCodeEventGroup {
+  bucketKey: string
+  bucketLabel: string
+  eventCount: number
+  summary: BackendUsageCodeEventSummary
+  items: BackendUsageCodeEventItem[]
+}
+
+export interface BackendUsageCodeEventQueryResult {
+  usageCode: {
+    id: string
+    name: string
+    lastUsedAt: string | null
+    totalEvents: number
+    taskCount: number
+  }
+  summary: BackendUsageCodeEventSummary
+  groups: BackendUsageCodeEventGroup[]
+  pagination: {
+    page: number
+    pageSize: number
+    total: number
+    totalPages: number
+  }
+  filters: {
+    timePreset: BackendUsageCodeEventTimePreset
+    startAt: string | null
+    endAt: string | null
+    bucket: BackendUsageCodeEventBucket
+    eventCategory: BackendUsageCodeEventCategory
+    taskId: string
+  }
+  categories: Array<{
+    value: BackendUsageCodeEventCategory
+    label: string
+  }>
+}
+
 async function readResponseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = `HTTP ${response.status}`
@@ -186,6 +278,7 @@ function normalizeReminderItem(item: BackendReminderItem): BackendReminderItem {
     ...item,
     imageDataUrl: imageDataUrls[0] ?? null,
     imageDataUrls,
+    audienceTiers: item.audienceTiers?.length ? Array.from(new Set(item.audienceTiers)) : ['free', 'paid'],
   }
 }
 
@@ -363,6 +456,7 @@ export async function fetchBackendUsageCodes(): Promise<BackendUsageCode[]> {
 
 export async function createBackendUsageCode(input: {
   name: string
+  userTier: BackendUsageCodeUserTier
   allowedProviderProfileIds?: string[] | null
   providerImageQuotas?: Record<string, number> | null
   providerVideoQuotas?: Record<string, number> | null
@@ -379,6 +473,7 @@ export async function updateBackendUsageCode(
   codeId: string,
   patch: {
     name?: string
+    userTier?: BackendUsageCodeUserTier
     isEnabled?: boolean
     allowedProviderProfileIds?: string[] | null
     providerImageQuotas?: Record<string, number> | null
@@ -414,4 +509,32 @@ export async function deleteBackendUsageCode(codeId: string): Promise<void> {
     method: 'DELETE',
   })
   await readResponseJson<{ ok: true }>(response)
+}
+
+export async function fetchBackendUsageCodeEvents(
+  codeId: string,
+  query: {
+    page: number
+    pageSize: number
+    timePreset: BackendUsageCodeEventTimePreset
+    startAt?: string | null
+    endAt?: string | null
+    bucket: BackendUsageCodeEventBucket
+    eventCategory: BackendUsageCodeEventCategory
+    taskId?: string
+  },
+): Promise<BackendUsageCodeEventQueryResult> {
+  const params = new URLSearchParams()
+  params.set('page', String(query.page))
+  params.set('pageSize', String(query.pageSize))
+  params.set('timePreset', query.timePreset)
+  params.set('bucket', query.bucket)
+  params.set('eventCategory', query.eventCategory)
+  if (query.startAt) params.set('startAt', query.startAt)
+  if (query.endAt) params.set('endAt', query.endAt)
+  if (query.taskId?.trim()) params.set('taskId', query.taskId.trim())
+  const response = await fetch(`/api/admin/usage-codes/${encodeURIComponent(codeId)}/events?${params.toString()}`, {
+    cache: 'no-store',
+  })
+  return readResponseJson<BackendUsageCodeEventQueryResult>(response)
 }

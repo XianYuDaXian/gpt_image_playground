@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearAllData, clearLocalTaskCache, initStore, refreshAuthStatus, refreshTasksFromServer } from './store'
 import { useStore } from './store'
 import type { MaintenanceStatus } from './lib/backendAuth'
 import { applyThemeMode, watchSystemTheme } from './lib/theme'
-import { fetchBackendReminders, type BackendReminderItem } from './lib/backendSettings'
+import { fetchAdminBackendReminders, fetchBackendReminders, type BackendReminderItem } from './lib/backendSettings'
 import { getRemindersToShow, markRemindersShown } from './lib/announcement'
 import Header from './components/Header'
 import SearchBar from './components/SearchBar'
@@ -18,6 +18,8 @@ import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import LoginPage from './components/LoginPage'
 import AnnouncementModal from './components/AnnouncementModal'
+import AnnouncementListModal from './components/AnnouncementListModal'
+import { preloadAnnouncementImages } from './lib/announcementImageCache'
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0 B'
@@ -112,12 +114,50 @@ export default function App() {
   const authStatus = useStore((s) => s.authStatus)
   const authInitialized = useStore((s) => s.authInitialized)
   const [announcementQueue, setAnnouncementQueue] = useState<BackendReminderItem[]>([])
+  const [showAnnouncementList, setShowAnnouncementList] = useState(false)
+  const [announcementListItems, setAnnouncementListItems] = useState<BackendReminderItem[]>([])
+  const [announcementListLoading, setAnnouncementListLoading] = useState(false)
+  const [announcementListError, setAnnouncementListError] = useState<string | null>(null)
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<BackendReminderItem | null>(null)
   const announcement = announcementQueue[0] ?? null
   const maintenance = authStatus?.maintenance
   const previousMaintenanceRef = useRef(authStatus?.maintenance ?? null)
   const hasOverlayOpen = useStore((s) =>
-    Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog || announcement),
+    Boolean(
+      s.detailTaskId
+      || s.lightboxImageId
+      || s.maskEditorImageId
+      || s.showSettings
+      || s.confirmDialog
+      || announcement
+      || showAnnouncementList
+      || selectedAnnouncement,
+    ),
   )
+
+  const loadRecentAnnouncements = useCallback(() => {
+    if (!authStatus?.authenticated) return
+    setAnnouncementListLoading(true)
+    setAnnouncementListError(null)
+    const request = authStatus.role === 'admin' ? fetchAdminBackendReminders() : fetchBackendReminders()
+    void request
+      .then((items) => {
+        setAnnouncementListItems(items)
+        preloadAnnouncementImages(items.flatMap((item) => item.imageDataUrls?.length ? item.imageDataUrls : item.imageDataUrl ? [item.imageDataUrl] : []))
+      })
+      .catch((err) => {
+        setAnnouncementListItems([])
+        setAnnouncementListError(`读取公告失败：${err instanceof Error ? err.message : String(err)}`)
+      })
+      .finally(() => {
+        setAnnouncementListLoading(false)
+      })
+  }, [authStatus?.authenticated, authStatus?.role])
+
+  const openAnnouncementList = useCallback(() => {
+    setShowAnnouncementList(true)
+    loadRecentAnnouncements()
+  }, [loadRecentAnnouncements])
 
   useEffect(() => {
     void (async () => {
@@ -141,6 +181,13 @@ export default function App() {
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [])
+
+  useEffect(() => {
+    if (authStatus?.authenticated) return
+    setShowAnnouncementList(false)
+    setSelectedAnnouncement(null)
+    setAnnouncementListItems([])
+  }, [authStatus?.authenticated])
 
   useEffect(() => {
     applyThemeMode(themeMode)
@@ -217,6 +264,7 @@ export default function App() {
       void fetchBackendReminders()
         .then((items) => {
           if (cancelled) return
+          preloadAnnouncementImages(items.flatMap((item) => item.imageDataUrls?.length ? item.imageDataUrls : item.imageDataUrl ? [item.imageDataUrl] : []))
           const nextAnnouncements = getRemindersToShow(items)
           if (!nextAnnouncements.length) {
             setAnnouncementQueue([])
@@ -259,7 +307,7 @@ export default function App() {
 
   return (
     <>
-      <Header />
+      <Header onOpenAnnouncements={openAnnouncementList} />
       <main data-home-main className="safe-area-x safe-main-bottom max-w-7xl mx-auto">
         <SearchBar />
         <TaskGrid />
@@ -269,7 +317,23 @@ export default function App() {
       <Lightbox />
       <SettingsModal />
       <ConfirmDialog />
-      {announcement && (
+      {showAnnouncementList && (
+        <AnnouncementListModal
+          items={announcementListItems}
+          loading={announcementListLoading}
+          error={announcementListError}
+          onRefresh={loadRecentAnnouncements}
+          onSelect={setSelectedAnnouncement}
+          onClose={() => setShowAnnouncementList(false)}
+        />
+      )}
+      {selectedAnnouncement && (
+        <AnnouncementModal
+          announcement={selectedAnnouncement}
+          onClose={() => setSelectedAnnouncement(null)}
+        />
+      )}
+      {announcement && !selectedAnnouncement && (
         <AnnouncementModal
           announcement={announcement}
           onClose={() => setAnnouncementQueue((prev) => prev.slice(1))}

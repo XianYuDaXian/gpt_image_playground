@@ -141,6 +141,7 @@ export function serializeUsageQuota(code: UsageCodeRecord, appSecret: string) {
   return {
     id: code.id,
     name: getUsageCodeDisplayValue(code, appSecret),
+    userTier: code.userTier,
     allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     imageQuota: code.imageQuota,
     usedImageCredits: code.usedImageCredits,
@@ -176,6 +177,7 @@ function serializeAggregatedUser(codes: UsageCodeRecord[], appSecret: string) {
   return {
     id: codes[0]?.id ?? '',
     name: codes.length === 1 && codes[0] ? getUsageCodeDisplayValue(codes[0], appSecret) : `${codes.length} 个使用码`,
+    userTier: codes.some((code) => code.userTier === 'paid') ? 'paid' : 'free',
     allowedProviderProfileIds: null,
     imageQuota,
     usedImageCredits,

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BackendReminderItem } from '../lib/backendSettings'
+import { renderTextWithLinks } from '../lib/linkify'
+import { preloadAnnouncementImages, useAnnouncementImageSources } from '../lib/announcementImageCache'
 
 const MIN_SCALE = 1
 const MAX_SCALE = 10
@@ -26,12 +28,16 @@ export default function AnnouncementModal({
     : announcement.imageDataUrl
       ? [announcement.imageDataUrl]
       : []
-  const currentImageSrc = imageDataUrls[imageIndex] ?? ''
+  const resolvedImageSources = useAnnouncementImageSources(imageDataUrls)
   const showNav = imageDataUrls.length > 1
 
   useEffect(() => {
     setImageIndex(0)
   }, [announcement.id])
+
+  useEffect(() => {
+    preloadAnnouncementImages(imageDataUrls)
+  }, [imageDataUrls.join('\n')])
 
   return (
     <div className="fixed inset-0 z-[75] flex items-center justify-center p-4">
@@ -56,7 +62,7 @@ export default function AnnouncementModal({
           </button>
         </div>
         <div className="max-h-[75vh] overflow-y-auto px-5 py-4">
-          {currentImageSrc && (
+          {imageDataUrls.length > 0 && (
             <div
               role="button"
               tabIndex={0}
@@ -69,13 +75,16 @@ export default function AnnouncementModal({
               }}
               className="mb-4 block w-full overflow-hidden rounded-2xl bg-black/5 dark:bg-white/[0.04]"
             >
-              <div className="relative">
-                <img
-                  src={currentImageSrc}
-                  alt={announcement.title || '公告配图'}
-                  className="max-h-80 w-full select-none object-contain"
-                  draggable={false}
-                />
+              <div className="relative min-h-[12rem]">
+                {imageDataUrls.map((imageDataUrl, currentIndex) => (
+                  <img
+                    key={`${announcement.id}-image-${currentIndex}`}
+                    src={resolvedImageSources[imageDataUrl] ?? imageDataUrl}
+                    alt={announcement.title || '公告配图'}
+                    className={`max-h-80 w-full select-none object-contain ${currentIndex === imageIndex ? 'block' : 'hidden'}`}
+                    draggable={false}
+                  />
+                ))}
                 {showNav && (
                   <>
                     <button
@@ -121,7 +130,12 @@ export default function AnnouncementModal({
                                 : 'border-white/30 opacity-70 hover:opacity-100'
                             }`}
                           >
-                            <img src={imageDataUrl} alt="" className="h-full w-full select-none object-cover" draggable={false} />
+                            <img
+                              src={resolvedImageSources[imageDataUrl] ?? imageDataUrl}
+                              alt=""
+                              className="h-full w-full select-none object-cover"
+                              draggable={false}
+                            />
                           </button>
                         ))}
                       </div>
@@ -135,7 +149,7 @@ export default function AnnouncementModal({
             </div>
           )}
           <div className="whitespace-pre-wrap break-words text-sm leading-7 text-gray-700 dark:text-gray-200">
-            {announcement.message}
+            {renderTextWithLinks(announcement.message)}
           </div>
         </div>
         <div className="border-t border-gray-100 px-5 py-4 dark:border-white/[0.08]">
@@ -148,11 +162,12 @@ export default function AnnouncementModal({
           </button>
         </div>
       </div>
-      {showImagePreview && currentImageSrc && (
+      {showImagePreview && imageDataUrls.length > 0 && (
         <AnnouncementImagePreview
           announcementId={announcement.id}
           title={announcement.title || '公告配图'}
           imageDataUrls={imageDataUrls}
+          resolvedImageSources={resolvedImageSources}
           imageIndex={imageIndex}
           onChangeImageIndex={setImageIndex}
           onClose={() => setShowImagePreview(false)}
@@ -166,6 +181,7 @@ function AnnouncementImagePreview({
   announcementId,
   title,
   imageDataUrls,
+  resolvedImageSources,
   imageIndex,
   onChangeImageIndex,
   onClose,
@@ -173,6 +189,7 @@ function AnnouncementImagePreview({
   announcementId: string
   title: string
   imageDataUrls: string[]
+  resolvedImageSources: Record<string, string>
   imageIndex: number
   onChangeImageIndex: (value: number | ((current: number) => number)) => void
   onClose: () => void
@@ -204,7 +221,6 @@ function AnnouncementImagePreview({
   const hadMultiTouchRef = useRef(false)
   const touchStartedOnImageRef = useRef(false)
   const didDragRef = useRef(false)
-  const currentImageSrc = imageDataUrls[imageIndex] ?? ''
   const showNav = imageDataUrls.length > 1
 
   const rerender = useCallback(() => forceRender((value) => value + 1), [])
@@ -512,17 +528,20 @@ function AnnouncementImagePreview({
             willChange: 'transform',
           }}
         >
-          <img
-            src={currentImageSrc}
-            alt={title}
-            className="max-h-[85vh] max-w-[85vw] select-none rounded-lg object-contain shadow-2xl"
-            onDragStart={(event) => event.preventDefault()}
-            draggable={false}
-            style={{
-              userSelect: 'none',
-              WebkitUserSelect: 'none',
-            }}
-          />
+          {imageDataUrls.map((imageDataUrl, currentIndex) => (
+            <img
+              key={`${announcementId}-preview-image-${currentIndex}`}
+              src={resolvedImageSources[imageDataUrl] ?? imageDataUrl}
+              alt={title}
+              className={`max-h-[85vh] max-w-[85vw] select-none rounded-lg object-contain shadow-2xl ${currentIndex === imageIndex ? 'block' : 'hidden'}`}
+              onDragStart={(event) => event.preventDefault()}
+              draggable={false}
+              style={{
+                userSelect: 'none',
+                WebkitUserSelect: 'none',
+              }}
+            />
+          ))}
         </div>
       </div>
 
@@ -565,7 +584,12 @@ function AnnouncementImagePreview({
                       : 'border-white/30 opacity-70 hover:opacity-100'
                   }`}
                 >
-                  <img src={imageDataUrl} alt="" className="h-full w-full select-none object-cover" draggable={false} />
+                  <img
+                    src={resolvedImageSources[imageDataUrl] ?? imageDataUrl}
+                    alt=""
+                    className="h-full w-full select-none object-cover"
+                    draggable={false}
+                  />
                 </button>
               ))}
             </div>

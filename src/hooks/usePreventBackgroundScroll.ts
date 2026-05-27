@@ -8,7 +8,14 @@ let previousBodyOverscrollBehavior = ''
 let previousDocumentOverscrollBehavior = ''
 
 function getScrollBoundary(target: EventTarget | null, allowRefs?: ScrollBoundaryRef | ScrollBoundaryRef[]) {
-  if (!(target instanceof Node) || !allowRefs) return null
+  if (!(target instanceof Node)) return null
+
+  if (target instanceof Element) {
+    const selectMenu = target.closest('.select-menu-surface')
+    if (selectMenu instanceof HTMLElement) return selectMenu
+  }
+
+  if (!allowRefs) return null
 
   const refs = Array.isArray(allowRefs) ? allowRefs : [allowRefs]
   for (const ref of refs) {

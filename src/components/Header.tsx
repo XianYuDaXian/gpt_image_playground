@@ -4,9 +4,8 @@ import { cycleThemeMode, getThemeModeLabel } from '../lib/theme'
 import { useVersionCheck } from '../hooks/useVersionCheck'
 import { fetchAdminBackendReminders } from '../lib/backendSettings'
 import { hasUnreadCompletedReminders, REMINDER_COMPLETED_STATE_CHANGED_EVENT } from '../lib/announcement'
-import HelpModal from './HelpModal'
 
-export default function Header() {
+export default function Header({ onOpenAnnouncements }: { onOpenAnnouncements: () => void }) {
   const setShowSettings = useStore((s) => s.setShowSettings)
   const showSettings = useStore((s) => s.showSettings)
   const themeMode = useStore((s) => s.themeMode)
@@ -14,7 +13,6 @@ export default function Header() {
   const authStatus = useStore((s) => s.authStatus)
   const settings = useStore((s) => s.settings)
   const taskMode = useStore((s) => s.taskMode)
-  const [showHelp, setShowHelp] = useState(false)
   const [hasUnreadReminderDot, setHasUnreadReminderDot] = useState(false)
   const [adminReminders, setAdminReminders] = useState<Awaited<ReturnType<typeof fetchAdminBackendReminders>>>([])
   const { hasUpdate, latestRelease, dismiss } = useVersionCheck()
@@ -161,9 +159,10 @@ export default function Header() {
             )}
           </button>
           <button
-            onClick={() => setShowHelp(true)}
+            onClick={onOpenAnnouncements}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-900 transition-colors"
-            title="操作指南"
+            title="公告"
+            aria-label="公告"
           >
             <svg
               className="w-5 h-5 text-gray-600 dark:text-gray-400"
@@ -174,9 +173,8 @@ export default function Header() {
               strokeLinejoin="round"
               viewBox="0 0 24 24"
             >
-              <circle cx="12" cy="12" r="10" />
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-              <path d="M12 17h.01" />
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
           </button>
           <button
@@ -230,7 +228,6 @@ export default function Header() {
           </button>
         </div>
       </div>
-      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </header>
   )
 }

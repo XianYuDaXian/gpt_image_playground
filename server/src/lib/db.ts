@@ -104,6 +104,7 @@ export interface UsageCodeRecord {
   name: string
   codeHash: string
   codeEncrypted: string | null
+  userTier: UsageCodeUserTier
   allowedProviderProfileIds: string[] | null
   isEnabled: number
   imageQuota: number | null
@@ -151,6 +152,15 @@ export interface UsageCodeActivityRecord {
   message: string
   createdAt: string
 }
+
+export interface UsageCodeEventQueryInput {
+  usageCodeId: string
+  startAt?: string | null
+  endAt?: string | null
+  taskId?: string | null
+}
+
+export type UsageCodeUserTier = 'free' | 'paid'
 
 export interface AppSettingRecord {
   key: string
@@ -295,6 +305,21 @@ function sumQuotaMap(value: Record<string, number> | null | undefined) {
   return Object.values(value ?? {}).reduce((sum, quota) => sum + quota, 0)
 }
 
+function normalizeUsageCodeUserTier(value: string | null | undefined): UsageCodeUserTier {
+  return value === 'free' ? 'free' : 'paid'
+}
+
+function inferUsageCodeUserTier(input: {
+  imageQuota?: number | null
+  providerImageQuotas?: Record<string, number> | null
+  videoQuota?: number | null
+  providerVideoQuotas?: Record<string, number> | null
+}): UsageCodeUserTier {
+  const imageTotal = input.imageQuota ?? sumQuotaMap(input.providerImageQuotas)
+  const videoTotal = input.videoQuota ?? sumQuotaMap(input.providerVideoQuotas)
+  return imageTotal === 2 && videoTotal === 1 ? 'free' : 'paid'
+}
+
 const PROVIDER_TAG_COLORS = [
   'rose',
   'orange',
@@ -320,6 +345,7 @@ function selectUsageCodeFields() {
           code_hash as codeHash,
           code_encrypted as codeEncrypted,
           name,
+          user_tier as userTier,
           allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           is_enabled as isEnabled,
           image_quota as imageQuota,
@@ -347,6 +373,7 @@ function normalizeUsageCodeRow<T extends {
 }>(row: T) {
   return {
     ...row,
+    userTier: normalizeUsageCodeUserTier((row as T & { userTier?: string | null }).userTier),
     allowedProviderProfileIds: parseAllowedProviderProfileIds(row.allowedProviderProfileIdsJson),
     providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
     providerUsedImageCredits: parseProviderImageQuotaMap(row.providerUsedImageCreditsJson),
@@ -455,6 +482,7 @@ export class AppDatabase {
         code_hash TEXT NOT NULL UNIQUE,
         code_encrypted TEXT,
         name TEXT NOT NULL,
+        user_tier TEXT NOT NULL DEFAULT 'paid',
         allowed_provider_profile_ids_json TEXT,
         is_enabled INTEGER NOT NULL DEFAULT 1,
         image_quota INTEGER,
@@ -598,6 +626,38 @@ export class AppDatabase {
     const usageCodeColumnNames = new Set(usageCodeColumns.map((column) => column.name))
     if (!usageCodeColumnNames.has('code_encrypted')) {
       this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN code_encrypted TEXT')
+    }
+    if (!usageCodeColumnNames.has('user_tier')) {
+      this.sqlite.exec("ALTER TABLE usage_codes ADD COLUMN user_tier TEXT NOT NULL DEFAULT 'paid'")
+      const rows = this.sqlite.prepare(`
+        SELECT
+          id,
+          image_quota as imageQuota,
+          provider_image_quotas_json as providerImageQuotasJson,
+          video_quota as videoQuota,
+          provider_video_quotas_json as providerVideoQuotasJson
+        FROM usage_codes
+      `).all() as Array<{
+        id: string
+        imageQuota: number | null
+        providerImageQuotasJson: string | null
+        videoQuota: number | null
+        providerVideoQuotasJson: string | null
+      }>
+      const updateTier = this.sqlite.prepare('UPDATE usage_codes SET user_tier = ? WHERE id = ?')
+      const tx = this.sqlite.transaction(() => {
+        for (const row of rows) {
+          updateTier.run(inferUsageCodeUserTier({
+            imageQuota: row.imageQuota,
+            providerImageQuotas: parseProviderImageQuotaMap(row.providerImageQuotasJson),
+            videoQuota: row.videoQuota,
+            providerVideoQuotas: parseProviderImageQuotaMap(row.providerVideoQuotasJson),
+          }), row.id)
+        }
+      })
+      tx()
+    } else {
+      this.sqlite.exec("UPDATE usage_codes SET user_tier = 'paid' WHERE user_tier NOT IN ('free', 'paid')")
     }
     if (!usageCodeColumnNames.has('allowed_provider_profile_ids_json')) {
       this.sqlite.exec('ALTER TABLE usage_codes ADD COLUMN allowed_provider_profile_ids_json TEXT')
@@ -1046,6 +1106,7 @@ export class AppDatabase {
     codeHash: string
     codeEncrypted: string
     name: string
+    userTier?: UsageCodeUserTier
     imageQuota: number | null
     videoQuota?: number | null
     allowedProviderProfileIds?: string[] | null
@@ -1059,6 +1120,7 @@ export class AppDatabase {
         code_hash,
         code_encrypted,
         name,
+        user_tier,
         allowed_provider_profile_ids_json,
         is_enabled,
         image_quota,
@@ -1074,12 +1136,18 @@ export class AppDatabase {
         updated_at,
         last_used_at
       )
-      VALUES (?, ?, ?, ?, ?, 1, ?, ?, 0, NULL, ?, ?, 0, NULL, 0, ?, ?, NULL)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, 0, NULL, ?, ?, 0, NULL, 0, ?, ?, NULL)
     `).run(
       input.id,
       input.codeHash,
       input.codeEncrypted,
       input.name,
+      input.userTier ?? inferUsageCodeUserTier({
+        imageQuota: input.imageQuota,
+        providerImageQuotas: input.providerImageQuotas,
+        videoQuota: input.videoQuota ?? null,
+        providerVideoQuotas: input.providerVideoQuotas,
+      }),
       stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
       input.imageQuota,
       stringifyProviderImageQuotaMap(input.providerImageQuotas),
@@ -1157,6 +1225,7 @@ ${selectUsageCodeFields()}
   updateUsageCode(input: {
     id: string
     name?: string
+    userTier?: UsageCodeUserTier
     isEnabled?: boolean
     imageQuota?: number | null
     videoQuota?: number | null
@@ -1191,6 +1260,7 @@ ${selectUsageCodeFields()}
       UPDATE usage_codes
       SET
         name = ?,
+        user_tier = ?,
         allowed_provider_profile_ids_json = ?,
         is_enabled = ?,
         image_quota = ?,
@@ -1201,6 +1271,7 @@ ${selectUsageCodeFields()}
       WHERE id = ?
     `).run(
       input.name ?? current.name,
+      input.userTier ?? current.userTier,
       input.allowedProviderProfileIds === undefined
         ? stringifyAllowedProviderProfileIds(current.allowedProviderProfileIds)
         : stringifyAllowedProviderProfileIds(input.allowedProviderProfileIds),
@@ -1397,6 +1468,7 @@ ${selectUsageCodeFields()}
           usage_codes.code_hash as codeHash,
           usage_codes.code_encrypted as codeEncrypted,
           usage_codes.name,
+          usage_codes.user_tier as userTier,
           usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
@@ -1473,6 +1545,45 @@ ${selectUsageCodeFields()}
       .all() as UsageQuotaEventRowRecord[]
   }
 
+  listUsageQuotaEventsForQuery(input: UsageCodeEventQueryInput) {
+    const where: string[] = ['usage_quota_events.usage_code_id = ?']
+    const params: Array<string> = [input.usageCodeId]
+
+    if (input.startAt) {
+      where.push('usage_quota_events.created_at >= ?')
+      params.push(input.startAt)
+    }
+    if (input.endAt) {
+      where.push('usage_quota_events.created_at < ?')
+      params.push(input.endAt)
+    }
+    if (input.taskId) {
+      where.push('usage_quota_events.task_id = ?')
+      params.push(input.taskId)
+    }
+
+    return this.sqlite
+      .prepare(`
+        SELECT
+          usage_quota_events.id,
+          usage_quota_events.usage_code_id as usageCodeId,
+          usage_quota_events.task_id as taskId,
+          usage_quota_events.event_type as eventType,
+          usage_quota_events.credits,
+          usage_quota_events.reason,
+          usage_quota_events.provider_profile_id as providerProfileId,
+          provider_profiles.name as providerProfileName,
+          provider_profiles.tag_color as providerProfileTagColor,
+          provider_profiles.api_mode as providerProfileApiMode,
+          usage_quota_events.created_at as createdAt
+        FROM usage_quota_events
+        LEFT JOIN provider_profiles ON provider_profiles.id = usage_quota_events.provider_profile_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY usage_quota_events.id DESC
+      `)
+      .all(...params) as UsageQuotaEventRecord[]
+  }
+
   listUsageCodeActivityLogs(usageCodeId: string, limit = 50) {
     return this.sqlite
       .prepare(`
@@ -1507,6 +1618,40 @@ ${selectUsageCodeFields()}
         ORDER BY id ASC
       `)
       .all() as UsageCodeActivityRecord[]
+  }
+
+  listUsageCodeActivityLogsForQuery(input: UsageCodeEventQueryInput) {
+    const where: string[] = ['usage_code_activity_logs.usage_code_id = ?']
+    const params: Array<string> = [input.usageCodeId]
+
+    if (input.startAt) {
+      where.push('usage_code_activity_logs.created_at >= ?')
+      params.push(input.startAt)
+    }
+    if (input.endAt) {
+      where.push('usage_code_activity_logs.created_at < ?')
+      params.push(input.endAt)
+    }
+    if (input.taskId) {
+      where.push('usage_code_activity_logs.task_id = ?')
+      params.push(input.taskId)
+    }
+
+    return this.sqlite
+      .prepare(`
+        SELECT
+          id,
+          usage_code_id as usageCodeId,
+          task_id as taskId,
+          actor_kind as actorKind,
+          event_type as eventType,
+          message,
+          created_at as createdAt
+        FROM usage_code_activity_logs
+        WHERE ${where.join(' AND ')}
+        ORDER BY id DESC
+      `)
+      .all(...params) as UsageCodeActivityRecord[]
   }
 
   insertUsageCodeActivityLog(input: {
@@ -1582,6 +1727,7 @@ ${selectUsageCodeFields()}
           usage_codes.code_hash as codeHash,
           usage_codes.code_encrypted as codeEncrypted,
           usage_codes.name,
+          usage_codes.user_tier as userTier,
           usage_codes.allowed_provider_profile_ids_json as allowedProviderProfileIdsJson,
           usage_codes.is_enabled as isEnabled,
           usage_codes.image_quota as imageQuota,
@@ -2957,6 +3103,7 @@ ${selectUsageCodeFields()}
           code_hash,
           code_encrypted,
           name,
+          user_tier,
           allowed_provider_profile_ids_json,
           is_enabled,
           image_quota,
@@ -2978,6 +3125,7 @@ ${selectUsageCodeFields()}
           @codeHash,
           @codeEncrypted,
           @name,
+          @userTier,
           @allowedProviderProfileIdsJson,
           @isEnabled,
           @imageQuota,

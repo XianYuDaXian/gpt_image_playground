@@ -35,8 +35,43 @@ import type {
   UsageCodeActivityRecord,
   UsageCodeRawRecord,
   UsageCodeStatsRecord,
+  UsageCodeUserTier,
+  UsageQuotaEventRecord,
   UsageQuotaEventRowRecord,
 } from '../lib/db.js'
+
+type UsageCodeEventCategory =
+  | 'all'
+  | 'create'
+  | 'generate'
+  | 'delete'
+  | 'backup'
+  | 'api_access_change'
+  | 'quota_increase'
+  | 'quota_decrease'
+  | 'export'
+  | 'distribution_change'
+  | 'rename'
+  | 'enable_disable'
+
+type UsageCodeEventBucket = 'month' | 'day' | 'hour' | '30m' | '15m' | '5m'
+type UsageCodeEventTimePreset = 'today' | 'yesterday' | 'last7days' | 'last30days' | 'custom'
+
+interface UsageCodeEventItem {
+  id: string
+  source: 'quota' | 'activity'
+  sourceId: number
+  taskId: string | null
+  createdAt: string
+  label: string
+  eventType: string
+  eventCategory: Exclude<UsageCodeEventCategory, 'all'>
+  credits: number | null
+  providerProfileId: string | null
+  providerProfileName: string | null
+  providerProfileTagColor: string | null
+  providerProfileApiMode?: 'images' | 'responses' | 'videos' | null
+}
 
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
@@ -180,6 +215,7 @@ const fullBackupUsageCodeSchema = z.object({
   id: z.string().min(1),
   code: z.string().min(1),
   name: z.string().min(1),
+  userTier: z.enum(['free', 'paid']).optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable(),
   isEnabled: z.boolean(),
   imageQuota: z.number().int().nullable(),
@@ -322,6 +358,7 @@ const reminderItemSchema = z.object({
   message: z.string().trim().max(5000).default(''),
   imageDataUrl: z.string().trim().nullable().optional().default(null),
   imageDataUrls: z.array(z.string().trim().min(1)).max(16).optional().default([]),
+  audienceTiers: z.array(z.enum(['free', 'paid'])).max(2).optional().default(['free', 'paid']),
   maxDailyShows: z.coerce.number().int().min(1).max(24).default(1),
   startAt: z.string().datetime(),
   endAt: z.string().datetime(),
@@ -340,17 +377,31 @@ const reminderItemSchema = z.object({
 function normalizeReminderItem<T extends {
   imageDataUrl?: string | null
   imageDataUrls?: string[]
+  audienceTiers?: UsageCodeUserTier[]
 }>(item: T) {
   const imageDataUrls = Array.from(new Set([
     ...(item.imageDataUrls ?? []).map((value) => value.trim()).filter(Boolean),
     item.imageDataUrl?.trim() ?? '',
   ].filter(Boolean)))
+  const audienceTiers = Array.from(new Set(item.audienceTiers?.filter((value) => value === 'free' || value === 'paid') ?? []))
 
   return {
     ...item,
     imageDataUrl: imageDataUrls[0] ?? null,
     imageDataUrls,
+    audienceTiers: audienceTiers.length ? audienceTiers : ['free', 'paid'],
   }
+}
+
+function inferUsageCodeUserTierFromQuota(input: {
+  imageQuota?: number | null
+  providerImageQuotas?: Record<string, number> | null
+  videoQuota?: number | null
+  providerVideoQuotas?: Record<string, number> | null
+}): UsageCodeUserTier {
+  const imageTotal = input.imageQuota ?? Object.values(input.providerImageQuotas ?? {}).reduce((sum, quota) => sum + quota, 0)
+  const videoTotal = input.videoQuota ?? Object.values(input.providerVideoQuotas ?? {}).reduce((sum, quota) => sum + quota, 0)
+  return imageTotal === 2 && videoTotal === 1 ? 'free' : 'paid'
 }
 
 const reminderListSchema = z.object({
@@ -359,6 +410,7 @@ const reminderListSchema = z.object({
 
 const usageCodeCreateSchema = z.object({
   name: z.string().min(1).optional(),
+  userTier: z.enum(['free', 'paid']).optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
   providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
   providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
@@ -366,12 +418,14 @@ const usageCodeCreateSchema = z.object({
 
 const usageCodePatchSchema = z.object({
   name: z.string().min(1).optional(),
+  userTier: z.enum(['free', 'paid']).optional(),
   isEnabled: z.boolean().optional(),
   allowedProviderProfileIds: z.array(z.string().min(1)).nullable().optional(),
   providerImageQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
   providerVideoQuotas: z.record(z.string().min(1), z.number().int().nonnegative()).nullable().optional(),
 }).refine((value) =>
   value.name !== undefined
+    || value.userTier !== undefined
     || value.isEnabled !== undefined
     || value.allowedProviderProfileIds !== undefined
     || value.providerImageQuotas !== undefined
@@ -383,6 +437,30 @@ const usageCodeAdjustSchema = z.object({
   action: z.enum(['increase', 'decrease']),
   credits: z.number().int().positive(),
   providerProfileId: z.string().min(1).nullable().optional(),
+})
+
+const usageCodeEventQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  timePreset: z.enum(['today', 'yesterday', 'last7days', 'last30days', 'custom']).default('today'),
+  startAt: z.string().datetime().nullable().optional(),
+  endAt: z.string().datetime().nullable().optional(),
+  bucket: z.enum(['month', 'day', 'hour', '30m', '15m', '5m']).default('hour'),
+  eventCategory: z.enum([
+    'all',
+    'create',
+    'generate',
+    'delete',
+    'backup',
+    'api_access_change',
+    'quota_increase',
+    'quota_decrease',
+    'export',
+    'distribution_change',
+    'rename',
+    'enable_disable',
+  ]).default('all'),
+  taskId: z.string().trim().nullable().optional(),
 })
 
 const RESTORED_ADMIN_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -412,6 +490,217 @@ function formatQuotaEventLabel(event: { eventType: string; reason?: string | nul
   if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') return '管理员调整视频额度'
   if (event.eventType === 'admin_increase' || event.eventType === 'admin_decrease') return '管理员调整图片额度'
   return event.eventType
+}
+
+function mapUsageCodeEventCategory(eventType: string): Exclude<UsageCodeEventCategory, 'all'> {
+  if (eventType === 'usage_code_created') return 'create'
+  if (eventType === 'image_task_succeeded' || eventType === 'video_task_succeeded') return 'generate'
+  if (eventType === 'task_deleted' || eventType === 'admin_task_purged') return 'delete'
+  if (eventType === 'backup_export' || eventType === 'backup_import') return 'backup'
+  if (eventType === 'usage_code_allowed_apis_changed') return 'api_access_change'
+  if (eventType === 'admin_increase' || eventType === 'video_admin_increase') return 'quota_increase'
+  if (
+    eventType === 'admin_decrease'
+    || eventType === 'video_admin_decrease'
+    || eventType === 'reserve'
+    || eventType === 'video_reserve'
+    || eventType === 'refund'
+    || eventType === 'video_refund'
+  ) return 'quota_decrease'
+  if (eventType === 'media_exported') return 'export'
+  if (eventType === 'distribution_updated') return 'distribution_change'
+  if (eventType === 'usage_code_renamed') return 'rename'
+  if (eventType === 'usage_code_enabled' || eventType === 'usage_code_disabled') return 'enable_disable'
+  return 'api_access_change'
+}
+
+function formatUsageCodeEventCategoryLabel(category: UsageCodeEventCategory) {
+  if (category === 'all') return '全部事件'
+  if (category === 'create') return '创建使用码'
+  if (category === 'generate') return '生成'
+  if (category === 'delete') return '删除'
+  if (category === 'backup') return '备份'
+  if (category === 'api_access_change') return '管理员调整 API'
+  if (category === 'quota_increase') return '管理员加额'
+  if (category === 'quota_decrease') return '额度扣减'
+  if (category === 'export') return '导出'
+  if (category === 'distribution_change') return '分发设置'
+  if (category === 'rename') return '重命名'
+  return '启用与禁用'
+}
+
+function buildUsageCodeEventItemFromQuota(
+  app: Parameters<FastifyPluginAsync>[0],
+  event: UsageQuotaEventRecord,
+) {
+  const providerProfile = event.providerProfileId ? app.db.getProviderProfile(event.providerProfileId) : null
+  return {
+    id: `quota-${event.id}`,
+    source: 'quota' as const,
+    sourceId: event.id,
+    taskId: event.taskId,
+    createdAt: event.createdAt,
+    label: formatQuotaEventLabel(event),
+    eventType: event.eventType,
+    eventCategory: mapUsageCodeEventCategory(event.eventType),
+    credits: event.credits,
+    providerProfileId: event.providerProfileId,
+    providerProfileName: providerProfile?.remarkName ?? providerProfile?.name ?? event.providerProfileName ?? null,
+    providerProfileTagColor: providerProfile?.tagColor ?? event.providerProfileTagColor ?? null,
+    providerProfileApiMode: providerProfile?.apiMode ?? event.providerProfileApiMode ?? null,
+  }
+}
+
+function buildUsageCodeEventItemFromActivity(event: UsageCodeActivityRecord) {
+  return {
+    id: `activity-${event.id}`,
+    source: 'activity' as const,
+    sourceId: event.id,
+    taskId: event.taskId,
+    createdAt: event.createdAt,
+    label: event.message,
+    eventType: event.eventType,
+    eventCategory: mapUsageCodeEventCategory(event.eventType),
+    credits: null,
+    providerProfileId: null,
+    providerProfileName: null,
+    providerProfileTagColor: null,
+    providerProfileApiMode: null,
+  }
+}
+
+function getShanghaiTimeParts(date: Date) {
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+  const parts = formatter.formatToParts(date)
+  const get = (type: string) => parts.find((item) => item.type === type)?.value ?? '00'
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')),
+    minute: Number(get('minute')),
+    second: Number(get('second')),
+  }
+}
+
+function formatBucketTimestamp(parts: ReturnType<typeof getShanghaiTimeParts>, month: number, day: number, hour: number, minute: number) {
+  return `${parts.year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+}
+
+function getUsageCodeBucketMeta(createdAt: string, bucket: UsageCodeEventBucket) {
+  const parts = getShanghaiTimeParts(new Date(createdAt))
+  if (bucket === 'month') {
+    return {
+      key: `${parts.year}-${String(parts.month).padStart(2, '0')}`,
+      label: `${parts.year}年${String(parts.month).padStart(2, '0')}月`,
+    }
+  }
+  if (bucket === 'day') {
+    return {
+      key: `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`,
+      label: `${parts.year}年${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日`,
+    }
+  }
+  if (bucket === 'hour') {
+    return {
+      key: formatBucketTimestamp(parts, parts.month, parts.day, parts.hour, 0),
+      label: `${parts.year}年${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日 ${String(parts.hour).padStart(2, '0')}:00`,
+    }
+  }
+  const step = bucket === '30m' ? 30 : bucket === '15m' ? 15 : 5
+  const bucketMinute = Math.floor(parts.minute / step) * step
+  const nextMinute = bucketMinute + step
+  const endHour = nextMinute >= 60 ? parts.hour + 1 : parts.hour
+  const endMinute = nextMinute >= 60 ? nextMinute - 60 : nextMinute
+  return {
+    key: formatBucketTimestamp(parts, parts.month, parts.day, parts.hour, bucketMinute),
+    label: `${parts.year}年${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日 ${String(parts.hour).padStart(2, '0')}:${String(bucketMinute).padStart(2, '0')} - ${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`,
+  }
+}
+
+function buildUsageCodeEventSummary(items: UsageCodeEventItem[]) {
+  return items.reduce((summary, item) => {
+    summary.totalEvents += 1
+    if (item.eventCategory === 'create') summary.createCount += 1
+    if (item.eventType === 'image_task_succeeded') summary.generatedImageCount += Number(item.label.match(/(\d+)/)?.[1] ?? 0)
+    if (item.eventType === 'video_task_succeeded') summary.generatedVideoCount += 1
+    if (item.eventCategory === 'delete') summary.deletedTaskCount += 1
+    if (item.eventCategory === 'backup') summary.backupCount += 1
+    if (item.eventCategory === 'api_access_change') summary.apiAccessChangeCount += 1
+    if (item.eventCategory === 'quota_increase') {
+      if (item.providerProfileApiMode === 'videos') summary.videoQuotaIncreasedCredits += Math.max(0, item.credits ?? 0)
+      else summary.imageQuotaIncreasedCredits += Math.max(0, item.credits ?? 0)
+    }
+    if (item.eventCategory === 'quota_decrease') {
+      if (item.providerProfileApiMode === 'videos') summary.videoQuotaDecreasedCredits += Math.max(0, item.credits ?? 0)
+      else summary.imageQuotaDecreasedCredits += Math.max(0, item.credits ?? 0)
+    }
+    if (item.eventCategory === 'export') summary.exportCount += 1
+    if (item.eventCategory === 'distribution_change') summary.distributionChangeCount += 1
+    if (item.eventCategory === 'rename') summary.renameCount += 1
+    if (item.eventCategory === 'enable_disable') summary.enableDisableCount += 1
+    return summary
+  }, {
+    totalEvents: 0,
+    createCount: 0,
+    generatedImageCount: 0,
+    generatedVideoCount: 0,
+    deletedTaskCount: 0,
+    backupCount: 0,
+    apiAccessChangeCount: 0,
+    imageQuotaIncreasedCredits: 0,
+    videoQuotaIncreasedCredits: 0,
+    imageQuotaDecreasedCredits: 0,
+    videoQuotaDecreasedCredits: 0,
+    exportCount: 0,
+    distributionChangeCount: 0,
+    renameCount: 0,
+    enableDisableCount: 0,
+  })
+}
+
+function getUsageCodeQueryRange(timePreset: UsageCodeEventTimePreset, startAt?: string | null, endAt?: string | null) {
+  if (timePreset === 'custom') {
+    return {
+      startAt: startAt?.trim() || null,
+      endAt: endAt?.trim() || null,
+    }
+  }
+
+  const now = new Date()
+  const parts = getShanghaiTimeParts(now)
+  const startTodayUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day, -8, 0, 0, 0))
+  if (timePreset === 'today') {
+    return {
+      startAt: startTodayUtc.toISOString(),
+      endAt: null,
+    }
+  }
+  if (timePreset === 'yesterday') {
+    return {
+      startAt: new Date(startTodayUtc.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+      endAt: startTodayUtc.toISOString(),
+    }
+  }
+  if (timePreset === 'last7days') {
+    return {
+      startAt: new Date(startTodayUtc.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+      endAt: null,
+    }
+  }
+  return {
+    startAt: new Date(startTodayUtc.getTime() - 29 * 24 * 60 * 60 * 1000).toISOString(),
+    endAt: null,
+  }
 }
 
 function formatUsageCodeAccessLabel(app: Parameters<FastifyPluginAsync>[0], providerIds: string[] | null | undefined) {
@@ -465,6 +754,16 @@ function getReminderItems(app: Parameters<FastifyPluginAsync>[0]) {
   }
 
   return []
+}
+
+function filterReminderItemsForUser(items: ReturnType<typeof getReminderItems>, auth: Awaited<ReturnType<typeof requireAuth>>) {
+  if (auth.role === 'admin') return items
+  const userTiers = new Set(auth.usageCodes.map((code) => code.userTier))
+  return items.filter((item) => {
+    if (!item.enabled) return false
+    const audienceTiers: UsageCodeUserTier[] = item.audienceTiers?.length ? item.audienceTiers : ['free', 'paid']
+    return audienceTiers.some((tier) => userTiers.has(tier))
+  })
 }
 
 function isLanAddress(ip: string) {
@@ -710,6 +1009,7 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     code: codePlain,
     codeRecoverable: Boolean(codePlain),
     name: code.name,
+    userTier: code.userTier,
     isEnabled: Boolean(code.isEnabled),
     imageQuota: code.imageQuota,
     usedImageCredits: code.usedImageCredits,
@@ -768,6 +1068,111 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     createdAt: code.createdAt,
     updatedAt: code.updatedAt,
     lastUsedAt: code.lastUsedAt,
+  }
+}
+
+function queryUsageCodeEvents(
+  app: Parameters<FastifyPluginAsync>[0],
+  input: {
+    usageCodeId: string
+    page: number
+    pageSize: number
+    timePreset: UsageCodeEventTimePreset
+    startAt?: string | null
+    endAt?: string | null
+    bucket: UsageCodeEventBucket
+    eventCategory: UsageCodeEventCategory
+    taskId?: string | null
+  },
+) {
+  const range = getUsageCodeQueryRange(input.timePreset, input.startAt, input.endAt)
+  const quotaEvents = app.db.listUsageQuotaEventsForQuery({
+    usageCodeId: input.usageCodeId,
+    startAt: range.startAt,
+    endAt: range.endAt,
+    taskId: input.taskId?.trim() || null,
+  }).map((event) => buildUsageCodeEventItemFromQuota(app, event))
+  const activityEvents = app.db.listUsageCodeActivityLogsForQuery({
+    usageCodeId: input.usageCodeId,
+    startAt: range.startAt,
+    endAt: range.endAt,
+    taskId: input.taskId?.trim() || null,
+  }).map((event) => buildUsageCodeEventItemFromActivity(event))
+
+  const items = [...quotaEvents, ...activityEvents]
+    .filter((event) => input.eventCategory === 'all' || event.eventCategory === input.eventCategory)
+    .sort((left, right) => {
+      const timeDiff = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+      if (timeDiff !== 0) return timeDiff
+      if (left.source !== right.source) return left.source === 'activity' ? 1 : -1
+      return right.sourceId - left.sourceId
+    })
+
+  const total = items.length
+  const totalPages = Math.max(1, Math.ceil(total / input.pageSize))
+  const page = Math.min(input.page, totalPages)
+  const startIndex = (page - 1) * input.pageSize
+  const pagedItems = items.slice(startIndex, startIndex + input.pageSize)
+  const groupMap = new Map<string, {
+    bucketKey: string
+    bucketLabel: string
+    items: UsageCodeEventItem[]
+  }>()
+
+  for (const event of pagedItems) {
+    const bucketMeta = getUsageCodeBucketMeta(event.createdAt, input.bucket)
+    const current = groupMap.get(bucketMeta.key)
+    if (current) {
+      current.items.push(event)
+      continue
+    }
+    groupMap.set(bucketMeta.key, {
+      bucketKey: bucketMeta.key,
+      bucketLabel: bucketMeta.label,
+      items: [event],
+    })
+  }
+
+  return {
+    summary: buildUsageCodeEventSummary(items),
+    groups: Array.from(groupMap.values()).map((group) => ({
+      bucketKey: group.bucketKey,
+      bucketLabel: group.bucketLabel,
+      eventCount: group.items.length,
+      summary: buildUsageCodeEventSummary(group.items),
+      items: group.items,
+    })),
+    pagination: {
+      page,
+      pageSize: input.pageSize,
+      total,
+      totalPages,
+    },
+    filters: {
+      timePreset: input.timePreset,
+      startAt: range.startAt,
+      endAt: range.endAt,
+      bucket: input.bucket,
+      eventCategory: input.eventCategory,
+      taskId: input.taskId?.trim() || '',
+    },
+    categories: [
+      'all',
+      'create',
+      'generate',
+      'delete',
+      'backup',
+      'api_access_change',
+      'quota_increase',
+      'quota_decrease',
+      'export',
+      'distribution_change',
+      'rename',
+      'enable_disable',
+    ].map((value) => ({
+      value,
+      label: formatUsageCodeEventCategoryLabel(value as UsageCodeEventCategory),
+    })),
   }
 }
 
@@ -1040,6 +1445,7 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
     id: code.id,
     code: code.codeEncrypted ? decryptText(code.codeEncrypted, app.config.appSecret) : '',
     name: code.name,
+    userTier: code.userTier,
     allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
     isEnabled: Boolean(code.isEnabled),
     imageQuota: code.imageQuota,
@@ -2001,6 +2407,7 @@ function buildParsedPayloadFromFullManifest(
       codeHash: hashSecret(code.code, app.config.appSecret),
       codeEncrypted: encryptText(code.code, app.config.appSecret),
       name: code.name,
+      userTier: code.userTier ?? inferUsageCodeUserTierFromQuota(code),
       allowedProviderProfileIds: code.allowedProviderProfileIds ?? null,
       isEnabled: code.isEnabled ? 1 : 0,
       imageQuota: code.imageQuota,
@@ -2595,14 +3002,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   const remindersEnabled = true
 
   app.get('/api/reminders', async (request, reply) => {
-    await requireAuth(app, request, reply)
+    const auth = await requireAuth(app, request, reply)
     if (!remindersEnabled) {
       reply.code(503)
       return { message: '提醒功能已临时关闭' }
     }
     reply.header('Cache-Control', 'no-store')
     return {
-      items: getReminderItems(app),
+      items: filterReminderItemsForUser(getReminderItems(app), auth),
     }
   })
 
@@ -2817,6 +3224,39 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   })
 
+  app.get('/api/admin/usage-codes/:codeId/events', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const params = z.object({ codeId: z.string().min(1) }).parse(request.params)
+    const query = usageCodeEventQuerySchema.parse(request.query)
+    const usageCode = app.db.getUsageCode(params.codeId)
+    if (!usageCode) {
+      reply.code(404)
+      return { message: '使用码不存在' }
+    }
+    const stats = app.db.listUsageCodesWithStats().find((item) => item.id === params.codeId)
+    const result = queryUsageCodeEvents(app, {
+      usageCodeId: params.codeId,
+      page: query.page,
+      pageSize: query.pageSize,
+      timePreset: query.timePreset,
+      startAt: query.startAt ?? null,
+      endAt: query.endAt ?? null,
+      bucket: query.bucket,
+      eventCategory: query.eventCategory,
+      taskId: query.taskId ?? null,
+    })
+    return {
+      usageCode: {
+        id: usageCode.id,
+        name: usageCode.name,
+        lastUsedAt: usageCode.lastUsedAt,
+        totalEvents: result.pagination.total,
+        taskCount: stats?.taskCount ?? 0,
+      },
+      ...result,
+    }
+  })
+
   app.post('/api/admin/usage-codes', async (request, reply) => {
     await requireAdmin(app, request, reply)
     const payload = usageCodeCreateSchema.parse(request.body)
@@ -2826,6 +3266,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       codeHash: hashSecret(code, app.config.appSecret),
       codeEncrypted: encryptText(code, app.config.appSecret),
       name: payload.name?.trim() || '未命名使用码',
+      userTier: payload.userTier,
       imageQuota: null,
       videoQuota: null,
       allowedProviderProfileIds: payload.allowedProviderProfileIds ?? null,
@@ -2847,6 +3288,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         ...usageCode,
         code,
         codeRecoverable: true,
+        userTier: usageCode.userTier,
         isEnabled: Boolean(usageCode.isEnabled),
         remainingImageCredits: Object.entries(usageCode.providerImageQuotas ?? {}).reduce((sum, [providerProfileId, quota]) => {
           if (usageCode.allowedProviderProfileIds?.length && !usageCode.allowedProviderProfileIds.includes(providerProfileId)) {
@@ -2889,6 +3331,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const updated = app.db.updateUsageCode({
       id: params.codeId,
       name: payload.name?.trim(),
+      userTier: payload.userTier,
       isEnabled: payload.isEnabled,
       allowedProviderProfileIds: payload.allowedProviderProfileIds,
       providerImageQuotas: payload.providerImageQuotas,
@@ -2905,6 +3348,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         actorKind: 'admin',
         eventType: 'usage_code_renamed',
         message: `管理员修改使用码名称：${current.name} -> ${payload.name.trim()}`,
+      })
+    }
+    if (payload.userTier !== undefined && payload.userTier !== current.userTier) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId: params.codeId,
+        actorKind: 'admin',
+        eventType: 'usage_code_user_tier_changed',
+        message: `管理员修改用户类型：${current.userTier === 'free' ? '免费用户' : '付费用户'} -> ${payload.userTier === 'free' ? '免费用户' : '付费用户'}`,
       })
     }
     if (payload.isEnabled !== undefined && Boolean(current.isEnabled) !== payload.isEnabled) {

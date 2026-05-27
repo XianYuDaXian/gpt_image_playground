@@ -29,6 +29,7 @@ export interface AuthUsageCode {
   id: string
   /** 普通用户侧显示的是使用码本身，不是管理员备注名。 */
   name: string
+  userTier: 'free' | 'paid'
   allowedProviderProfileIds: string[] | null
   imageQuota: number | null
   usedImageCredits: number
