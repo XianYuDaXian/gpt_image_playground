@@ -322,7 +322,9 @@ function renderPromptEditor(el: HTMLDivElement, prompt: string, inputImages: Inp
 
 /** API 支持的最大参考图数量 */
 const API_MAX_IMAGES = 16
-type MobileParamSheet = 'quality' | 'format' | 'moderation' | 'videoResolution' | 'videoDuration'
+/** 图片生成支持的最大输出张数 */
+const API_MAX_OUTPUT_COUNT = 16
+type MobileParamSheet = 'quality' | 'format' | 'moderation' | 'count' | 'videoResolution' | 'videoDuration'
 
 function useIsMobile() {
   const getIsMobile = () => {
@@ -1026,7 +1028,7 @@ export default function InputBar() {
     const nextValue = Number(nInput)
     const normalizedValue =
       nInput.trim() === '' ? DEFAULT_PARAMS.n : Number.isNaN(nextValue) ? params.n : nextValue
-    const clampedValue = Math.min(16, Math.max(1, normalizedValue))
+    const clampedValue = Math.min(API_MAX_OUTPUT_COUNT, Math.max(1, normalizedValue))
     setNInput(String(clampedValue))
     setParams({ n: clampedValue })
   }, [nInput, params.n, setParams, nLimitHint])
@@ -1034,7 +1036,7 @@ export default function InputBar() {
   const handleNInputChange = useCallback((value: string) => {
     setNInput(value)
     const nextValue = Number(value)
-    if (!Number.isNaN(nextValue) && nextValue > 16) {
+    if (!Number.isNaN(nextValue) && nextValue > API_MAX_OUTPUT_COUNT) {
       nLimitHint.show()
     } else {
       nLimitHint.hide()
@@ -1710,10 +1712,10 @@ export default function InputBar() {
           }}
           type="number"
           min={1}
-          max={16}
+          max={API_MAX_OUTPUT_COUNT}
           className="px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] focus:outline-none text-xs transition-all duration-200 shadow-sm"
         />
-        <ButtonTooltip visible={nLimitHint.visible} text="当前最多支持 16 张" />
+        <ButtonTooltip visible={nLimitHint.visible} text={`当前最多支持 ${API_MAX_OUTPUT_COUNT} 张`} />
       </label>
     </div>
   )
@@ -1770,6 +1772,10 @@ export default function InputBar() {
         <span className="text-gray-400 dark:text-gray-500">格式</span>
         <span>{params.output_format.toUpperCase()}</span>
       </button>
+      <button type="button" onClick={() => setMobileParamSheet('count')} className={mobileChipClass}>
+        <span className="text-gray-400 dark:text-gray-500">张数</span>
+        <span>{params.n}</span>
+      </button>
       <button type="button" onClick={() => settings.apiMode !== 'responses' && setMobileParamSheet('moderation')} className={`${mobileChipClass} ${settings.apiMode === 'responses' ? 'opacity-50' : ''}`}>
         <span className="text-gray-400 dark:text-gray-500">审核</span>
         <span>{settings.apiMode === 'responses' ? 'auto' : params.moderation}</span>
@@ -1811,7 +1817,53 @@ export default function InputBar() {
         </div>
       )
     }
-    const configMap: Record<Exclude<MobileParamSheet, 'videoResolution' | 'videoDuration'>, {
+    if (mobileParamSheet === 'count') {
+      const quickOptions = ['1', '2', '4', '8', String(API_MAX_OUTPUT_COUNT)]
+      return (
+        <div className="fixed inset-0 z-[70]" onClick={() => setMobileParamSheet(null)}>
+          <div className="absolute inset-0 bg-black/20 backdrop-blur-sm animate-overlay-in" />
+          <div className="absolute bottom-0 left-0 right-0 rounded-t-2xl bg-white dark:bg-gray-900 border-t border-gray-200/50 dark:border-white/[0.08] p-5 pb-safe animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 text-sm font-medium text-gray-700 dark:text-gray-200">生成张数</div>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {quickOptions.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => {
+                    setNInput(option)
+                    setParams({ n: Number(option) })
+                    setMobileParamSheet(null)
+                  }}
+                  className={`px-4 py-2 rounded-full text-sm transition-all ${
+                    String(params.n) === option
+                      ? 'bg-blue-500 text-white shadow-sm'
+                      : 'bg-gray-100 dark:bg-white/[0.06] text-gray-700 dark:text-gray-300 active:scale-95'
+                  }`}
+                >
+                  {option} 张
+                </button>
+              ))}
+            </div>
+            <label className="block">
+              <span className="mb-2 block text-xs text-gray-500 dark:text-gray-400">自定义数量</span>
+              <input
+                value={nInput}
+                onChange={(e) => handleNInputChange(e.target.value)}
+                onBlur={commitN}
+                type="number"
+                min={1}
+                max={API_MAX_OUTPUT_COUNT}
+                inputMode="numeric"
+                className="w-full rounded-2xl border border-gray-200/60 bg-white px-4 py-3 text-sm text-gray-800 outline-none transition-all dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-100"
+              />
+            </label>
+            <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">当前范围 1 - {API_MAX_OUTPUT_COUNT} 张</div>
+          </div>
+        </div>
+      )
+    }
+
+    const configMap: Record<Exclude<MobileParamSheet, 'videoResolution' | 'videoDuration' | 'count'>, {
       title: string
       options: Array<{ label: string; value: string }>
       value: string
