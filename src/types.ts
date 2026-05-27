@@ -138,6 +138,11 @@ export interface TaskRecord {
   videoMetadataById?: Record<string, { duration?: number | null }>
   status: TaskStatus
   serverStatus?: string
+  queueRuntimeStatus?: 'idle' | 'queued' | 'running'
+  queuePosition?: number | null
+  queueAhead?: number | null
+  runningTaskCount?: number
+  pendingTaskCount?: number
   currentStep?: string
   progressPercent?: number
   error: string | null

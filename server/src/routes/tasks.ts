@@ -179,19 +179,31 @@ function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends i
 }
 
 export const taskRoutes: FastifyPluginAsync = async (app) => {
+  const attachRuntimeMeta = <T extends Record<string, unknown>>(task: T, taskId: string) => {
+    const runtime = app.taskWorker.getTaskRuntimeMeta(taskId)
+    return {
+      ...task,
+      queueRuntimeStatus: runtime.runtimeStatus,
+      queuePosition: runtime.queuePosition,
+      queueAhead: runtime.queueAhead,
+      runningTaskCount: runtime.runningCount,
+      pendingTaskCount: runtime.pendingCount,
+    }
+  }
+
   const serializeTask = (
     task: ReturnType<typeof app.db.getTask> extends infer T ? Exclude<T, undefined> : never,
     exposeUsageCodeAlias: boolean,
     exposeDetailedError: boolean,
   ) => {
     const providerProfile = task.providerProfileId ? app.db.getProviderProfile(task.providerProfileId) : null
-    return serializeTaskRecord(task, app.db.listTaskImages(task.id), {
+    return attachRuntimeMeta(serializeTaskRecord(task, app.db.listTaskImages(task.id), {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
       exposeDetailedError,
       preferProviderRemark: exposeUsageCodeAlias,
       providerProfile,
-    })
+    }), task.id)
   }
 
   const serializeTaskList = (
@@ -212,13 +224,13 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     const providerMap = new Map(
       providerIds.map((providerId) => [providerId, app.db.getProviderProfile(providerId) ?? null] as const),
     )
-    return tasks.map((task) => serializeTaskRecord(task, imagesByTaskId.get(task.id) ?? [], {
+    return tasks.map((task) => attachRuntimeMeta(serializeTaskRecord(task, imagesByTaskId.get(task.id) ?? [], {
       appSecret: app.config.appSecret,
       exposeUsageCodeAlias,
       exposeDetailedError,
       preferProviderRemark: exposeUsageCodeAlias,
       providerProfile: task.providerProfileId ? providerMap.get(task.providerProfileId) ?? null : null,
-    }))
+    }), task.id))
   }
 
   app.post('/api/tasks', async (request, reply) => {
@@ -564,7 +576,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       return serializeTaskList(tasks, auth.role === 'admin', auth.role === 'admin')
     }
 
-    reply.raw.write(formatSseEvent('snapshot', { tasks: buildTaskList() }))
+    reply.raw.write(formatSseEvent('snapshot', { connectedAt: new Date().toISOString() }))
 
     const heartbeat = setInterval(() => {
       reply.raw.write(': keep-alive\n\n')

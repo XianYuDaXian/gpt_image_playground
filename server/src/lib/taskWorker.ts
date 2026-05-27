@@ -79,6 +79,39 @@ export class TaskWorker {
     }
   }
 
+  getTaskRuntimeMeta(taskId: string) {
+    const runningCount = this.running.size
+    const pendingCount = this.pending.length
+    if (this.running.has(taskId)) {
+      return {
+        runtimeStatus: 'running' as const,
+        queuePosition: 0,
+        queueAhead: 0,
+        runningCount,
+        pendingCount,
+      }
+    }
+
+    const pendingIndex = this.pending.indexOf(taskId)
+    if (pendingIndex >= 0) {
+      return {
+        runtimeStatus: 'queued' as const,
+        queuePosition: pendingIndex + 1,
+        queueAhead: pendingIndex,
+        runningCount,
+        pendingCount,
+      }
+    }
+
+    return {
+      runtimeStatus: 'idle' as const,
+      queuePosition: null,
+      queueAhead: null,
+      runningCount,
+      pendingCount,
+    }
+  }
+
   private isTaskInactive(taskId: string) {
     return this.cancelled.has(taskId) || !this.db.taskExists(taskId)
   }

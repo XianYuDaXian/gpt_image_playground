@@ -284,6 +284,10 @@ export default function TaskCard({
   const showThumbnailPlaceholder =
     task.status === 'done' && (hasOutputImage || hasOutputVideo) && !thumbSrc
   const isCoverBlurred = Boolean(thumbSrc) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
+  const isQueued = task.serverStatus === 'queued'
+  const runningStatusText = isQueued
+    ? (task.queuePosition && task.queuePosition > 0 ? `排队中 第 ${task.queuePosition} 位` : '排队中')
+    : (task.progressPercent != null ? `${task.progressPercent}%` : task.currentStep ? `${task.currentStep}...` : '生成中...')
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
       ? 'bg-gray-500 dark:bg-gray-600'
@@ -463,7 +467,7 @@ export default function TaskCard({
                 />
               </svg>
               <span className="text-xs text-gray-400 dark:text-gray-500">
-                {task.progressPercent != null ? `${task.progressPercent}%` : task.currentStep ? `${task.currentStep}...` : '生成中...'}
+                {runningStatusText}
               </span>
             </div>
           )}

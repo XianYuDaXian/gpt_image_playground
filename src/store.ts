@@ -31,6 +31,7 @@ import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi, replaceImageMentionsForVideoApi } from './lib/promptImageMentions'
 import { normalizeImageSize } from './lib/size'
 import { clearAnnouncementLocalState } from './lib/announcement'
+import { matchesTaskFilters } from './lib/taskSearch'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -47,6 +48,8 @@ let taskListEventSource: EventSource | null = null
 let taskStreamInitialized = false
 let taskRefreshLifecycleInitialized = false
 let thumbnailBackfillScheduled = false
+let taskRefreshTimer: number | null = null
+let authRefreshTimer: number | null = null
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
@@ -1018,7 +1021,6 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
     } else {
       useStore.getState().clearMaskDraft()
     }
-    syncTaskEventSources([task, ...latestTasks.filter((item) => item.id !== task.id)])
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err), 'error')
   }
@@ -1511,12 +1513,51 @@ export async function cacheTaskVideoForPlayback(
 }
 
 function upsertTaskFromServer(task: TaskRecord) {
-  const tasks = useStore.getState().tasks
+  const state = useStore.getState()
+  const exists = state.tasks.some((item) => item.id === task.id)
+  const shouldDisplay = matchesTaskFilters(task, {
+    filterStatus: state.filterStatus,
+    filterTaskType: state.filterTaskType,
+    filterFavorite: state.filterFavorite,
+    filterArchived: state.filterArchived,
+    role: state.authStatus?.role,
+    showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+    query: state.searchQuery.trim().toLowerCase(),
+    tags: state.searchTags,
+  })
+
+  if (!shouldDisplay) {
+    if (exists) removeTaskFromStore(task.id)
+    return
+  }
+
   const nextTasks = sortTasksForDisplay([
     task,
-    ...tasks.filter((item) => item.id !== task.id),
+    ...state.tasks.filter((item) => item.id !== task.id),
   ])
   useStore.getState().setTasks(nextTasks)
+}
+
+function scheduleTaskRefresh(delay = 400) {
+  if (typeof window === 'undefined') return
+  if (taskRefreshTimer != null) {
+    window.clearTimeout(taskRefreshTimer)
+  }
+  taskRefreshTimer = window.setTimeout(() => {
+    taskRefreshTimer = null
+    void refreshTasksFromServer({ silent: true })
+  }, delay)
+}
+
+function scheduleAuthRefresh(delay = 400) {
+  if (typeof window === 'undefined') return
+  if (authRefreshTimer != null) {
+    window.clearTimeout(authRefreshTimer)
+  }
+  authRefreshTimer = window.setTimeout(() => {
+    authRefreshTimer = null
+    void refreshAuthStatus({ silent: true })
+  }, delay)
 }
 
 function closeTaskEventSource(taskId: string) {
@@ -1573,7 +1614,6 @@ export async function refreshTasksFromServer(options: { silent?: boolean } = {})
       total: taskPageResult.total,
     })
     useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
-    syncTaskEventSources(mergedTasks)
   } catch (err) {
     if (!options.silent) {
       useStore.getState().showToast(
@@ -1620,19 +1660,41 @@ function setupGlobalTaskListStream() {
   if (taskListEventSource || typeof window === 'undefined') return
 
   const source = new EventSource('/api/tasks/events')
-  source.addEventListener('snapshot', (event) => {
-    void event
-    void refreshTasksFromServer({ silent: true })
+  source.addEventListener('snapshot', () => {
+    scheduleTaskRefresh(0)
   })
   source.addEventListener('task', (event) => {
-    void event
-    void refreshTasksFromServer({ silent: true })
+    const payload = JSON.parse((event as MessageEvent<string>).data) as
+      | { type: 'delete'; taskId: string }
+      | { type: 'upsert'; task: TaskRecord }
+
+    if (payload.type === 'delete') {
+      removeTaskFromStore(payload.taskId)
+      scheduleTaskRefresh()
+      return
+    }
+
+    const previousTask = useStore.getState().tasks.find((item) => item.id === payload.task.id) ?? null
+    upsertTaskFromServer(payload.task)
+
+    const shouldRefreshList =
+      !previousTask
+      || useStore.getState().taskPage !== 1
+      || previousTask.serverStatus !== payload.task.serverStatus
+
+    if (shouldRefreshList) {
+      scheduleTaskRefresh()
+    }
+
+    if (payload.task.status !== 'running') {
+      scheduleAuthRefresh()
+    }
   })
   source.onerror = () => {
     closeTaskListEventSource()
     window.setTimeout(() => {
       setupGlobalTaskListStream()
-      void refreshTasksFromServer({ silent: true })
+      scheduleTaskRefresh(0)
     }, 1500)
   }
 
@@ -1664,13 +1726,7 @@ function setupTaskStreams() {
   taskStreamInitialized = true
 
   setupGlobalTaskListStream()
-  syncTaskEventSources(useStore.getState().tasks)
   setupTaskRefreshLifecycle()
-  useStore.subscribe((state, prevState) => {
-    if (state.tasks !== prevState.tasks) {
-      syncTaskEventSources(state.tasks)
-    }
-  })
 }
 
 function fileToDataUrl(file: File): Promise<string> {

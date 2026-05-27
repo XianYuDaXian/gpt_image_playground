@@ -236,6 +236,9 @@ export default function DetailModal() {
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
   const hasRenderedOutput = Boolean(isVideoTask ? currentOutputVideoSrc : outputLen > 0 && currentOutputImageSrc)
   const isTaskBlurred = hasRenderedOutput && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
+  const runningStepText = task.serverStatus === 'queued'
+    ? (task.queuePosition && task.queuePosition > 0 ? `排队中，前方还有 ${task.queueAhead ?? Math.max(task.queuePosition - 1, 0)} 个任务` : '排队中')
+    : (task.currentStep || '正在继续生成剩余图片')
 
   const formatTime = (ts: number | null) => {
     if (!ts) return ''
@@ -569,7 +572,7 @@ export default function DetailModal() {
           {task.status === 'running' && hasRenderedOutput && (
             <div className="absolute bottom-3 left-3">
               <span className="inline-flex rounded-full bg-black/55 px-3 py-1.5 text-xs text-white/90 backdrop-blur-sm">
-                {task.currentStep || '正在继续生成剩余图片'}
+                {runningStepText}
               </span>
             </div>
           )}
