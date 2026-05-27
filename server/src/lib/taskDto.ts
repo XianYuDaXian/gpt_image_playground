@@ -173,12 +173,18 @@ export function serializeTaskRecord(
       - (ownerUsageCodeProviderUsedImageCredits?.[task.providerProfileId] ?? 0),
     )
     : null
+  const currentProviderUsedImageCredits = task.providerProfileId
+    ? (ownerUsageCodeProviderUsedImageCredits?.[task.providerProfileId] ?? 0)
+    : null
   const currentProviderRemainingVideoCredits = task.providerProfileId && ownerUsageCodeProviderVideoQuotas
     ? Math.max(
       0,
       (ownerUsageCodeProviderVideoQuotas[task.providerProfileId] ?? 0)
       - (ownerUsageCodeProviderUsedVideoCredits?.[task.providerProfileId] ?? 0),
     )
+    : null
+  const currentProviderUsedVideoCredits = task.providerProfileId
+    ? (ownerUsageCodeProviderUsedVideoCredits?.[task.providerProfileId] ?? 0)
     : null
 
   return {
@@ -233,6 +239,7 @@ export function serializeTaskRecord(
           taskCount: task.ownerUsageCodeTaskCount ?? 0,
           outputImageCount: task.ownerUsageCodeOutputImageCount ?? 0,
           providerOutputImageCount: task.ownerUsageCodeProviderOutputImageCount ?? 0,
+          currentProviderUsedImageCredits,
           currentProviderRemainingImageCredits: currentProviderRemainingImageCredits ?? (
             task.ownerUsageCodeImageQuota == null
               ? null
@@ -240,6 +247,7 @@ export function serializeTaskRecord(
           ),
           outputVideoCount: task.ownerUsageCodeOutputVideoCount ?? 0,
           providerOutputVideoCount: task.ownerUsageCodeProviderOutputVideoCount ?? 0,
+          currentProviderUsedVideoCredits,
           currentProviderRemainingVideoCredits: currentProviderRemainingVideoCredits ?? (
             task.ownerUsageCodeVideoQuota == null
               ? null

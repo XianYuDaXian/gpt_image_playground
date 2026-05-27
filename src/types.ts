@@ -164,9 +164,11 @@ export interface TaskRecord {
     taskCount: number
     outputImageCount: number
     providerOutputImageCount: number
+    currentProviderUsedImageCredits: number | null
     currentProviderRemainingImageCredits: number | null
     outputVideoCount: number
     providerOutputVideoCount: number
+    currentProviderUsedVideoCredits: number | null
     currentProviderRemainingVideoCredits: number | null
   } | null
   reservedImageCredits?: number
