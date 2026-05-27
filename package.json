@@ -1,14 +1,16 @@
 {
   "name": "gpt-image-playground",
   "private": true,
-  "version": "0.3.43",
+  "version": "0.3.45",
   "type": "module",
   "scripts": {
+    "sync-version": "node scripts/sync-version.mjs",
+    "release:tag": "npm run sync-version && node scripts/release-tag.mjs",
     "dev": "vite",
-    "dev:server": "npm --prefix server run dev",
-    "build:server": "npm --prefix server run build",
-    "build": "tsc -b && vite build",
-    "build:web": "tsc -b && vite build",
+    "dev:server": "npm run sync-version && npm --prefix server run dev",
+    "build:server": "npm run sync-version && npm --prefix server run build",
+    "build": "npm run sync-version && tsc -b && vite build",
+    "build:web": "npm run sync-version && tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
