@@ -65,7 +65,7 @@ type UsageCodeEventQueryDraft = {
   startAt: string
   endAt: string
   bucket: BackendUsageCodeEventBucket
-  eventCategory: BackendUsageCodeEventCategory
+  eventCategories: BackendUsageCodeEventCategory[]
   taskId: string
 }
 
@@ -102,7 +102,7 @@ function createDefaultUsageCodeEventQuery(timePreset: BackendUsageCodeEventTimeP
       startAt: toLocalDateTimeInputValue(start),
       endAt: toLocalDateTimeInputValue(end),
       bucket: 'hour',
-      eventCategory: 'all',
+      eventCategories: ['all'],
       taskId: '',
     }
   }
@@ -111,7 +111,7 @@ function createDefaultUsageCodeEventQuery(timePreset: BackendUsageCodeEventTimeP
       timePreset,
       ...createDateRange(6),
       bucket: 'day',
-      eventCategory: 'all',
+      eventCategories: ['all'],
       taskId: '',
     }
   }
@@ -120,7 +120,7 @@ function createDefaultUsageCodeEventQuery(timePreset: BackendUsageCodeEventTimeP
       timePreset,
       ...createDateRange(29),
       bucket: 'day',
-      eventCategory: 'all',
+      eventCategories: ['all'],
       taskId: '',
     }
   }
@@ -129,7 +129,7 @@ function createDefaultUsageCodeEventQuery(timePreset: BackendUsageCodeEventTimeP
       timePreset,
       ...createDateRange(0),
       bucket: 'hour',
-      eventCategory: 'all',
+      eventCategories: ['all'],
       taskId: '',
     }
   }
@@ -137,7 +137,7 @@ function createDefaultUsageCodeEventQuery(timePreset: BackendUsageCodeEventTimeP
     timePreset: 'today',
     ...createDateRange(0),
     bucket: 'hour',
-    eventCategory: 'all',
+    eventCategories: ['all'],
     taskId: '',
   }
 }
@@ -467,10 +467,12 @@ export default function SettingsModal() {
   const [mediaStats, setMediaStats] = useState<BackendMediaStats | null>(null)
   const [maintenanceCardNow, setMaintenanceCardNow] = useState(() => Date.now())
   const [usageCodeEventModal, setUsageCodeEventModal] = useState<UsageCodeEventModalState | null>(null)
+  const [isUsageCodeEventCategoryMenuOpen, setIsUsageCodeEventCategoryMenuOpen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const importInputRef = useRef<HTMLInputElement>(null)
   const settingsPanelRef = useRef<HTMLDivElement>(null)
   const usageCodeEventPanelRef = useRef<HTMLDivElement>(null)
+  const usageCodeEventCategoryMenuRef = useRef<HTMLDivElement>(null)
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
     apiMode === 'videos' ? 'grok-imagine-video' : apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
@@ -818,7 +820,7 @@ export default function SettingsModal() {
         startAt: query.timePreset === 'custom' ? toServerDateTimeValue(query.startAt) : undefined,
         endAt: query.timePreset === 'custom' ? toServerDateTimeValue(query.endAt) : undefined,
         bucket: query.bucket,
-        eventCategory: query.eventCategory,
+        eventCategories: query.eventCategories,
         taskId: query.taskId,
       })
       setUsageCodeEventModal({
@@ -921,7 +923,7 @@ export default function SettingsModal() {
 
   const buildUsageCodeEventSummaryCards = (
     summary: BackendUsageCodeEventSummary,
-    eventCategory: BackendUsageCodeEventCategory,
+    eventCategories: BackendUsageCodeEventCategory[],
   ) => {
     const cards: Array<{ key: string; title: string; value: number }> = [
       { key: 'total', title: '总事件数', value: summary.totalEvents },
@@ -930,28 +932,60 @@ export default function SettingsModal() {
       if (value <= 0) return
       cards.push({ key, title, value })
     }
-    const isAll = eventCategory === 'all'
-    if (isAll || eventCategory === 'create') push('create', '创建使用码', summary.createCount)
-    if (isAll || eventCategory === 'generate') {
+    const categorySet = new Set(eventCategories)
+    const isAll = categorySet.has('all')
+    if (isAll || categorySet.has('create')) push('create', '创建使用码', summary.createCount)
+    if (isAll || categorySet.has('generate')) {
       push('generated-image', '生成图片', summary.generatedImageCount)
       push('generated-video', '生成视频', summary.generatedVideoCount)
     }
-    if (isAll || eventCategory === 'delete') push('delete', '删除相关', summary.deletedTaskCount)
-    if (isAll || eventCategory === 'backup') push('backup', '备份相关', summary.backupCount)
-    if (isAll || eventCategory === 'api_access_change') push('api-access', 'API 调整', summary.apiAccessChangeCount)
-    if (isAll || eventCategory === 'quota_increase') {
+    if (isAll || categorySet.has('delete')) push('delete', '删除相关', summary.deletedTaskCount)
+    if (isAll || categorySet.has('backup')) push('backup', '备份相关', summary.backupCount)
+    if (isAll || categorySet.has('api_access_change')) push('api-access', 'API 调整', summary.apiAccessChangeCount)
+    if (isAll || categorySet.has('quota_increase')) {
       push('image-quota-increase', '图片加额', summary.imageQuotaIncreasedCredits)
       push('video-quota-increase', '视频加额', summary.videoQuotaIncreasedCredits)
     }
-    if (isAll || eventCategory === 'quota_decrease') {
+    if (isAll || categorySet.has('quota_decrease')) {
       push('image-quota-decrease', '图片扣减', summary.imageQuotaDecreasedCredits)
       push('video-quota-decrease', '视频扣减', summary.videoQuotaDecreasedCredits)
     }
-    if (isAll || eventCategory === 'export') push('export', '导出相关', summary.exportCount)
-    if (isAll || eventCategory === 'distribution_change') push('distribution', '分发设置', summary.distributionChangeCount)
-    if (isAll || eventCategory === 'rename') push('rename', '重命名', summary.renameCount)
-    if (isAll || eventCategory === 'enable_disable') push('enable-disable', '启用与禁用', summary.enableDisableCount)
+    if (isAll || categorySet.has('export')) push('export', '导出相关', summary.exportCount)
+    if (isAll || categorySet.has('distribution_change')) push('distribution', '分发设置', summary.distributionChangeCount)
+    if (isAll || categorySet.has('rename')) push('rename', '重命名', summary.renameCount)
+    if (isAll || categorySet.has('enable_disable')) push('enable-disable', '启用与禁用', summary.enableDisableCount)
     return cards
+  }
+
+  const toggleUsageCodeEventCategory = (value: BackendUsageCodeEventCategory) => {
+    setUsageCodeEventModal((prev) => {
+      if (!prev) return prev
+      const current = prev.query.eventCategories
+      let next: BackendUsageCodeEventCategory[]
+      if (value === 'all') {
+        next = ['all']
+      } else if (current.includes(value)) {
+        next = current.filter((item) => item !== 'all' && item !== value)
+        if (next.length === 0) next = ['all']
+      } else {
+        next = [...current.filter((item) => item !== 'all'), value]
+      }
+      return {
+        ...prev,
+        query: {
+          ...prev.query,
+          eventCategories: next,
+        },
+      }
+    })
+  }
+
+  const getUsageCodeEventCategoryMenuLabel = (eventCategories: BackendUsageCodeEventCategory[]) => {
+    if (eventCategories.includes('all')) return '全部事件'
+    return categoryOptions
+      .filter((item) => item.value !== 'all' && eventCategories.includes(item.value))
+      .map((item) => item.label)
+      .join('、')
   }
 
   const loadSettings = async () => {
@@ -1091,6 +1125,29 @@ export default function SettingsModal() {
 
   useCloseOnEscape(showSettings, () => setShowSettings(false))
   useCloseOnEscape(Boolean(usageCodeEventModal), () => setUsageCodeEventModal(null))
+
+  useEffect(() => {
+    if (!usageCodeEventModal) {
+      setIsUsageCodeEventCategoryMenuOpen(false)
+    }
+  }, [usageCodeEventModal])
+
+  useEffect(() => {
+    if (!isUsageCodeEventCategoryMenuOpen) return
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null
+      if (usageCodeEventCategoryMenuRef.current?.contains(target)) return
+      setIsUsageCodeEventCategoryMenuOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [isUsageCodeEventCategoryMenuOpen])
 
   if (!showSettings) return null
 
@@ -2335,20 +2392,20 @@ export default function SettingsModal() {
                                 <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.endAt.replace('T', ' ')}</div>
                               </div>
                             </div>
-                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+                              <div className="min-w-0 rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
                                 <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">投放对象</div>
                                 <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{formatReminderAudience(reminder)}</div>
                               </div>
-                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                              <div className="min-w-0 rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
                                 <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">每天提醒次数</div>
                                 <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.maxDailyShows}</div>
                               </div>
-                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                              <div className="min-w-0 rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
                                 <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">日内开始</div>
                                 <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.startTime}</div>
                               </div>
-                              <div className="rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
+                              <div className="min-w-0 rounded-xl bg-gray-50/80 px-3 py-2 text-xs leading-5 text-gray-500 dark:bg-white/[0.03] dark:text-gray-400">
                                 <div className="text-[11px] uppercase tracking-wider text-gray-400 dark:text-gray-500">日内结束</div>
                                 <div className="mt-1 text-sm text-gray-700 dark:text-gray-200">{reminder.endTime}</div>
                               </div>
@@ -2414,8 +2471,8 @@ export default function SettingsModal() {
                             />
                           </label>
                         </div>
-                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-                          <label className="block">
+                        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-4">
+                          <label className="block min-w-0">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">投放对象</span>
                             <Select
                               value={getReminderAudienceValue(reminder)}
@@ -2425,10 +2482,10 @@ export default function SettingsModal() {
                                 { value: 'free', label: '免费用户' },
                                 { value: 'paid', label: '付费用户' },
                               ]}
-                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                              className="w-full min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
-                          <label className="block">
+                          <label className="block min-w-0">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">每天提醒次数</span>
                             <ClearableInput
                               value={reminder.maxDailyShows}
@@ -2439,27 +2496,27 @@ export default function SettingsModal() {
                               type="number"
                               min={1}
                               max={24}
-                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                              className="w-full min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
-                          <label className="block">
+                          <label className="block min-w-0">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内开始</span>
                             <ClearableInput
                               value={reminder.startTime}
                               onChange={(event) => handleUpdateReminder(reminder.id, { startTime: event.target.value })}
                               onClear={() => handleUpdateReminder(reminder.id, { startTime: '' })}
                               type="time"
-                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                              className="w-full min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
-                          <label className="block">
+                          <label className="block min-w-0">
                             <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">日内结束</span>
                             <ClearableInput
                               value={reminder.endTime}
                               onChange={(event) => handleUpdateReminder(reminder.id, { endTime: event.target.value })}
                               onClear={() => handleUpdateReminder(reminder.id, { endTime: '' })}
                               type="time"
-                              className="w-full rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                              className="w-full min-w-0 rounded-xl border border-gray-200/70 bg-white/80 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
                             />
                           </label>
                         </div>
@@ -3466,12 +3523,76 @@ export default function SettingsModal() {
                 </label>
                 <label className="block xl:col-span-1">
                   <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">事件类型</span>
-                  <Select
-                    value={usageCodeEventModal.query.eventCategory}
-                    onChange={(value) => updateUsageCodeEventQuery({ eventCategory: value as BackendUsageCodeEventCategory })}
-                    options={categoryOptions.map((item) => ({ value: item.value, label: item.label }))}
-                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-                  />
+                  <div className="md:hidden flex flex-wrap gap-2 rounded-xl border border-gray-200/70 bg-white/40 p-2 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                    {categoryOptions.map((item) => {
+                      const selected = usageCodeEventModal.query.eventCategories.includes(item.value)
+                      return (
+                        <button
+                          key={item.value}
+                          type="button"
+                          onClick={() => toggleUsageCodeEventCategory(item.value)}
+                          className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
+                            selected
+                              ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/[0.05] dark:text-gray-400 dark:hover:bg-white/[0.08]'
+                          }`}
+                        >
+                          {item.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div ref={usageCodeEventCategoryMenuRef} className="relative hidden md:block">
+                    <button
+                      type="button"
+                      onClick={() => setIsUsageCodeEventCategoryMenuOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between gap-2 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none transition hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {getUsageCodeEventCategoryMenuLabel(usageCodeEventModal.query.eventCategories)}
+                      </span>
+                      <svg
+                        className={`h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform dark:text-gray-500 ${isUsageCodeEventCategoryMenuOpen ? 'rotate-180' : ''}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {isUsageCodeEventCategoryMenuOpen && (
+                      <div className="absolute left-0 right-0 top-full z-20 mt-2 max-h-72 overflow-y-auto rounded-2xl border border-gray-200/70 bg-white/95 p-2 shadow-[0_12px_36px_rgb(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur dark:border-white/[0.08] dark:bg-[#1d1d1f]/95 dark:ring-white/10">
+                        <div className="space-y-1">
+                          {categoryOptions.map((item) => {
+                            const selected = usageCodeEventModal.query.eventCategories.includes(item.value)
+                            return (
+                              <button
+                                key={item.value}
+                                type="button"
+                                onClick={() => toggleUsageCodeEventCategory(item.value)}
+                                className={`flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition ${
+                                  selected
+                                    ? 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-300'
+                                    : 'text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-white/[0.06]'
+                                }`}
+                              >
+                                <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                  selected
+                                    ? 'border-blue-500 bg-blue-500 text-white dark:border-blue-400 dark:bg-blue-400'
+                                    : 'border-gray-300 text-transparent dark:border-white/[0.18]'
+                                }`}>
+                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </span>
+                                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </label>
                 <label className="block xl:col-span-1">
                   <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">任务号</span>
@@ -3512,7 +3633,7 @@ export default function SettingsModal() {
                   <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                     {buildUsageCodeEventSummaryCards(
                       usageCodeEventModal.result.summary,
-                      usageCodeEventModal.query.eventCategory,
+                      usageCodeEventModal.query.eventCategories,
                     ).map((card) => (
                       <div key={card.key} className="rounded-2xl border border-gray-200/70 bg-white/50 px-4 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                         <div className="text-xs text-gray-500 dark:text-gray-400">{card.title}</div>

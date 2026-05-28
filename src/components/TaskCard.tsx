@@ -35,6 +35,7 @@ export default function TaskCard({
   const [isSwiping, setIsSwiping] = useState(false)
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
+  const [isTaskIdPopoverOpen, setIsTaskIdPopoverOpen] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const authStatus = useStore((s) => s.authStatus)
   const loadedTaskImageIds = useStore((s) => s.loadedTaskImageIds)
@@ -57,6 +58,7 @@ export default function TaskCard({
   const swipeLockRef = useRef<'horizontal' | 'vertical' | null>(null)
   const longPressTimerRef = useRef<number | null>(null)
   const longPressTriggeredRef = useRef(false)
+  const taskIdPopoverRef = useRef<HTMLDivElement>(null)
 
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current != null) {
@@ -203,6 +205,23 @@ export default function TaskCard({
       window.clearTimeout(swipeResetTimerRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (!isTaskIdPopoverOpen) return
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null
+      if (taskIdPopoverRef.current?.contains(target)) return
+      setIsTaskIdPopoverOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [isTaskIdPopoverOpen])
 
   // 定时更新运行中任务的计时
   useEffect(() => {
@@ -507,7 +526,7 @@ export default function TaskCard({
             </svg>
           )}
           {/* 运行中显示耗时，完成后显示封面图比例 */}
-          <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+          <div ref={taskIdPopoverRef} className="absolute top-1.5 left-1.5 flex items-center gap-1">
             {isVideoTask ? (
               <>
                 <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm">
@@ -518,12 +537,32 @@ export default function TaskCard({
               </span>
               </>
             ) : task.status !== 'done' || !hasOutputImage || !coverRatio ? (
-              <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                {duration}
-              </span>
+              <>
+                <button
+                  type="button"
+                  data-no-long-press
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    setIsTaskIdPopoverOpen((prev) => !prev)
+                  }}
+                  className="flex items-center gap-1 rounded bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white backdrop-blur-sm sm:text-xs"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  {duration}
+                </button>
+                {isTaskIdPopoverOpen && (
+                  <div
+                    className="absolute left-0 top-full z-20 mt-2 w-56 rounded-xl border border-gray-200/70 bg-white/95 px-3 py-2 text-left text-xs text-gray-700 shadow-[0_12px_36px_rgb(0,0,0,0.14)] ring-1 ring-black/5 backdrop-blur dark:border-white/[0.08] dark:bg-[#1d1d1f]/95 dark:text-gray-200 dark:ring-white/10"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="text-[11px] text-gray-400 dark:text-gray-500">任务号</div>
+                    <div className="mt-1 break-all">{task.id}</div>
+                  </div>
+                )}
+              </>
             ) : (
               <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
                 {coverRatio}

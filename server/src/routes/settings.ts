@@ -446,19 +446,35 @@ const usageCodeEventQuerySchema = z.object({
   startAt: z.string().datetime().nullable().optional(),
   endAt: z.string().datetime().nullable().optional(),
   bucket: z.enum(['month', 'day', 'hour', '30m', '15m', '5m']).default('hour'),
-  eventCategory: z.enum([
-    'all',
-    'create',
-    'generate',
-    'delete',
-    'backup',
-    'api_access_change',
-    'quota_increase',
-    'quota_decrease',
-    'export',
-    'distribution_change',
-    'rename',
-    'enable_disable',
+  eventCategory: z.union([
+    z.enum([
+      'all',
+      'create',
+      'generate',
+      'delete',
+      'backup',
+      'api_access_change',
+      'quota_increase',
+      'quota_decrease',
+      'export',
+      'distribution_change',
+      'rename',
+      'enable_disable',
+    ]),
+    z.array(z.enum([
+      'all',
+      'create',
+      'generate',
+      'delete',
+      'backup',
+      'api_access_change',
+      'quota_increase',
+      'quota_decrease',
+      'export',
+      'distribution_change',
+      'rename',
+      'enable_disable',
+    ])),
   ]).default('all'),
   taskId: z.string().trim().nullable().optional(),
 })
@@ -1081,11 +1097,14 @@ function queryUsageCodeEvents(
     startAt?: string | null
     endAt?: string | null
     bucket: UsageCodeEventBucket
-    eventCategory: UsageCodeEventCategory
+    eventCategories: UsageCodeEventCategory[]
     taskId?: string | null
   },
 ) {
   const range = getUsageCodeQueryRange(input.timePreset, input.startAt, input.endAt)
+  const normalizedEventCategories = input.eventCategories.includes('all')
+    ? ['all']
+    : input.eventCategories
   const quotaEvents = app.db.listUsageQuotaEventsForQuery({
     usageCodeId: input.usageCodeId,
     startAt: range.startAt,
@@ -1100,7 +1119,7 @@ function queryUsageCodeEvents(
   }).map((event) => buildUsageCodeEventItemFromActivity(event))
 
   const items = [...quotaEvents, ...activityEvents]
-    .filter((event) => input.eventCategory === 'all' || event.eventCategory === input.eventCategory)
+    .filter((event) => normalizedEventCategories.includes('all') || normalizedEventCategories.includes(event.eventCategory))
     .sort((left, right) => {
       const timeDiff = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
       if (timeDiff !== 0) return timeDiff
@@ -1153,7 +1172,7 @@ function queryUsageCodeEvents(
       startAt: range.startAt,
       endAt: range.endAt,
       bucket: input.bucket,
-      eventCategory: input.eventCategory,
+      eventCategories: normalizedEventCategories,
       taskId: input.taskId?.trim() || '',
     },
     categories: [
@@ -3242,7 +3261,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       startAt: query.startAt ?? null,
       endAt: query.endAt ?? null,
       bucket: query.bucket,
-      eventCategory: query.eventCategory,
+      eventCategories: Array.isArray(query.eventCategory) ? query.eventCategory : [query.eventCategory],
       taskId: query.taskId ?? null,
     })
     return {

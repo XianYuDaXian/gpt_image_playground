@@ -44,8 +44,10 @@ export default function DetailModal() {
   const [imageSizes, setImageSizes] = useState<Record<string, string>>({})
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [now, setNow] = useState(Date.now())
+  const [isTaskIdPopoverOpen, setIsTaskIdPopoverOpen] = useState(false)
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const mainImageRef = useRef<HTMLImageElement>(null)
+  const taskIdPopoverRef = useRef<HTMLDivElement>(null)
   const [imageLabelLeft, setImageLabelLeft] = useState(8)
   const useNativeVideoControls = useMemo(() => {
     if (typeof navigator === 'undefined') return false
@@ -74,6 +76,27 @@ export default function DetailModal() {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(id)
   }, [task?.status])
+
+  useEffect(() => {
+    setIsTaskIdPopoverOpen(false)
+  }, [detailTaskId])
+
+  useEffect(() => {
+    if (!isTaskIdPopoverOpen) return
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null
+      if (taskIdPopoverRef.current?.contains(target)) return
+      setIsTaskIdPopoverOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('touchstart', handlePointerDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('touchstart', handlePointerDown)
+    }
+  }, [isTaskIdPopoverOpen])
 
   // 加载所有相关图片
   useEffect(() => {
@@ -327,6 +350,15 @@ export default function DetailModal() {
       true,
       currentRevisedPrompt ? '接口返回的提示词已被改写' : '接口没有返回官方 API 会返回的部分信息',
     )
+  }
+
+  const handleCopyTaskId = async () => {
+    try {
+      await copyTextToClipboard(task.id)
+      showToast('任务号已复制', 'success')
+    } catch (err) {
+      showToast(getClipboardFailureMessage('复制任务号失败', err), 'error')
+    }
   }
 
   const handleCopyInputImage = async () => {
@@ -775,8 +807,29 @@ export default function DetailModal() {
             </div>
 
             {/* 时间 */}
-            <div className="text-xs text-gray-400 dark:text-gray-500 mb-4">
-              <span>创建于 {formatTime(task.createdAt)}</span>
+            <div className="mb-4 text-xs text-gray-400 dark:text-gray-500">
+              <div ref={taskIdPopoverRef} className="relative inline-flex items-center gap-0">
+                <button
+                  type="button"
+                  onClick={() => setIsTaskIdPopoverOpen((prev) => !prev)}
+                  className="rounded-md transition hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  创建于 {formatTime(task.createdAt)}
+                </button>
+                {isTaskIdPopoverOpen && (
+                  <div className="absolute left-0 top-full z-20 mt-2 w-[min(22rem,calc(100vw-4rem))] rounded-2xl border border-gray-200/70 bg-white/95 p-3 text-left shadow-[0_12px_36px_rgb(0,0,0,0.14)] ring-1 ring-black/5 backdrop-blur dark:border-white/[0.08] dark:bg-[#1d1d1f]/95 dark:ring-white/10">
+                    <div className="text-[11px] text-gray-400 dark:text-gray-500">任务号</div>
+                    <div className="mt-1 break-all text-xs text-gray-700 dark:text-gray-200">{task.id}</div>
+                    <button
+                      type="button"
+                      onClick={handleCopyTaskId}
+                      className="mt-3 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                    >
+                      复制任务号
+                    </button>
+                  </div>
+                )}
+              </div>
               {formatDuration() && <span> · 耗时 {formatDuration()}</span>}
               {task.ownerLabel && <span> · 来源 </span>}
               {task.ownerLabel && <UsageCodeBadge task={task} />}

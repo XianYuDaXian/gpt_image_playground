@@ -244,7 +244,7 @@ export interface BackendUsageCodeEventQueryResult {
     startAt: string | null
     endAt: string | null
     bucket: BackendUsageCodeEventBucket
-    eventCategory: BackendUsageCodeEventCategory
+    eventCategories: BackendUsageCodeEventCategory[]
     taskId: string
   }
   categories: Array<{
@@ -520,7 +520,7 @@ export async function fetchBackendUsageCodeEvents(
     startAt?: string | null
     endAt?: string | null
     bucket: BackendUsageCodeEventBucket
-    eventCategory: BackendUsageCodeEventCategory
+    eventCategories: BackendUsageCodeEventCategory[]
     taskId?: string
   },
 ): Promise<BackendUsageCodeEventQueryResult> {
@@ -529,7 +529,9 @@ export async function fetchBackendUsageCodeEvents(
   params.set('pageSize', String(query.pageSize))
   params.set('timePreset', query.timePreset)
   params.set('bucket', query.bucket)
-  params.set('eventCategory', query.eventCategory)
+  for (const eventCategory of query.eventCategories) {
+    params.append('eventCategory', eventCategory)
+  }
   if (query.startAt) params.set('startAt', query.startAt)
   if (query.endAt) params.set('endAt', query.endAt)
   if (query.taskId?.trim()) params.set('taskId', query.taskId.trim())

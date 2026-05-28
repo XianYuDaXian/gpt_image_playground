@@ -630,7 +630,7 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
         taskId: params.taskId,
         actorKind: 'user',
         eventType: 'task_deleted',
-        message: `使用码用户删除任务，清理图片 ${outputImageCount} 张，视频 ${outputVideoCount} 个`,
+        message: `使用码用户删除任务 ${params.taskId}，清理图片 ${outputImageCount} 张，视频 ${outputVideoCount} 个`,
       })
     }
     app.taskWorker.cancel(params.taskId)
