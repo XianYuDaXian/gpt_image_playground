@@ -84,15 +84,39 @@ export async function fetchUsageCodeMediaExportFiles() {
   )
 }
 
+export async function deleteUsageCodeMediaExportFiles() {
+  return readResponseJson<{ ok: true }>(
+    await fetch('/api/user/data/export-media', {
+      method: 'DELETE',
+      cache: 'no-store',
+      credentials: 'include',
+    }),
+  )
+}
+
+export async function markUsageCodeMediaExportDownloadCompleted(fileName: string) {
+  return readResponseJson<{ ok: true }>(
+    await fetch('/api/user/data/export-media/download-complete', {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName }),
+    }),
+  )
+}
+
 export async function downloadUsageCodeMediaExportFile(
   fileName: string,
   options: {
     onProgress?: (progress: UsageCodeMediaExportDownloadProgress) => void
+    signal?: AbortSignal
   } = {},
 ) {
   const response = await fetch(`/api/user/data/export-media/download/${encodeURIComponent(fileName)}`, {
     cache: 'no-store',
     credentials: 'include',
+    signal: options.signal,
   })
   if (!response.ok) {
     let message = `HTTP ${response.status}`

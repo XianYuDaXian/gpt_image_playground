@@ -39,6 +39,7 @@ import {
 import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
 import {
   fetchAdminBackupImportCandidates,
+  deleteUsageCodeMediaExportFiles,
   fetchUsageCodeMediaExportFiles,
   startBackendBackupExport,
   startUsageCodeMediaExport,
@@ -46,6 +47,7 @@ import {
   fetchUsageCodeMediaExportSummary,
   importBackendBackup,
   importBackendBackupFromServer,
+  markUsageCodeMediaExportDownloadCompleted,
   type AdminBackupImportCandidate,
   type UsageCodeMediaExportFile,
   type UsageCodeMediaExportSummary,
@@ -253,6 +255,18 @@ function formatReminderAudience(item: BackendReminderItem) {
 
 function formatUsageCodeUserTier(value: BackendUsageCodeUserTier) {
   return value === 'free' ? '免费用户' : '付费用户'
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException
+    ? error.name === 'AbortError'
+    : error instanceof Error && error.name === 'AbortError'
+}
+
+type UsageCodeDownloadItemState = {
+  status: 'idle' | 'downloading' | 'paused' | 'success' | 'error'
+  loadedBytes: number
+  totalBytes: number | null
 }
 
 function isReminderImageUrl(value: string) {
@@ -465,9 +479,8 @@ export default function SettingsModal() {
   const [isSavingReminders, setIsSavingReminders] = useState(false)
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
   const [usageCodeExportFiles, setUsageCodeExportFiles] = useState<UsageCodeMediaExportFile[]>([])
-  const [usageCodeDownloadingFileName, setUsageCodeDownloadingFileName] = useState<string | null>(null)
-  const [usageCodeDownloadLoadedBytes, setUsageCodeDownloadLoadedBytes] = useState(0)
-  const [usageCodeDownloadTotalBytes, setUsageCodeDownloadTotalBytes] = useState<number | null>(null)
+  const [usageCodeDownloadStates, setUsageCodeDownloadStates] = useState<Record<string, UsageCodeDownloadItemState>>({})
+  const [isDeletingUsageCodeExportFiles, setIsDeletingUsageCodeExportFiles] = useState(false)
   const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
   const [showImportCandidates, setShowImportCandidates] = useState(false)
   const [managementLogs, setManagementLogs] = useState<BackendManagementOperationLog[]>([])
@@ -480,6 +493,8 @@ export default function SettingsModal() {
   const settingsPanelRef = useRef<HTMLDivElement>(null)
   const usageCodeEventPanelRef = useRef<HTMLDivElement>(null)
   const usageCodeEventCategoryMenuRef = useRef<HTMLDivElement>(null)
+  const usageCodeDownloadAbortControllersRef = useRef<Record<string, AbortController>>({})
+  const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel' | null>>({})
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
     apiMode === 'videos' ? 'grok-imagine-video' : apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
@@ -503,6 +518,8 @@ export default function SettingsModal() {
     ),
   )
   const userUsageCodes = authStatus?.usageCodes ?? []
+  const activeUsageCodeDownloadCount = Object.values(usageCodeDownloadStates).filter((item) => item.status === 'downloading').length
+  const hasPendingUsageCodeDownload = Object.values(usageCodeDownloadStates).some((item) => item.status === 'downloading' || item.status === 'paused')
   const getAdminProviderName = (profile: Pick<BackendProviderProfile, 'name' | 'remarkName'> | Pick<BackendProviderOption, 'name' | 'remarkName'>) =>
     getProviderProfileDisplayName({
       name: profile.name,
@@ -1148,16 +1165,16 @@ export default function SettingsModal() {
   }, [showSettings, isAdmin, backupState?.operation, backupState?.phase, backupState?.finishedAt])
 
   useEffect(() => {
-    if (!usageCodeDownloadingFileName) return
+    if (!hasPendingUsageCodeDownload) return
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault()
-      event.returnValue = '导出文件仍在下载中，刷新后本次下载会中断。'
+      event.returnValue = '导出文件尚未处理完成。刷新后本次下载会中断。'
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [usageCodeDownloadingFileName])
+  }, [hasPendingUsageCodeDownload])
 
   useCloseOnEscape(showSettings, () => setShowSettings(false))
   useCloseOnEscape(Boolean(usageCodeEventModal), () => setUsageCodeEventModal(null))
@@ -1452,6 +1469,7 @@ export default function SettingsModal() {
       const latestAuth = await fetchAuthStatus()
       setAuthStatus(latestAuth)
       setUsageCodeExportFiles([])
+      setUsageCodeDownloadStates({})
       useStore.getState().showToast('导出任务已开始。生成完成后可下载成品文件。', 'success')
     } catch (err) {
       useStore.getState().showToast(
@@ -1464,27 +1482,142 @@ export default function SettingsModal() {
   }
 
   const handleDownloadUsageCodeExportFile = async (fileName: string) => {
-    setUsageCodeDownloadingFileName(fileName)
-    setUsageCodeDownloadLoadedBytes(0)
-    setUsageCodeDownloadTotalBytes(null)
+    const currentState = usageCodeDownloadStates[fileName]
+    if (currentState?.status !== 'downloading' && activeUsageCodeDownloadCount >= 2) {
+      useStore.getState().showToast('最多同时下载两个分包', 'info')
+      return
+    }
+
+    const controller = new AbortController()
+    usageCodeDownloadAbortControllersRef.current[fileName] = controller
+    usageCodeDownloadStopActionsRef.current[fileName] = null
+    setUsageCodeDownloadStates((prev) => ({
+      ...prev,
+      [fileName]: {
+        status: 'downloading',
+        loadedBytes: 0,
+        totalBytes: null,
+      },
+    }))
     try {
       await downloadUsageCodeMediaExportFile(fileName, {
+        signal: controller.signal,
         onProgress: ({ loadedBytes, totalBytes }) => {
-          setUsageCodeDownloadLoadedBytes(loadedBytes)
-          setUsageCodeDownloadTotalBytes(totalBytes)
+          setUsageCodeDownloadStates((prev) => ({
+            ...prev,
+            [fileName]: {
+              status: 'downloading',
+              loadedBytes,
+              totalBytes,
+            },
+          }))
         },
       })
+      delete usageCodeDownloadAbortControllersRef.current[fileName]
+      delete usageCodeDownloadStopActionsRef.current[fileName]
+      setUsageCodeDownloadStates((prev) => ({
+        ...prev,
+        [fileName]: {
+          status: 'success',
+          loadedBytes: prev[fileName]?.totalBytes ?? prev[fileName]?.loadedBytes ?? 0,
+          totalBytes: prev[fileName]?.totalBytes ?? prev[fileName]?.loadedBytes ?? null,
+        },
+      }))
+      void markUsageCodeMediaExportDownloadCompleted(fileName).catch(() => undefined)
       useStore.getState().showToast('导出文件下载已开始保存', 'success')
     } catch (err) {
+      const stopAction = usageCodeDownloadStopActionsRef.current[fileName]
+      delete usageCodeDownloadAbortControllersRef.current[fileName]
+      delete usageCodeDownloadStopActionsRef.current[fileName]
+      if (isAbortError(err)) {
+        if (stopAction === 'pause') {
+          setUsageCodeDownloadStates((prev) => ({
+            ...prev,
+            [fileName]: {
+              status: 'paused',
+              loadedBytes: prev[fileName]?.loadedBytes ?? 0,
+              totalBytes: prev[fileName]?.totalBytes ?? null,
+            },
+          }))
+          useStore.getState().showToast('下载已暂停。继续后会重新开始。', 'info')
+          return
+        }
+        setUsageCodeDownloadStates((prev) => ({
+          ...prev,
+          [fileName]: {
+            status: 'idle',
+            loadedBytes: 0,
+            totalBytes: null,
+          },
+        }))
+        useStore.getState().showToast('下载已取消', 'info')
+        return
+      }
+      setUsageCodeDownloadStates((prev) => ({
+        ...prev,
+        [fileName]: {
+          status: 'error',
+          loadedBytes: prev[fileName]?.loadedBytes ?? 0,
+          totalBytes: prev[fileName]?.totalBytes ?? null,
+        },
+      }))
       useStore.getState().showToast(
         `下载导出文件失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
-    } finally {
-      setUsageCodeDownloadingFileName(null)
-      setUsageCodeDownloadLoadedBytes(0)
-      setUsageCodeDownloadTotalBytes(null)
     }
+  }
+
+  const handlePauseUsageCodeExportDownload = (fileName: string) => {
+    const state = usageCodeDownloadStates[fileName]
+    if (state?.status !== 'downloading') return
+    usageCodeDownloadStopActionsRef.current[fileName] = 'pause'
+    usageCodeDownloadAbortControllersRef.current[fileName]?.abort()
+  }
+
+  const handleCancelUsageCodeExportDownload = (fileName: string) => {
+    const state = usageCodeDownloadStates[fileName]
+    if (state?.status === 'downloading') {
+      usageCodeDownloadStopActionsRef.current[fileName] = 'cancel'
+      usageCodeDownloadAbortControllersRef.current[fileName]?.abort()
+      return
+    }
+    setUsageCodeDownloadStates((prev) => ({
+      ...prev,
+      [fileName]: {
+        status: 'idle',
+        loadedBytes: 0,
+        totalBytes: null,
+      },
+    }))
+    useStore.getState().showToast('下载已取消', 'info')
+  }
+
+  const handleDeleteUsageCodeExportFiles = () => {
+    setConfirmDialog({
+      title: '删除远端备份',
+      message: '确定要删除服务器上这次导出的备份文件吗？删除后需要重新导出才能再次下载。',
+      confirmText: '确认删除',
+      tone: 'danger',
+      action: () => {
+        setIsDeletingUsageCodeExportFiles(true)
+        void deleteUsageCodeMediaExportFiles()
+          .then(async () => {
+            const latestAuth = await fetchAuthStatus()
+            setAuthStatus(latestAuth)
+            setUsageCodeExportFiles([])
+            setUsageCodeDownloadStates({})
+            useStore.getState().showToast('远端备份已删除', 'success')
+          })
+          .catch((err) => {
+            useStore.getState().showToast(
+              `删除远端备份失败：${err instanceof Error ? err.message : String(err)}`,
+              'error',
+            )
+          })
+          .finally(() => setIsDeletingUsageCodeExportFiles(false))
+      },
+    })
   }
 
   const handleSaveReminders = async () => {
@@ -2066,53 +2199,105 @@ export default function SettingsModal() {
                     </div>
                     {usageCodeExportFiles.length > 0 && backupState.phase === 'completed' && (
                       <div className="mt-3 space-y-2">
-                        {usageCodeExportFiles.map((item) => (
-                          <div
-                            key={item.fileName}
-                            className="rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                        <div className="flex items-center justify-between gap-3 rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]">
+                          <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">
+                            远端备份保存在服务器。最多同时下载两个分包。删除后，当前这批下载文件会一并失效。
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleDeleteUsageCodeExportFiles}
+                            disabled={isDeletingUsageCodeExportFiles || hasPendingUsageCodeDownload}
+                            className="shrink-0 rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-400/20 dark:bg-white/[0.04] dark:text-red-200 dark:hover:bg-white/[0.08]"
                           >
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-xs font-medium text-blue-900 dark:text-blue-100">{item.fileName}</div>
-                                <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">
-                                  {usageCodeDownloadingFileName === item.fileName && usageCodeDownloadTotalBytes
-                                    ? `${formatBytes(usageCodeDownloadLoadedBytes)} / ${formatBytes(usageCodeDownloadTotalBytes)}`
-                                    : formatBytes(item.bytes)}
+                            {isDeletingUsageCodeExportFiles ? '删除中...' : '删除远端备份'}
+                          </button>
+                        </div>
+                        {usageCodeExportFiles.map((item) => {
+                          const downloadState = usageCodeDownloadStates[item.fileName] ?? {
+                            status: 'idle',
+                            loadedBytes: 0,
+                            totalBytes: null,
+                          }
+                          const isDownloading = downloadState.status === 'downloading'
+                          const isPaused = downloadState.status === 'paused'
+                          const isSuccess = downloadState.status === 'success'
+                          const progressPercent = downloadState.totalBytes && downloadState.totalBytes > 0
+                            ? Math.min(100, Math.floor((downloadState.loadedBytes / downloadState.totalBytes) * 100))
+                            : 12
+
+                          return (
+                            <div
+                              key={item.fileName}
+                              className="rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-medium text-blue-900 dark:text-blue-100">{item.fileName}</div>
+                                  <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">
+                                    {downloadState.totalBytes
+                                      ? `${formatBytes(downloadState.loadedBytes)} / ${formatBytes(downloadState.totalBytes)}`
+                                      : formatBytes(item.bytes)}
+                                  </div>
+                                </div>
+                                <div className="flex shrink-0 gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadUsageCodeExportFile(item.fileName)}
+                                    disabled={isDownloading || (downloadState.status !== 'downloading' && activeUsageCodeDownloadCount >= 2)}
+                                    className="rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
+                                  >
+                                    {isSuccess
+                                      ? '下载成功'
+                                      : isPaused
+                                        ? '继续下载'
+                                        : isDownloading
+                                          ? '下载中...'
+                                          : downloadState.status === 'error'
+                                            ? '重新下载'
+                                            : '下载'}
+                                  </button>
+                                  {(isDownloading || isPaused) && (
+                                    <>
+                                      {isDownloading && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePauseUsageCodeExportDownload(item.fileName)}
+                                          className="rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
+                                        >
+                                          暂停
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCancelUsageCodeExportDownload(item.fileName)}
+                                        className="rounded-md border border-red-200 bg-white px-3 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:border-red-400/20 dark:bg-white/[0.04] dark:text-red-200 dark:hover:bg-white/[0.08]"
+                                      >
+                                        取消
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => void handleDownloadUsageCodeExportFile(item.fileName)}
-                                disabled={Boolean(usageCodeDownloadingFileName)}
-                                className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
-                              >
-                                {usageCodeDownloadingFileName === item.fileName ? '下载中...' : '下载'}
-                              </button>
+                              {(isDownloading || isPaused) && (
+                                <>
+                                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-blue-200/70 dark:bg-white/10">
+                                    <div
+                                      className="h-full rounded-full bg-blue-500 transition-[width] duration-200"
+                                      style={{ width: `${Math.max(4, progressPercent)}%` }}
+                                    />
+                                  </div>
+                                  <div className="mt-2 text-[11px] text-blue-700/90 dark:text-blue-200/80">
+                                    {isPaused
+                                      ? '下载已暂停。继续后会重新开始。'
+                                      : downloadState.totalBytes && downloadState.totalBytes > 0
+                                        ? `下载进度 ${progressPercent}%`
+                                        : `已下载 ${formatBytes(downloadState.loadedBytes)}`}
+                                  </div>
+                                </>
+                              )}
                             </div>
-                            {usageCodeDownloadingFileName === item.fileName && (
-                              <>
-                                <div className="mt-2 h-2 overflow-hidden rounded-full bg-blue-200/70 dark:bg-white/10">
-                                  <div
-                                    className="h-full rounded-full bg-blue-500 transition-[width] duration-200"
-                                    style={{
-                                      width: `${Math.max(
-                                        4,
-                                        usageCodeDownloadTotalBytes && usageCodeDownloadTotalBytes > 0
-                                          ? Math.min(100, Math.floor((usageCodeDownloadLoadedBytes / usageCodeDownloadTotalBytes) * 100))
-                                          : 12,
-                                      )}%`,
-                                    }}
-                                  />
-                                </div>
-                                <div className="mt-2 text-[11px] text-blue-700/90 dark:text-blue-200/80">
-                                  {usageCodeDownloadTotalBytes && usageCodeDownloadTotalBytes > 0
-                                    ? `下载进度 ${Math.min(100, Math.floor((usageCodeDownloadLoadedBytes / usageCodeDownloadTotalBytes) * 100))}%`
-                                    : `已下载 ${formatBytes(usageCodeDownloadLoadedBytes)}`}
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )}
                   </div>

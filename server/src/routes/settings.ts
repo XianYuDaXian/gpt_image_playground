@@ -507,6 +507,10 @@ const serverBackupImportSchema = z.object({
   archivePath: z.string().min(1),
 })
 
+const usageCodeMediaExportDownloadCompleteSchema = z.object({
+  fileName: z.string().min(1),
+})
+
 function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | null }) {
   const isVideoProvider = event.providerProfileApiMode === 'videos'
   if (event.reason === 'admin_adjust_total') {
@@ -545,7 +549,11 @@ function mapUsageCodeEventCategory(eventType: string): Exclude<UsageCodeEventCat
     || eventType === 'refund'
     || eventType === 'video_refund'
   ) return 'quota_decrease'
+  if (eventType === 'media_export_started') return 'export'
   if (eventType === 'media_exported') return 'export'
+  if (eventType === 'media_download_started') return 'export'
+  if (eventType === 'media_download_completed') return 'export'
+  if (eventType === 'media_export_deleted') return 'export'
   if (eventType === 'distribution_updated') return 'distribution_change'
   if (eventType === 'usage_code_renamed') return 'rename'
   if (eventType === 'usage_code_enabled' || eventType === 'usage_code_disabled') return 'enable_disable'
@@ -1314,6 +1322,10 @@ function getUsageCodeMediaExportRunnerKey(usageCodeIds: string[]) {
   return [...usageCodeIds].filter(Boolean).sort().join(',')
 }
 
+function getUsageCodeMediaDownloadOwner(request: FastifyRequest) {
+  return getSessionToken(request) ?? `ip:${request.ip}`
+}
+
 function buildUsageMediaArchiveEntries(entries: ReturnType<typeof getUsageMediaArchiveEntries>) {
   const folderCount = new Map<string, number>()
   const taskFolderMap = new Map<string, string>()
@@ -1507,6 +1519,7 @@ type BackupImportCandidate =
 let backupExportRunner: Promise<void> | null = null
 let remoteResetRunner: Promise<void> | null = null
 const usageCodeMediaExportRunners = new Map<string, Promise<void>>()
+const usageCodeMediaDownloadLocks = new Map<string, { owner: string; activeCount: number }>()
 
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -2247,6 +2260,59 @@ async function removeUsageCodeMediaExportDir(app: Parameters<FastifyPluginAsync>
   await fs.rm(exportDir, { recursive: true, force: true })
 }
 
+function appendUsageCodeActivityLogs(
+  app: Parameters<FastifyPluginAsync>[0],
+  usageCodeIds: string[],
+  eventType: string,
+  message: string,
+  createdAt = new Date().toISOString(),
+) {
+  for (const usageCodeId of usageCodeIds) {
+    app.db.insertUsageCodeActivityLog({
+      usageCodeId,
+      actorKind: 'user',
+      eventType,
+      message,
+      createdAt,
+    })
+  }
+}
+
+function getUsageCodeMediaDownloadLockState(usageCodeIds: string[]) {
+  return usageCodeMediaDownloadLocks.get(getUsageCodeMediaExportRunnerKey(usageCodeIds)) ?? null
+}
+
+function acquireUsageCodeMediaDownloadLock(usageCodeIds: string[], owner: string) {
+  const key = getUsageCodeMediaExportRunnerKey(usageCodeIds)
+  const current = usageCodeMediaDownloadLocks.get(key)
+  if (current && current.owner !== owner && current.activeCount > 0) {
+    return { ok: false as const, message: '当前已有其他客户端在下载这批分包，请稍后再试' }
+  }
+  if (current && current.owner === owner && current.activeCount >= 2) {
+    return { ok: false as const, message: '当前客户端最多同时下载两个分包' }
+  }
+
+  usageCodeMediaDownloadLocks.set(key, {
+    owner,
+    activeCount: (current?.owner === owner ? current.activeCount : 0) + 1,
+  })
+  return { ok: true as const }
+}
+
+function releaseUsageCodeMediaDownloadLock(usageCodeIds: string[], owner: string) {
+  const key = getUsageCodeMediaExportRunnerKey(usageCodeIds)
+  const current = usageCodeMediaDownloadLocks.get(key)
+  if (!current || current.owner !== owner) return
+  if (current.activeCount <= 1) {
+    usageCodeMediaDownloadLocks.delete(key)
+    return
+  }
+  usageCodeMediaDownloadLocks.set(key, {
+    owner,
+    activeCount: current.activeCount - 1,
+  })
+}
+
 async function readUsageCodeMediaExportArtifacts(app: Parameters<FastifyPluginAsync>[0], usageCodeIds: string[]) {
   const exportState = getUsageCodeMediaExportState(app, usageCodeIds)
   if (!exportState.filePath) return []
@@ -2410,15 +2476,13 @@ async function runUsageCodeMediaExportJob(
     }
 
     const exportTime = new Date().toISOString()
-    for (const usageCodeId of usageCodeIds) {
-      app.db.insertUsageCodeActivityLog({
-        usageCodeId,
-        actorKind: 'user',
-        eventType: 'media_exported',
-        message: `最近一次产物导出时间：${new Date(exportTime).toLocaleString('zh-CN')}，图片 ${summary.imageCount} 张，视频 ${summary.videoCount} 个，预计大小 ${formatBytesForDisplay(summary.totalBytes)}`,
-        createdAt: exportTime,
-      })
-    }
+    appendUsageCodeActivityLogs(
+      app,
+      usageCodeIds,
+      'media_exported',
+      `最近一次产物导出时间：${new Date(exportTime).toLocaleString('zh-CN')}，图片 ${summary.imageCount} 张，视频 ${summary.videoCount} 个，预计大小 ${formatBytesForDisplay(summary.totalBytes)}`,
+      exportTime,
+    )
 
     setUsageCodeMediaExportState(app, usageCodeIds, {
       ...getDefaultBackupJobState(),
@@ -4024,6 +4088,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: '当前已有维护任务正在执行，请稍后再试' }
     }
 
+    const downloadLock = getUsageCodeMediaDownloadLockState(auth.usageCodeIds)
+    if (downloadLock?.activeCount) {
+      reply.code(409)
+      return { message: '当前导出文件仍在下载中，请稍后再试' }
+    }
+
     const currentState = getUsageCodeMediaExportState(app, auth.usageCodeIds)
     if (currentState.active) {
       reply.header('Cache-Control', 'no-store')
@@ -4039,6 +4109,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         usageCodeMediaExportRunners.delete(runnerKey)
       })
     usageCodeMediaExportRunners.set(runnerKey, runner)
+    appendUsageCodeActivityLogs(app, auth.usageCodeIds, 'media_export_started', '用户发起产物备份导出任务')
 
     reply.header('Cache-Control', 'no-store')
     return getUsageCodeMediaExportState(app, auth.usageCodeIds)
@@ -4060,6 +4131,30 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return { items }
   })
 
+  app.delete('/api/user/data/export-media', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以删除自己的导出文件' }
+    }
+
+    const exportState = getUsageCodeMediaExportState(app, auth.usageCodeIds)
+    if (exportState.active) {
+      reply.code(409)
+      return { message: '导出仍在进行中，暂时不能删除远端备份' }
+    }
+    if (getUsageCodeMediaDownloadLockState(auth.usageCodeIds)?.activeCount) {
+      reply.code(409)
+      return { message: '当前仍有分包下载请求正在进行，暂时不能删除远端备份' }
+    }
+
+    await removeUsageCodeMediaExportDir(app, auth.usageCodeIds)
+    setUsageCodeMediaExportState(app, auth.usageCodeIds, getDefaultBackupJobState())
+    appendUsageCodeActivityLogs(app, auth.usageCodeIds, 'media_export_deleted', '用户删除远端备份文件')
+    reply.header('Cache-Control', 'no-store')
+    return { ok: true }
+  })
+
   app.get('/api/user/data/export-media/download/:fileName', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
     if (auth.role !== 'user') {
@@ -4076,11 +4171,47 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const filePath = path.join(getUsageCodeMediaExportDir(app, auth.usageCodeIds), target.fileName)
+    const downloadOwner = getUsageCodeMediaDownloadOwner(request)
+    const lockResult = acquireUsageCodeMediaDownloadLock(auth.usageCodeIds, downloadOwner)
+    if (!lockResult.ok) {
+      reply.code(409)
+      return { message: lockResult.message }
+    }
+    let released = false
+    const releaseLock = () => {
+      if (released) return
+      released = true
+      releaseUsageCodeMediaDownloadLock(auth.usageCodeIds, downloadOwner)
+    }
+    reply.raw.once('close', releaseLock)
+    reply.raw.once('finish', releaseLock)
+
+    appendUsageCodeActivityLogs(app, auth.usageCodeIds, 'media_download_started', `用户开始下载备份文件：${target.fileName}`)
     reply.header('Cache-Control', 'no-store')
     reply.header('Content-Length', String(target.bytes))
     reply.header('Content-Type', path.extname(target.fileName).toLowerCase() === '.json' ? 'application/json; charset=utf-8' : 'application/zip')
     reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(target.fileName)}"`)
     return reply.send(createReadStream(filePath))
+  })
+
+  app.post('/api/user/data/export-media/download-complete', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以记录自己的下载结果' }
+    }
+
+    const payload = usageCodeMediaExportDownloadCompleteSchema.parse(request.body)
+    const items = await readUsageCodeMediaExportArtifacts(app, auth.usageCodeIds)
+    const target = items.find((item) => item.fileName === payload.fileName)
+    if (!target) {
+      reply.code(404)
+      return { message: '导出文件不存在' }
+    }
+
+    appendUsageCodeActivityLogs(app, auth.usageCodeIds, 'media_download_completed', `用户完成备份文件下载：${target.fileName}`)
+    reply.header('Cache-Control', 'no-store')
+    return { ok: true }
   })
 
   app.post('/api/admin/data/reset', async (request, reply) => {
