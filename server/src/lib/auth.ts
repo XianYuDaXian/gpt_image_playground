@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { UsageCodeRecord } from './db.js'
 import { decryptText } from './crypto.js'
-import { getBackupJobState } from './maintenance.js'
+import { getBackupJobState, getUsageCodeMediaExportState } from './maintenance.js'
 
 const SESSION_COOKIE = 'gip_session'
 const SESSION_TTL_DAYS = 30
@@ -266,7 +266,10 @@ export function canAccessTask(auth: AuthContext, task: { ownerKind: string; owne
 
 export function buildAuthStatus(app: FastifyInstance, auth: AuthContext | null) {
   const distribution = app.db.getDistributionSettings()
-  const maintenance = getBackupJobState(app)
+  const globalMaintenance = getBackupJobState(app)
+  const maintenance = auth?.role === 'user' && !globalMaintenance.active
+    ? getUsageCodeMediaExportState(app, auth.usageCodeIds)
+    : globalMaintenance
   return {
     authenticated: Boolean(auth),
     role: auth?.role ?? null,

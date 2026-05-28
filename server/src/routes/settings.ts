@@ -4,7 +4,7 @@ import path from 'node:path'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { finished, pipeline } from 'node:stream/promises'
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { Zip, ZipDeflate, ZipPassThrough, zipSync } from 'fflate'
+import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
 import type { CentralDirectory } from 'unzipper'
 import unzipper from 'unzipper'
 import { z } from 'zod'
@@ -24,9 +24,12 @@ import {
   getBackupJobState,
   getDefaultBackupJobState,
   getMaintenanceMessage,
+  getUsageCodeMediaExportState,
   listManagementOperationLogs,
   patchBackupJobState,
+  patchUsageCodeMediaExportState,
   setBackupJobState,
+  setUsageCodeMediaExportState,
 } from '../lib/maintenance.js'
 import type {
   AppSettingRecord,
@@ -338,6 +341,25 @@ const splitBackupIndexSchema = z.object({
   manifest: fullBackupManifestSchema,
   parts: z.array(splitBackupIndexPartSchema).min(1),
   files: z.array(splitBackupIndexFileSchema),
+})
+
+const usageCodeMediaExportPartSchema = z.object({
+  name: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+  sha256: z.string().min(1),
+  fileCount: z.number().int().nonnegative(),
+})
+
+const usageCodeMediaExportIndexSchema = z.object({
+  kind: z.literal('usage_code_media_export_index'),
+  version: z.literal(1),
+  exportId: z.string().min(1),
+  exportedAt: z.string().min(1),
+  imageCount: z.number().int().nonnegative(),
+  videoCount: z.number().int().nonnegative(),
+  totalBytes: z.number().int().nonnegative(),
+  totalFiles: z.number().int().nonnegative(),
+  parts: z.array(usageCodeMediaExportPartSchema).min(1),
 })
 
 const resetRemoteDataSchema = z.object({
@@ -1276,6 +1298,64 @@ function summarizeUsageMediaEntries(entries: Array<{
   )
 }
 
+function getUsageCodeMediaExportBaseDir(app: Parameters<FastifyPluginAsync>[0]) {
+  return path.join(app.config.backupsDir, 'usage-code-media-exports')
+}
+
+function getUsageCodeMediaExportStorageId(usageCodeIds: string[]) {
+  return crypto.createHash('sha256').update([...usageCodeIds].filter(Boolean).sort().join(',')).digest('hex').slice(0, 16)
+}
+
+function getUsageCodeMediaExportDir(app: Parameters<FastifyPluginAsync>[0], usageCodeIds: string[]) {
+  return path.join(getUsageCodeMediaExportBaseDir(app), getUsageCodeMediaExportStorageId(usageCodeIds))
+}
+
+function getUsageCodeMediaExportRunnerKey(usageCodeIds: string[]) {
+  return [...usageCodeIds].filter(Boolean).sort().join(',')
+}
+
+function buildUsageMediaArchiveEntries(entries: ReturnType<typeof getUsageMediaArchiveEntries>) {
+  const folderCount = new Map<string, number>()
+  const taskFolderMap = new Map<string, string>()
+  const taskFileCount = new Map<string, Map<string, number>>()
+  const archiveEntries: Array<{ sourceFilePath: string; archivePath: string; bytes: number }> = []
+
+  for (const entry of entries) {
+    let folderName = taskFolderMap.get(entry.taskId)
+    if (!folderName) {
+      const folderBaseName = `任务-${shortenPromptForArchive(entry.prompt)}`
+      const nextFolderIndex = (folderCount.get(folderBaseName) ?? 0) + 1
+      folderCount.set(folderBaseName, nextFolderIndex)
+      folderName = nextFolderIndex > 1 ? `${folderBaseName}-${nextFolderIndex}` : folderBaseName
+      taskFolderMap.set(entry.taskId, folderName)
+    }
+
+    const fileBaseName = buildUsageMediaArchiveFileName(entry, 1)
+    const folderFileCount = taskFileCount.get(entry.taskId) ?? new Map<string, number>()
+    const nextFileIndex = (folderFileCount.get(fileBaseName) ?? 0) + 1
+    folderFileCount.set(fileBaseName, nextFileIndex)
+    taskFileCount.set(entry.taskId, folderFileCount)
+
+    archiveEntries.push({
+      sourceFilePath: entry.filePath,
+      archivePath: `${folderName}/${buildUsageMediaArchiveFileName(entry, nextFileIndex)}`,
+      bytes: entry.bytes,
+    })
+  }
+
+  return archiveEntries
+}
+
+function resolveUsageCodeMediaExportPath(app: Parameters<FastifyPluginAsync>[0], filePath: string) {
+  const rootDir = getUsageCodeMediaExportBaseDir(app)
+  const resolved = path.resolve(filePath)
+  const relative = path.relative(rootDir, resolved)
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('导出文件路径无效')
+  }
+  return resolved
+}
+
 function getArchiveExtension(filePath: string, mimeType: string) {
   const ext = path.extname(filePath).trim()
   if (ext) return ext
@@ -1426,12 +1506,14 @@ type BackupImportCandidate =
 
 let backupExportRunner: Promise<void> | null = null
 let remoteResetRunner: Promise<void> | null = null
+const usageCodeMediaExportRunners = new Map<string, Promise<void>>()
 
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 const MAX_BACKUP_PART_BYTES = 3_500_000_000
+const MAX_USAGE_CODE_MEDIA_EXPORT_PART_BYTES = 512 * 1024 * 1024
 
 function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
   const providerProfiles = app.db.listProviderProfiles().map((profile) => ({
@@ -1914,6 +1996,139 @@ async function writeFullBackupArchiveToFile(
   }
 }
 
+async function writeUsageMediaArchiveToFile(
+  outputPath: string,
+  input: {
+    textFiles?: Array<{ name: string; content: string }>
+    files: Array<{ sourceFilePath: string; archivePath: string; bytes: number }>
+    mediaDir: string
+  },
+  options: {
+    onProgress?: (input: { processedFiles: number; processedBytes: number; totalFiles: number; totalBytes: number }) => Promise<void> | void
+  } = {},
+) {
+  const output = createWriteStream(outputPath)
+  const zip = new Zip()
+  const hash = crypto.createHash('sha256')
+  const pendingWriteLimitBytes = 8 * 1024 * 1024
+  const textFiles = input.textFiles ?? []
+  const textFileBytes = textFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content, 'utf-8'), 0)
+  const totalFiles = input.files.length + textFiles.length
+  const totalBytes = input.files.reduce((sum, file) => sum + file.bytes, textFileBytes)
+  let pendingWriteBytes = 0
+  let writeChain = Promise.resolve()
+  let zipClosed = false
+  let processedFiles = 0
+  let processedBytes = 0
+
+  const reportProgress = async () => {
+    await options.onProgress?.({
+      processedFiles,
+      processedBytes,
+      totalFiles,
+      totalBytes,
+    })
+  }
+
+  const writeChunk = (chunk: Uint8Array) => new Promise<void>((resolve, reject) => {
+    const buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+    hash.update(buffer)
+    pendingWriteBytes += buffer.byteLength
+    output.write(buffer, (error) => {
+      pendingWriteBytes -= buffer.byteLength
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+
+  const closeOutput = () => new Promise<void>((resolve, reject) => {
+    if (zipClosed) {
+      resolve()
+      return
+    }
+    zipClosed = true
+    output.end((error?: Error | null) => {
+      if (error) {
+        reject(error)
+        return
+      }
+      resolve()
+    })
+  })
+
+  const zipFinished = new Promise<void>((resolve, reject) => {
+    output.once('error', reject)
+    zip.ondata = (error, chunk, final) => {
+      if (error) {
+        reject(error)
+        return
+      }
+
+      writeChain = writeChain
+        .then(() => writeChunk(chunk))
+        .then(async () => {
+          if (final) {
+            await closeOutput()
+          }
+        })
+        .catch(reject)
+    }
+
+    writeChain
+      .then(() => finished(output))
+      .then(() => resolve())
+      .catch(reject)
+  })
+
+  for (const textFile of textFiles) {
+    const entry = new ZipDeflate(textFile.name, { level: 6 })
+    zip.add(entry)
+    entry.push(toUint8Array(textFile.content), true)
+    processedFiles += 1
+    processedBytes += Buffer.byteLength(textFile.content, 'utf-8')
+    await reportProgress()
+  }
+
+  for (const file of input.files) {
+    const absolutePath = path.join(input.mediaDir, file.sourceFilePath)
+    const fileEntry = new ZipPassThrough(file.archivePath)
+    zip.add(fileEntry)
+
+    let previousChunk: Buffer | null = null
+    for await (const chunk of createReadStream(absolutePath)) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      if (previousChunk) {
+        fileEntry.push(toUint8Array(previousChunk), false)
+        processedBytes += previousChunk.byteLength
+        await reportProgress()
+        if (pendingWriteBytes >= pendingWriteLimitBytes) {
+          await writeChain
+        }
+      }
+      previousChunk = buffer
+    }
+
+    fileEntry.push(toUint8Array(previousChunk ?? Buffer.alloc(0)), true)
+    processedBytes += previousChunk?.byteLength ?? 0
+    processedFiles += 1
+    await reportProgress()
+    if (pendingWriteBytes >= pendingWriteLimitBytes) {
+      await writeChain
+    }
+  }
+
+  zip.end()
+  await zipFinished
+  const stat = await fs.stat(outputPath)
+  return {
+    bytes: stat.size,
+    sha256: hash.digest('hex'),
+  }
+}
+
 function getBackupProgressPercent(input: {
   phase: 'preparing' | 'running' | 'completed' | 'failed'
   processedBytes?: number
@@ -1971,6 +2186,277 @@ function buildSplitBackupPlan(manifest: ReturnType<typeof buildFullBackupManifes
     totalBytes,
     totalFiles: manifest.taskImages.length + 1,
     parts,
+  }
+}
+
+function buildUsageMediaSplitPlan(
+  files: Array<{ sourceFilePath: string; archivePath: string; bytes: number }>,
+  textFiles: Array<{ name: string; content: string }>,
+  exportId: string,
+) {
+  const textFileBytes = textFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content, 'utf-8'), 0)
+  const totalBytes = files.reduce((sum, file) => sum + file.bytes, textFileBytes)
+  if (totalBytes <= MAX_USAGE_CODE_MEDIA_EXPORT_PART_BYTES) return null
+
+  const parts: Array<{
+    name: string
+    files: typeof files
+    estimatedBytes: number
+    textFiles: Array<{ name: string; content: string }>
+  }> = []
+
+  let currentFiles: typeof files = []
+  let currentBytes = textFileBytes
+
+  for (const file of files) {
+    const willOverflow = currentFiles.length > 0 && currentBytes + file.bytes > MAX_USAGE_CODE_MEDIA_EXPORT_PART_BYTES
+    if (willOverflow) {
+      parts.push({
+        name: `${exportId}.part-${String(parts.length + 1).padStart(3, '0')}.zip`,
+        files: currentFiles,
+        estimatedBytes: currentBytes,
+        textFiles: parts.length === 0 ? textFiles : [],
+      })
+      currentFiles = []
+      currentBytes = 0
+    }
+
+    currentFiles.push(file)
+    currentBytes += file.bytes
+  }
+
+  if (currentFiles.length > 0 || textFiles.length > 0) {
+    parts.push({
+      name: `${exportId}.part-${String(parts.length + 1).padStart(3, '0')}.zip`,
+      files: currentFiles,
+      estimatedBytes: currentBytes,
+      textFiles: parts.length === 0 ? textFiles : [],
+    })
+  }
+
+  return {
+    exportId,
+    totalBytes,
+    totalFiles: files.length + textFiles.length,
+    parts,
+  }
+}
+
+async function removeUsageCodeMediaExportDir(app: Parameters<FastifyPluginAsync>[0], usageCodeIds: string[]) {
+  const exportDir = getUsageCodeMediaExportDir(app, usageCodeIds)
+  await fs.rm(exportDir, { recursive: true, force: true })
+}
+
+async function readUsageCodeMediaExportArtifacts(app: Parameters<FastifyPluginAsync>[0], usageCodeIds: string[]) {
+  const exportState = getUsageCodeMediaExportState(app, usageCodeIds)
+  if (!exportState.filePath) return []
+
+  const exportDir = getUsageCodeMediaExportDir(app, usageCodeIds)
+  const resolvedFilePath = resolveUsageCodeMediaExportPath(app, exportState.filePath)
+
+  const fileName = path.basename(resolvedFilePath)
+  if (fileName.toLowerCase().endsWith('.json')) {
+    const parsedIndex = usageCodeMediaExportIndexSchema.parse(JSON.parse(await fs.readFile(resolvedFilePath, 'utf-8')))
+    const indexStat = await fs.stat(resolvedFilePath)
+    const items = [{
+      fileName,
+      bytes: indexStat.size,
+      modifiedAt: indexStat.mtime.toISOString(),
+    }]
+    for (const part of parsedIndex.parts) {
+      const partPath = path.join(exportDir, part.name)
+      const partStat = await fs.stat(partPath)
+      items.push({
+        fileName: part.name,
+        bytes: partStat.size,
+        modifiedAt: partStat.mtime.toISOString(),
+      })
+    }
+    return items
+  }
+
+  const stat = await fs.stat(resolvedFilePath)
+  return [{
+    fileName,
+    bytes: stat.size,
+    modifiedAt: stat.mtime.toISOString(),
+  }]
+}
+
+async function runUsageCodeMediaExportJob(
+  app: Parameters<FastifyPluginAsync>[0],
+  usageCodeIds: string[],
+) {
+  const startedAt = new Date().toISOString()
+  const entries = getUsageMediaArchiveEntries(app, usageCodeIds)
+  const summary = summarizeUsageMediaEntries(entries)
+  const archiveEntries = buildUsageMediaArchiveEntries(entries)
+  const textFiles = archiveEntries.length ? [] : [{ name: 'README.txt', content: '当前使用码下没有可导出的图片或视频文件。' }]
+  const exportId = `usage-code-media-${Date.now()}`
+  const exportDir = getUsageCodeMediaExportDir(app, usageCodeIds)
+  const splitPlan = buildUsageMediaSplitPlan(archiveEntries, textFiles, exportId)
+  const filename = splitPlan ? `${exportId}.index.json` : `${exportId}.zip`
+  const filePath = path.join(exportDir, filename)
+  const totalBytes = splitPlan?.totalBytes ?? summary.totalBytes + textFiles.reduce((sum, file) => sum + Buffer.byteLength(file.content, 'utf-8'), 0)
+  const totalFiles = splitPlan?.totalFiles ?? archiveEntries.length + textFiles.length
+  let lastProgressUpdatedAt = 0
+
+  setUsageCodeMediaExportState(app, usageCodeIds, {
+    ...getDefaultBackupJobState(),
+    active: true,
+    operation: 'usage_code_media_export',
+    phase: 'preparing',
+    message: '正在整理导出文件',
+    progressPercent: 5,
+    startedAt,
+    filename,
+    filePath,
+    totalFiles,
+    totalBytes,
+  })
+
+  try {
+    await removeUsageCodeMediaExportDir(app, usageCodeIds)
+    await fs.mkdir(exportDir, { recursive: true })
+
+    if (splitPlan) {
+      const indexParts: z.infer<typeof usageCodeMediaExportPartSchema>[] = []
+
+      patchUsageCodeMediaExportState(app, usageCodeIds, {
+        phase: 'running',
+        message: '正在写入导出分包',
+        progressPercent: 10,
+      })
+
+      for (let index = 0; index < splitPlan.parts.length; index += 1) {
+        const part = splitPlan.parts[index]
+        const partPath = path.join(exportDir, part.name)
+        const partResult = await writeUsageMediaArchiveToFile(partPath, {
+          textFiles: part.textFiles,
+          files: part.files,
+          mediaDir: app.config.mediaDir,
+        }, {
+          onProgress: async ({ processedFiles, processedBytes }) => {
+            const processedFilesBeforePart = splitPlan.parts
+              .slice(0, index)
+              .reduce((sum, item) => sum + item.files.length + item.textFiles.length, 0)
+            const processedBytesBeforePart = splitPlan.parts
+              .slice(0, index)
+              .reduce((sum, item) => (
+                sum
+                + item.files.reduce((inner, file) => inner + file.bytes, 0)
+                + item.textFiles.reduce((inner, file) => inner + Buffer.byteLength(file.content, 'utf-8'), 0)
+              ), 0)
+            const nextProcessedFiles = processedFilesBeforePart + processedFiles
+            const nextProcessedBytes = processedBytesBeforePart + processedBytes
+            const now = Date.now()
+            const shouldFlush = nextProcessedFiles >= splitPlan.totalFiles || now - lastProgressUpdatedAt >= 400
+            if (!shouldFlush) return
+            lastProgressUpdatedAt = now
+            patchUsageCodeMediaExportState(app, usageCodeIds, {
+              processedFiles: nextProcessedFiles,
+              processedBytes: nextProcessedBytes,
+              progressPercent: getBackupProgressPercent({
+                phase: 'running',
+                processedBytes: nextProcessedBytes,
+                totalBytes: splitPlan.totalBytes,
+              }),
+              message: `正在写入第 ${index + 1}/${splitPlan.parts.length} 个分包`,
+            })
+          },
+        })
+        const partStat = await fs.stat(partPath)
+        indexParts.push({
+          name: part.name,
+          bytes: partStat.size,
+          sha256: partResult.sha256,
+          fileCount: part.files.length + part.textFiles.length,
+        })
+      }
+
+      const indexPayload = {
+        kind: 'usage_code_media_export_index' as const,
+        version: 1 as const,
+        exportId,
+        exportedAt: new Date().toISOString(),
+        imageCount: summary.imageCount,
+        videoCount: summary.videoCount,
+        totalBytes: splitPlan.totalBytes,
+        totalFiles: splitPlan.totalFiles,
+        parts: indexParts,
+      }
+      await fs.writeFile(filePath, JSON.stringify(indexPayload, null, 2), 'utf-8')
+    } else {
+      await writeUsageMediaArchiveToFile(filePath, {
+        textFiles,
+        files: archiveEntries,
+        mediaDir: app.config.mediaDir,
+      }, {
+        onProgress: async ({ processedFiles, processedBytes, totalFiles: nextTotalFiles, totalBytes: nextTotalBytes }) => {
+          const now = Date.now()
+          const shouldFlush = processedFiles >= nextTotalFiles || now - lastProgressUpdatedAt >= 400
+          if (!shouldFlush) return
+          lastProgressUpdatedAt = now
+          patchUsageCodeMediaExportState(app, usageCodeIds, {
+            phase: 'running',
+            processedFiles,
+            processedBytes,
+            totalFiles: nextTotalFiles,
+            totalBytes: nextTotalBytes,
+            progressPercent: getBackupProgressPercent({
+              phase: 'running',
+              processedBytes,
+              totalBytes: nextTotalBytes,
+            }),
+            message: `正在写入导出文件（${processedFiles}/${nextTotalFiles}）`,
+          })
+        },
+      })
+    }
+
+    const exportTime = new Date().toISOString()
+    for (const usageCodeId of usageCodeIds) {
+      app.db.insertUsageCodeActivityLog({
+        usageCodeId,
+        actorKind: 'user',
+        eventType: 'media_exported',
+        message: `最近一次产物导出时间：${new Date(exportTime).toLocaleString('zh-CN')}，图片 ${summary.imageCount} 张，视频 ${summary.videoCount} 个，预计大小 ${formatBytesForDisplay(summary.totalBytes)}`,
+        createdAt: exportTime,
+      })
+    }
+
+    setUsageCodeMediaExportState(app, usageCodeIds, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'usage_code_media_export',
+      phase: 'completed',
+      message: splitPlan ? `导出完成，共 ${splitPlan.parts.length} 个分包` : '导出完成',
+      progressPercent: 100,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      totalFiles,
+      processedFiles: totalFiles,
+      totalBytes,
+      processedBytes: totalBytes,
+      filename,
+      filePath,
+      error: null,
+    })
+  } catch (error) {
+    setUsageCodeMediaExportState(app, usageCodeIds, {
+      ...getDefaultBackupJobState(),
+      active: false,
+      operation: 'usage_code_media_export',
+      phase: 'failed',
+      message: '导出失败',
+      progressPercent: 0,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      filename,
+      filePath,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
   }
 }
 
@@ -3530,61 +4016,74 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return summary
   })
 
-  app.get('/api/user/data/export-media', async (request, reply) => {
+  app.post('/api/user/data/export-media/start', async (request, reply) => {
     const auth = await requireAuth(app, request, reply)
     if (auth.role !== 'user') {
       reply.code(403)
       return { message: '只有使用码用户可以导出自己的图片与视频' }
     }
 
-    const entries = getUsageMediaArchiveEntries(app, auth.usageCodeIds)
-    const summary = summarizeUsageMediaEntries(entries)
-    const zipFiles: Record<string, Uint8Array> = {}
-    const folderCount = new Map<string, number>()
-    const taskFolderMap = new Map<string, string>()
-    const taskFileCount = new Map<string, Map<string, number>>()
-
-    if (!entries.length) {
-      zipFiles['README.txt'] = Buffer.from('当前使用码下没有可导出的图片或视频文件。', 'utf-8')
+    const globalState = getBackupJobState(app)
+    if (globalState.active) {
+      reply.code(409)
+      return { message: '当前已有维护任务正在执行，请稍后再试' }
     }
 
-    for (const entry of entries) {
-      const absolutePath = path.join(app.config.mediaDir, entry.filePath)
-      const content = await fs.readFile(absolutePath)
-      let folderName = taskFolderMap.get(entry.taskId)
-      if (!folderName) {
-        const folderBaseName = `任务-${shortenPromptForArchive(entry.prompt)}`
-        const nextFolderIndex = (folderCount.get(folderBaseName) ?? 0) + 1
-        folderCount.set(folderBaseName, nextFolderIndex)
-        folderName = nextFolderIndex > 1 ? `${folderBaseName}-${nextFolderIndex}` : folderBaseName
-        taskFolderMap.set(entry.taskId, folderName)
-      }
-
-      const fileBaseName = buildUsageMediaArchiveFileName(entry, 1)
-      const folderFileCount = taskFileCount.get(entry.taskId) ?? new Map<string, number>()
-      const nextFileIndex = (folderFileCount.get(fileBaseName) ?? 0) + 1
-      folderFileCount.set(fileBaseName, nextFileIndex)
-      taskFileCount.set(entry.taskId, folderFileCount)
-
-      zipFiles[`${folderName}/${buildUsageMediaArchiveFileName(entry, nextFileIndex)}`] = new Uint8Array(content)
+    const currentState = getUsageCodeMediaExportState(app, auth.usageCodeIds)
+    if (currentState.active) {
+      reply.header('Cache-Control', 'no-store')
+      return currentState
     }
 
-    const exportTime = new Date().toISOString()
-    for (const usageCodeId of auth.usageCodeIds) {
-      app.db.insertUsageCodeActivityLog({
-        usageCodeId,
-        actorKind: 'user',
-        eventType: 'media_exported',
-        message: `最近一次产物导出时间：${new Date(exportTime).toLocaleString('zh-CN')}，图片 ${summary.imageCount} 张，视频 ${summary.videoCount} 个，预计大小 ${formatBytesForDisplay(summary.totalBytes)}`,
-        createdAt: exportTime,
+    const runnerKey = getUsageCodeMediaExportRunnerKey(auth.usageCodeIds)
+    const runner = runUsageCodeMediaExportJob(app, auth.usageCodeIds)
+      .catch((error) => {
+        app.log.error({ err: error, usageCodeIds: auth.usageCodeIds }, '使用码产物导出任务失败')
       })
+      .finally(() => {
+        usageCodeMediaExportRunners.delete(runnerKey)
+      })
+    usageCodeMediaExportRunners.set(runnerKey, runner)
+
+    reply.header('Cache-Control', 'no-store')
+    return getUsageCodeMediaExportState(app, auth.usageCodeIds)
+  })
+
+  app.get('/api/user/data/export-media/files', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以查看自己的导出文件' }
     }
 
-    const zipped = zipSync(zipFiles, { level: 6 })
+    const exportState = getUsageCodeMediaExportState(app, auth.usageCodeIds)
+    if (exportState.phase !== 'completed' || !exportState.filePath) {
+      return { items: [] }
+    }
+
+    const items = await readUsageCodeMediaExportArtifacts(app, auth.usageCodeIds)
+    return { items }
+  })
+
+  app.get('/api/user/data/export-media/download/:fileName', async (request, reply) => {
+    const auth = await requireAuth(app, request, reply)
+    if (auth.role !== 'user') {
+      reply.code(403)
+      return { message: '只有使用码用户可以下载自己的导出文件' }
+    }
+
+    const params = z.object({ fileName: z.string().min(1) }).parse(request.params)
+    const items = await readUsageCodeMediaExportArtifacts(app, auth.usageCodeIds)
+    const target = items.find((item) => item.fileName === params.fileName)
+    if (!target) {
+      reply.code(404)
+      return { message: '导出文件不存在' }
+    }
+
+    const filePath = path.join(getUsageCodeMediaExportDir(app, auth.usageCodeIds), target.fileName)
     reply.header('Cache-Control', 'no-store')
-    reply.header('Content-Type', 'application/zip')
-    reply.header('Content-Disposition', `attachment; filename="usage-code-media-${Date.now()}.zip"`)
-    return reply.send(Buffer.from(zipped))
+    reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(target.fileName)}"`)
+    return reply.send(createReadStream(filePath))
   })
 
   app.post('/api/admin/data/reset', async (request, reply) => {

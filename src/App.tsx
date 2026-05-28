@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearAllData, clearLocalTaskCache, initStore, refreshAuthStatus, refreshTasksFromServer } from './store'
 import { useStore } from './store'
 import type { MaintenanceStatus } from './lib/backendAuth'
+import { downloadUsageCodeMediaExportFile, fetchUsageCodeMediaExportFiles } from './lib/backendBackup'
 import { applyThemeMode, watchSystemTheme } from './lib/theme'
 import { fetchAdminBackendReminders, fetchBackendReminders, type BackendReminderItem } from './lib/backendSettings'
 import { getRemindersToShow, markRemindersShown } from './lib/announcement'
@@ -34,9 +35,10 @@ function formatBytes(value: number) {
 }
 
 function getMaintenanceTitle(isAdmin: boolean, operation: MaintenanceStatus['operation'], phase: string) {
-  if (!isAdmin) return '管理员正在维护服务器'
+  if (!isAdmin && operation !== 'usage_code_media_export') return '管理员正在维护服务器'
   if (operation === 'backup_import') return phase === 'failed' ? '服务器恢复失败' : phase === 'completed' ? '服务器恢复已完成' : '服务器恢复进行中'
   if (operation === 'backup_export') return phase === 'failed' ? '服务器备份失败' : phase === 'completed' ? '服务器备份已完成' : '服务器备份进行中'
+  if (operation === 'usage_code_media_export') return phase === 'failed' ? '导出失败' : phase === 'completed' ? '导出已完成' : '导出进行中'
   if (operation === 'remote_reset_usage_code') return phase === 'failed' ? '使用码任务清理失败' : phase === 'completed' ? '使用码任务清理已完成' : '正在清理使用码任务'
   if (operation === 'remote_reset_all') return phase === 'failed' ? '远端全部清空失败' : phase === 'completed' ? '远端全部已清空' : '正在清空远端全部'
   if (operation === 'remote_reset_tasks') return phase === 'failed' ? '远端记录清空失败' : phase === 'completed' ? '远端记录已清空' : '正在清空远端记录'
@@ -44,6 +46,7 @@ function getMaintenanceTitle(isAdmin: boolean, operation: MaintenanceStatus['ope
 }
 
 function getMaintenanceStage(operation: MaintenanceStatus['operation'], phase: string) {
+  if (operation === 'usage_code_media_export') return phase === 'preparing' ? '正在整理导出文件' : '正在生成导出文件'
   if (phase === 'preparing') return '等待队列完成'
   if (operation === 'backup_import') return '正在恢复备份'
   if (operation === 'backup_export') return '正在生成备份包'
@@ -53,10 +56,23 @@ function getMaintenanceStage(operation: MaintenanceStatus['operation'], phase: s
   return '正在处理中'
 }
 
+const USAGE_CODE_EXPORT_NOTICE_SEEN_KEY = 'gpt-image-playground-usage-code-export-notice-seen'
+
+function getSeenUsageCodeExportNoticeFinishedAt() {
+  if (typeof window === 'undefined') return ''
+  return window.localStorage.getItem(USAGE_CODE_EXPORT_NOTICE_SEEN_KEY) ?? ''
+}
+
+function markUsageCodeExportNoticeSeen(finishedAt: string) {
+  if (typeof window === 'undefined' || !finishedAt) return
+  window.localStorage.setItem(USAGE_CODE_EXPORT_NOTICE_SEEN_KEY, finishedAt)
+}
+
 function MaintenanceOverlay() {
   const authStatus = useStore((s) => s.authStatus)
   const maintenance = authStatus?.maintenance
   if (!maintenance?.active) return null
+  if (maintenance.operation === 'usage_code_media_export') return null
 
   const isAdmin = authStatus?.role === 'admin'
   const isImport = maintenance.operation === 'backup_import'
@@ -113,6 +129,8 @@ export default function App() {
   const themeMode = useStore((s) => s.themeMode)
   const authStatus = useStore((s) => s.authStatus)
   const authInitialized = useStore((s) => s.authInitialized)
+  const setShowSettings = useStore((s) => s.setShowSettings)
+  const setConfirmDialog = useStore((s) => s.setConfirmDialog)
   const [announcementQueue, setAnnouncementQueue] = useState<BackendReminderItem[]>([])
   const [showAnnouncementList, setShowAnnouncementList] = useState(false)
   const [announcementListItems, setAnnouncementListItems] = useState<BackendReminderItem[]>([])
@@ -122,6 +140,7 @@ export default function App() {
   const announcement = announcementQueue[0] ?? null
   const maintenance = authStatus?.maintenance
   const previousMaintenanceRef = useRef(authStatus?.maintenance ?? null)
+  const usageCodeExportNoticePendingRef = useRef<string>('')
   const hasOverlayOpen = useStore((s) =>
     Boolean(
       s.detailTaskId
@@ -251,6 +270,50 @@ export default function App() {
       useStore.getState().showToast(maintenance.error, 'error')
     }
   }, [maintenance])
+
+  useEffect(() => {
+    if (!authStatus?.authenticated || authStatus.role !== 'user') return
+    if (maintenance?.operation !== 'usage_code_media_export') return
+    if (maintenance.phase !== 'completed' || !maintenance.finishedAt) return
+    if (usageCodeExportNoticePendingRef.current === maintenance.finishedAt) return
+    if (getSeenUsageCodeExportNoticeFinishedAt() === maintenance.finishedAt) return
+
+    usageCodeExportNoticePendingRef.current = maintenance.finishedAt
+
+    void fetchUsageCodeMediaExportFiles()
+      .then((result) => {
+        const files = result.items
+        if (!files.length) {
+          markUsageCodeExportNoticeSeen(maintenance.finishedAt ?? '')
+          return
+        }
+
+        markUsageCodeExportNoticeSeen(maintenance.finishedAt ?? '')
+        const singleFile = files.length === 1 ? files[0] : null
+        setConfirmDialog({
+          title: '导出文件已生成',
+          message: singleFile
+            ? `导出文件 ${singleFile.fileName} 已生成。\n\n点击“立即下载”开始保存。`
+            : `导出文件已生成，共 ${files.length} 个文件。\n\n点击“打开下载列表”查看并下载全部分包。`,
+          confirmText: singleFile ? '立即下载' : '打开下载列表',
+          action: () => {
+            if (singleFile) {
+              void downloadUsageCodeMediaExportFile(singleFile.fileName).catch((error) => {
+                useStore.getState().showToast(
+                  `下载导出文件失败：${error instanceof Error ? error.message : String(error)}`,
+                  'error',
+                )
+              })
+              return
+            }
+            setShowSettings(true)
+          },
+        })
+      })
+      .catch(() => {
+        usageCodeExportNoticePendingRef.current = ''
+      })
+  }, [authStatus?.authenticated, authStatus?.role, maintenance, setConfirmDialog, setShowSettings])
 
   useEffect(() => {
     if (!authStatus?.authenticated || authStatus.role !== 'user') {

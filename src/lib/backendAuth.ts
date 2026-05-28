@@ -5,6 +5,7 @@ export interface MaintenanceStatus {
   operation:
     | 'backup_export'
     | 'backup_import'
+    | 'usage_code_media_export'
     | 'remote_reset_usage_code'
     | 'remote_reset_tasks'
     | 'remote_reset_all'

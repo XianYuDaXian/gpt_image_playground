@@ -39,12 +39,15 @@ import {
 import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
 import {
   fetchAdminBackupImportCandidates,
+  fetchUsageCodeMediaExportFiles,
   startBackendBackupExport,
-  exportUsageCodeMediaArchive,
+  startUsageCodeMediaExport,
+  downloadUsageCodeMediaExportFile,
   fetchUsageCodeMediaExportSummary,
   importBackendBackup,
   importBackendBackupFromServer,
   type AdminBackupImportCandidate,
+  type UsageCodeMediaExportFile,
   type UsageCodeMediaExportSummary,
 } from '../lib/backendBackup'
 import { addSessionUsageCode, fetchAuthStatus } from '../lib/backendAuth'
@@ -461,6 +464,7 @@ export default function SettingsModal() {
   const [isClearingRemote, setIsClearingRemote] = useState(false)
   const [isSavingReminders, setIsSavingReminders] = useState(false)
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
+  const [usageCodeExportFiles, setUsageCodeExportFiles] = useState<UsageCodeMediaExportFile[]>([])
   const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
   const [showImportCandidates, setShowImportCandidates] = useState(false)
   const [managementLogs, setManagementLogs] = useState<BackendManagementOperationLog[]>([])
@@ -480,6 +484,8 @@ export default function SettingsModal() {
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
   const backupState = authStatus?.maintenance
+  const isUsageCodeExportActive = backupState?.operation === 'usage_code_media_export' && backupState.active
+  const shouldShowUsageCodeExportStatus = !isAdmin && backupState?.operation === 'usage_code_media_export' && backupState.phase !== 'idle'
   const shouldShowMaintenanceCard = Boolean(
     backupState
     && backupState.phase !== 'idle'
@@ -989,13 +995,14 @@ export default function SettingsModal() {
   }
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextReminders, nextManagementLogs, nextMediaStats] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextUsageCodeExportFiles, nextReminders, nextManagementLogs, nextMediaStats] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
       isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
       fetchBackendProviderOptions().catch(() => []),
       isAdmin ? fetchBackendDistribution().catch(() => ({ enabled: false, maxConcurrentTasks: 2 })) : Promise.resolve({ enabled: false, maxConcurrentTasks: 2 }),
       isAdmin ? fetchBackendUsageCodes().catch(() => []) : Promise.resolve([]),
       isAdmin ? Promise.resolve(null) : fetchUsageCodeMediaExportSummary().catch(() => null),
+      isAdmin ? Promise.resolve([]) : fetchUsageCodeMediaExportFiles().then((result) => result.items).catch(() => []),
       isAdmin ? fetchAdminBackendReminders().catch(() => []) : fetchBackendReminders().catch(() => []),
       isAdmin ? fetchBackendManagementLogs().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
       isAdmin ? fetchBackendMediaStats().catch(() => null) : Promise.resolve(null),
@@ -1031,6 +1038,7 @@ export default function SettingsModal() {
 
     setDraft(nextDraft)
     setSettings(nextDraft)
+    setUsageCodeExportFiles(nextUsageCodeExportFiles)
     const visibleProfiles = nextProfiles.length || !runtimeSettings
       ? nextProfiles
       : [{
@@ -1122,6 +1130,19 @@ export default function SettingsModal() {
     const timer = window.setTimeout(() => setMaintenanceCardNow(Date.now()), remainingMs + 50)
     return () => window.clearTimeout(timer)
   }, [showSettings, activeTab, backupState?.phase, backupState?.finishedAt])
+
+  useEffect(() => {
+    if (!showSettings || isAdmin) return
+    if (backupState?.operation !== 'usage_code_media_export') return
+    if (backupState.phase !== 'completed' && backupState.phase !== 'failed') return
+
+    void fetchUsageCodeMediaExportSummary()
+      .then((result) => setUsageCodeExportSummary(result))
+      .catch(() => undefined)
+    void fetchUsageCodeMediaExportFiles()
+      .then((result) => setUsageCodeExportFiles(result.items))
+      .catch(() => undefined)
+  }, [showSettings, isAdmin, backupState?.operation, backupState?.phase, backupState?.finishedAt])
 
   useCloseOnEscape(showSettings, () => setShowSettings(false))
   useCloseOnEscape(Boolean(usageCodeEventModal), () => setUsageCodeEventModal(null))
@@ -1412,9 +1433,11 @@ export default function SettingsModal() {
   const handleExportUsageCodeMedia = async () => {
     setIsExporting(true)
     try {
-      await exportUsageCodeMediaArchive()
-      await loadSettings()
-      useStore.getState().showToast('图片与视频压缩包已保存到本地', 'success')
+      await startUsageCodeMediaExport()
+      const latestAuth = await fetchAuthStatus()
+      setAuthStatus(latestAuth)
+      setUsageCodeExportFiles([])
+      useStore.getState().showToast('导出任务已开始。生成完成后可下载成品文件。', 'success')
     } catch (err) {
       useStore.getState().showToast(
         `导出图片与视频失败：${err instanceof Error ? err.message : String(err)}`,
@@ -1422,6 +1445,17 @@ export default function SettingsModal() {
       )
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  const handleDownloadUsageCodeExportFile = async (fileName: string) => {
+    try {
+      await downloadUsageCodeMediaExportFile(fileName)
+    } catch (err) {
+      useStore.getState().showToast(
+        `下载导出文件失败：${err instanceof Error ? err.message : String(err)}`,
+        'error',
+      )
     }
   }
 
@@ -1956,10 +1990,10 @@ export default function SettingsModal() {
                 <button
                   type="button"
                   onClick={() => void handleExportUsageCodeMedia()}
-                  disabled={isSaving || isExporting}
+                  disabled={isSaving || isExporting || isUsageCodeExportActive}
                   className="w-full rounded-lg border border-gray-200/70 bg-white/80 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]"
                 >
-                  {isExporting ? '打包中...' : '导出图片与视频'}
+                  {isExporting ? '提交中...' : isUsageCodeExportActive ? '导出进行中...' : '导出图片与视频'}
                 </button>
                 <div className="rounded-lg border border-dashed border-gray-200/70 bg-white/40 px-3 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-400">
                   {usageCodeExportSummary
@@ -1967,8 +2001,58 @@ export default function SettingsModal() {
                     : '正在读取导出预估信息。'}
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                  压缩包只包含当前使用码对应的图片文件和视频文件。
+                  压缩包只包含当前使用码对应的图片文件和视频文件。超过 512 MB 会自动分包。
                 </div>
+                {shouldShowUsageCodeExportStatus && backupState && (
+                  <div className="rounded-lg border border-blue-200/70 bg-blue-50/70 px-3 py-3 dark:border-blue-400/20 dark:bg-blue-500/10">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                        {backupState.phase === 'completed'
+                          ? '导出已完成'
+                          : backupState.phase === 'failed'
+                            ? '导出失败'
+                            : '正在生成导出文件'}
+                      </div>
+                      <div className="text-sm font-semibold text-blue-800 dark:text-blue-100">{backupState.progressPercent}%</div>
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                      {backupState.error || backupState.message}
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-blue-200/70 dark:bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-blue-500 transition-[width] duration-300"
+                        style={{ width: `${Math.max(4, backupState.progressPercent)}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
+                      {backupState.phase === 'preparing'
+                        ? '正在整理导出文件。'
+                        : `已处理 ${backupState.processedFiles}/${backupState.totalFiles} 个文件，${formatBytes(backupState.processedBytes)}/${formatBytes(backupState.totalBytes)}`}
+                    </div>
+                    {usageCodeExportFiles.length > 0 && backupState.phase === 'completed' && (
+                      <div className="mt-3 space-y-2">
+                        {usageCodeExportFiles.map((item) => (
+                          <div
+                            key={item.fileName}
+                            className="flex items-center justify-between gap-3 rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-xs font-medium text-blue-900 dark:text-blue-100">{item.fileName}</div>
+                              <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">{formatBytes(item.bytes)}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void handleDownloadUsageCodeExportFile(item.fileName)}
+                              className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
+                            >
+                              下载
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() =>

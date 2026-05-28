@@ -5,6 +5,12 @@ export interface UsageCodeMediaExportSummary {
   videoCount: number
   totalBytes: number
 }
+
+export interface UsageCodeMediaExportFile {
+  fileName: string
+  bytes: number
+  modifiedAt: string
+}
 export interface AdminBackupImportResult {
   ok: true
   uploadedArchivePath: string | null
@@ -56,8 +62,25 @@ export async function fetchBackendBackupExportStatus() {
   }))
 }
 
-export async function exportUsageCodeMediaArchive() {
-  const response = await fetch('/api/user/data/export-media', {
+export async function startUsageCodeMediaExport() {
+  return readResponseJson<MaintenanceStatus>(await fetch('/api/user/data/export-media/start', {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'include',
+  }))
+}
+
+export async function fetchUsageCodeMediaExportFiles() {
+  return readResponseJson<{ items: UsageCodeMediaExportFile[] }>(
+    await fetch('/api/user/data/export-media/files', {
+      cache: 'no-store',
+      credentials: 'include',
+    }),
+  )
+}
+
+export async function downloadUsageCodeMediaExportFile(fileName: string) {
+  const response = await fetch(`/api/user/data/export-media/download/${encodeURIComponent(fileName)}`, {
     cache: 'no-store',
     credentials: 'include',
   })
@@ -76,7 +99,7 @@ export async function exportUsageCodeMediaArchive() {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
-  anchor.download = `usage-code-media-${Date.now()}.zip`
+  anchor.download = fileName
   anchor.click()
   URL.revokeObjectURL(url)
 }

@@ -1,9 +1,11 @@
+import crypto from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 
 export type BackupPhase = 'idle' | 'preparing' | 'running' | 'completed' | 'failed'
 export type MaintenanceOperation =
   | 'backup_export'
   | 'backup_import'
+  | 'usage_code_media_export'
   | 'remote_reset_usage_code'
   | 'remote_reset_tasks'
   | 'remote_reset_all'
@@ -39,6 +41,7 @@ export interface ManagementOperationLog {
 
 const BACKUP_JOB_STATE_KEY = 'backup_job_state'
 const MANAGEMENT_OPERATION_LOGS_KEY = 'management_operation_logs'
+const USAGE_CODE_MEDIA_EXPORT_STATE_KEY_PREFIX = 'usage_code_media_export_state:'
 
 export function getDefaultBackupJobState(): BackupJobState {
   return {
@@ -61,8 +64,7 @@ export function getDefaultBackupJobState(): BackupJobState {
   }
 }
 
-export function getBackupJobState(app: FastifyInstance): BackupJobState {
-  const stored = app.db.getAppSetting<Partial<BackupJobState>>(BACKUP_JOB_STATE_KEY)
+function normalizeBackupJobState(stored: Partial<BackupJobState> | null | undefined) {
   return {
     ...getDefaultBackupJobState(),
     ...stored,
@@ -82,6 +84,11 @@ export function getBackupJobState(app: FastifyInstance): BackupJobState {
   }
 }
 
+export function getBackupJobState(app: FastifyInstance): BackupJobState {
+  const stored = app.db.getAppSetting<Partial<BackupJobState>>(BACKUP_JOB_STATE_KEY)
+  return normalizeBackupJobState(stored)
+}
+
 export function setBackupJobState(app: FastifyInstance, state: BackupJobState) {
   app.db.setAppSetting(BACKUP_JOB_STATE_KEY, state)
 }
@@ -92,6 +99,30 @@ export function patchBackupJobState(app: FastifyInstance, patch: Partial<BackupJ
     ...patch,
   }
   setBackupJobState(app, nextState)
+  return nextState
+}
+
+export function getUsageCodeMediaExportStateKey(usageCodeIds: string[]) {
+  const normalized = [...usageCodeIds].filter(Boolean).sort().join(',')
+  const digest = crypto.createHash('sha256').update(normalized).digest('hex')
+  return `${USAGE_CODE_MEDIA_EXPORT_STATE_KEY_PREFIX}${digest}`
+}
+
+export function getUsageCodeMediaExportState(app: FastifyInstance, usageCodeIds: string[]): BackupJobState {
+  const stored = app.db.getAppSetting<Partial<BackupJobState>>(getUsageCodeMediaExportStateKey(usageCodeIds))
+  return normalizeBackupJobState(stored)
+}
+
+export function setUsageCodeMediaExportState(app: FastifyInstance, usageCodeIds: string[], state: BackupJobState) {
+  app.db.setAppSetting(getUsageCodeMediaExportStateKey(usageCodeIds), state)
+}
+
+export function patchUsageCodeMediaExportState(app: FastifyInstance, usageCodeIds: string[], patch: Partial<BackupJobState>) {
+  const nextState = {
+    ...getUsageCodeMediaExportState(app, usageCodeIds),
+    ...patch,
+  }
+  setUsageCodeMediaExportState(app, usageCodeIds, nextState)
   return nextState
 }
 
