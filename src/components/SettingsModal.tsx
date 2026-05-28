@@ -2076,38 +2076,40 @@ export default function SettingsModal() {
 
           {activeTab === 'api' && isAdmin && (
             <div className="space-y-4">
-              <div className="flex gap-2">
-                <Select
-                  value={selectedProfileId}
-                  onChange={(value) => {
-                    if (value === '__new__') {
-                      setProfileDraft(createEmptyProfile())
-                      return
-                    }
-                    const profile = profiles.find((item) => item.id === value)
-                    if (profile) setProfileDraft(profile)
-                  }}
-                  options={[
-                    ...profiles.map((profile) => ({
-                      label: renderProviderOptionLabel(profile, { showDistributedRemaining: true }),
-                      value: profile.id,
-                    })),
-                    { label: '新增 API 配置', value: '__new__' },
-                  ]}
-                  className="flex-1 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-                />
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_5rem_5rem]">
+                <div className="col-span-2 min-w-0 sm:col-span-1">
+                  <Select
+                    value={selectedProfileId}
+                    onChange={(value) => {
+                      if (value === '__new__') {
+                        setProfileDraft(createEmptyProfile())
+                        return
+                      }
+                      const profile = profiles.find((item) => item.id === value)
+                      if (profile) setProfileDraft(profile)
+                    }}
+                    options={[
+                      ...profiles.map((profile) => ({
+                        label: renderProviderOptionLabel(profile, { showDistributedRemaining: true }),
+                        value: profile.id,
+                      })),
+                      { label: '新增 API 配置', value: '__new__' },
+                    ]}
+                    className="rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={handleCopyProfile}
                   disabled={!profileDraft.id}
-                  className="w-20 shrink-0 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm font-medium leading-normal text-gray-600 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+                  className="min-w-0 whitespace-nowrap rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm font-medium leading-normal text-gray-600 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.08]"
                 >
                   复制
                 </button>
                 <button
                   type="button"
                   onClick={() => setProfileDraft(createEmptyProfile())}
-                  className="w-20 shrink-0 whitespace-nowrap rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium leading-normal text-blue-500 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20"
+                  className="min-w-0 whitespace-nowrap rounded-xl bg-blue-50 px-3 py-2 text-sm font-medium leading-normal text-blue-500 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:hover:bg-blue-500/20"
                 >
                   新增
                 </button>
