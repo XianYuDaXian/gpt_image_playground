@@ -2257,12 +2257,7 @@ async function readUsageCodeMediaExportArtifacts(app: Parameters<FastifyPluginAs
   const fileName = path.basename(resolvedFilePath)
   if (fileName.toLowerCase().endsWith('.json')) {
     const parsedIndex = usageCodeMediaExportIndexSchema.parse(JSON.parse(await fs.readFile(resolvedFilePath, 'utf-8')))
-    const indexStat = await fs.stat(resolvedFilePath)
-    const items = [{
-      fileName,
-      bytes: indexStat.size,
-      modifiedAt: indexStat.mtime.toISOString(),
-    }]
+    const items: Array<{ fileName: string; bytes: number; modifiedAt: string }> = []
     for (const part of parsedIndex.parts) {
       const partPath = path.join(exportDir, part.name)
       const partStat = await fs.stat(partPath)
@@ -4082,6 +4077,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const filePath = path.join(getUsageCodeMediaExportDir(app, auth.usageCodeIds), target.fileName)
     reply.header('Cache-Control', 'no-store')
+    reply.header('Content-Length', String(target.bytes))
+    reply.header('Content-Type', path.extname(target.fileName).toLowerCase() === '.json' ? 'application/json; charset=utf-8' : 'application/zip')
     reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(target.fileName)}"`)
     return reply.send(createReadStream(filePath))
   })

@@ -465,6 +465,9 @@ export default function SettingsModal() {
   const [isSavingReminders, setIsSavingReminders] = useState(false)
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
   const [usageCodeExportFiles, setUsageCodeExportFiles] = useState<UsageCodeMediaExportFile[]>([])
+  const [usageCodeDownloadingFileName, setUsageCodeDownloadingFileName] = useState<string | null>(null)
+  const [usageCodeDownloadLoadedBytes, setUsageCodeDownloadLoadedBytes] = useState(0)
+  const [usageCodeDownloadTotalBytes, setUsageCodeDownloadTotalBytes] = useState<number | null>(null)
   const [importCandidates, setImportCandidates] = useState<AdminBackupImportCandidate[]>([])
   const [showImportCandidates, setShowImportCandidates] = useState(false)
   const [managementLogs, setManagementLogs] = useState<BackendManagementOperationLog[]>([])
@@ -1144,6 +1147,18 @@ export default function SettingsModal() {
       .catch(() => undefined)
   }, [showSettings, isAdmin, backupState?.operation, backupState?.phase, backupState?.finishedAt])
 
+  useEffect(() => {
+    if (!usageCodeDownloadingFileName) return
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = '导出文件仍在下载中，刷新后本次下载会中断。'
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [usageCodeDownloadingFileName])
+
   useCloseOnEscape(showSettings, () => setShowSettings(false))
   useCloseOnEscape(Boolean(usageCodeEventModal), () => setUsageCodeEventModal(null))
 
@@ -1449,13 +1464,26 @@ export default function SettingsModal() {
   }
 
   const handleDownloadUsageCodeExportFile = async (fileName: string) => {
+    setUsageCodeDownloadingFileName(fileName)
+    setUsageCodeDownloadLoadedBytes(0)
+    setUsageCodeDownloadTotalBytes(null)
     try {
-      await downloadUsageCodeMediaExportFile(fileName)
+      await downloadUsageCodeMediaExportFile(fileName, {
+        onProgress: ({ loadedBytes, totalBytes }) => {
+          setUsageCodeDownloadLoadedBytes(loadedBytes)
+          setUsageCodeDownloadTotalBytes(totalBytes)
+        },
+      })
+      useStore.getState().showToast('导出文件下载已开始保存', 'success')
     } catch (err) {
       useStore.getState().showToast(
         `下载导出文件失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
+    } finally {
+      setUsageCodeDownloadingFileName(null)
+      setUsageCodeDownloadLoadedBytes(0)
+      setUsageCodeDownloadTotalBytes(null)
     }
   }
 
@@ -2003,6 +2031,11 @@ export default function SettingsModal() {
                 <div className="text-xs text-gray-500 dark:text-gray-400">
                   压缩包只包含当前使用码对应的图片文件和视频文件。超过 512 MB 会自动分包。
                 </div>
+                {usageCodeExportFiles.length > 1 && backupState?.phase === 'completed' && (
+                  <div className="text-xs text-blue-600 dark:text-blue-300">
+                    本次导出共 {usageCodeExportFiles.length} 个分包。请全部下载后再统一保存。
+                  </div>
+                )}
                 {shouldShowUsageCodeExportStatus && backupState && (
                   <div className="rounded-lg border border-blue-200/70 bg-blue-50/70 px-3 py-3 dark:border-blue-400/20 dark:bg-blue-500/10">
                     <div className="flex items-center justify-between gap-3">
@@ -2027,26 +2060,57 @@ export default function SettingsModal() {
                     <div className="mt-2 text-xs leading-5 text-blue-700/90 dark:text-blue-200/80">
                       {backupState.phase === 'preparing'
                         ? '正在整理导出文件。'
-                        : `已处理 ${backupState.processedFiles}/${backupState.totalFiles} 个文件，${formatBytes(backupState.processedBytes)}/${formatBytes(backupState.totalBytes)}`}
+                        : backupState.phase === 'completed' && usageCodeExportFiles.length > 1
+                          ? `已生成 ${usageCodeExportFiles.length} 个分包，合计 ${formatBytes(backupState.totalBytes)}`
+                          : `已处理 ${backupState.processedFiles}/${backupState.totalFiles} 个文件，${formatBytes(backupState.processedBytes)}/${formatBytes(backupState.totalBytes)}`}
                     </div>
                     {usageCodeExportFiles.length > 0 && backupState.phase === 'completed' && (
                       <div className="mt-3 space-y-2">
                         {usageCodeExportFiles.map((item) => (
                           <div
                             key={item.fileName}
-                            className="flex items-center justify-between gap-3 rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
+                            className="rounded-lg border border-blue-200/60 bg-white/70 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]"
                           >
-                            <div className="min-w-0">
-                              <div className="truncate text-xs font-medium text-blue-900 dark:text-blue-100">{item.fileName}</div>
-                              <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">{formatBytes(item.bytes)}</div>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-medium text-blue-900 dark:text-blue-100">{item.fileName}</div>
+                                <div className="text-[11px] text-blue-700/90 dark:text-blue-200/80">
+                                  {usageCodeDownloadingFileName === item.fileName && usageCodeDownloadTotalBytes
+                                    ? `${formatBytes(usageCodeDownloadLoadedBytes)} / ${formatBytes(usageCodeDownloadTotalBytes)}`
+                                    : formatBytes(item.bytes)}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleDownloadUsageCodeExportFile(item.fileName)}
+                                disabled={Boolean(usageCodeDownloadingFileName)}
+                                className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
+                              >
+                                {usageCodeDownloadingFileName === item.fileName ? '下载中...' : '下载'}
+                              </button>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleDownloadUsageCodeExportFile(item.fileName)}
-                              className="shrink-0 rounded-md border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 transition hover:bg-blue-50 dark:border-blue-400/20 dark:bg-white/[0.04] dark:text-blue-100 dark:hover:bg-white/[0.08]"
-                            >
-                              下载
-                            </button>
+                            {usageCodeDownloadingFileName === item.fileName && (
+                              <>
+                                <div className="mt-2 h-2 overflow-hidden rounded-full bg-blue-200/70 dark:bg-white/10">
+                                  <div
+                                    className="h-full rounded-full bg-blue-500 transition-[width] duration-200"
+                                    style={{
+                                      width: `${Math.max(
+                                        4,
+                                        usageCodeDownloadTotalBytes && usageCodeDownloadTotalBytes > 0
+                                          ? Math.min(100, Math.floor((usageCodeDownloadLoadedBytes / usageCodeDownloadTotalBytes) * 100))
+                                          : 12,
+                                      )}%`,
+                                    }}
+                                  />
+                                </div>
+                                <div className="mt-2 text-[11px] text-blue-700/90 dark:text-blue-200/80">
+                                  {usageCodeDownloadTotalBytes && usageCodeDownloadTotalBytes > 0
+                                    ? `下载进度 ${Math.min(100, Math.floor((usageCodeDownloadLoadedBytes / usageCodeDownloadTotalBytes) * 100))}%`
+                                    : `已下载 ${formatBytes(usageCodeDownloadLoadedBytes)}`}
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>

@@ -11,6 +11,11 @@ export interface UsageCodeMediaExportFile {
   bytes: number
   modifiedAt: string
 }
+
+interface UsageCodeMediaExportDownloadProgress {
+  loadedBytes: number
+  totalBytes: number | null
+}
 export interface AdminBackupImportResult {
   ok: true
   uploadedArchivePath: string | null
@@ -79,7 +84,12 @@ export async function fetchUsageCodeMediaExportFiles() {
   )
 }
 
-export async function downloadUsageCodeMediaExportFile(fileName: string) {
+export async function downloadUsageCodeMediaExportFile(
+  fileName: string,
+  options: {
+    onProgress?: (progress: UsageCodeMediaExportDownloadProgress) => void
+  } = {},
+) {
   const response = await fetch(`/api/user/data/export-media/download/${encodeURIComponent(fileName)}`, {
     cache: 'no-store',
     credentials: 'include',
@@ -95,7 +105,34 @@ export async function downloadUsageCodeMediaExportFile(fileName: string) {
     throw new Error(message)
   }
 
-  const blob = await response.blob()
+  const totalBytes = Number(response.headers.get('content-length') ?? '')
+  const expectedBytes = Number.isFinite(totalBytes) && totalBytes > 0 ? totalBytes : null
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('浏览器不支持下载流')
+
+  const chunks: ArrayBuffer[] = []
+  let loadedBytes = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    chunks.push(value.slice().buffer as ArrayBuffer)
+    loadedBytes += value.byteLength
+    options.onProgress?.({
+      loadedBytes,
+      totalBytes: expectedBytes,
+    })
+  }
+
+  options.onProgress?.({
+    loadedBytes,
+    totalBytes: expectedBytes,
+  })
+
+  const blob = new Blob(chunks, {
+    type: response.headers.get('content-type') ?? 'application/octet-stream',
+  })
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
