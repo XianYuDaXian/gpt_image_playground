@@ -1,5 +1,5 @@
 import { normalizeBaseUrl } from './devProxy'
-import type { AppSettings } from '../types'
+import type { AppSettings, VideoDurationOption, VideoResolutionOption } from '../types'
 import type { MaintenanceStatus } from './backendAuth'
 
 export interface BackendRuntimeSettings {
@@ -16,8 +16,10 @@ export interface BackendRuntimeSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
-  videoMaxResolution?: '480p' | '720p'
-  videoMaxDuration?: 6 | 10 | 15
+  videoMaxResolution?: VideoResolutionOption
+  videoResolutionOptions?: VideoResolutionOption[]
+  videoMaxDuration?: VideoDurationOption
+  videoDurationOptions?: VideoDurationOption[]
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
@@ -43,8 +45,10 @@ export interface BackendProviderProfile {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
-  videoMaxResolution?: '480p' | '720p'
-  videoMaxDuration?: 6 | 10 | 15
+  videoMaxResolution?: VideoResolutionOption
+  videoResolutionOptions?: VideoResolutionOption[]
+  videoMaxDuration?: VideoDurationOption
+  videoDurationOptions?: VideoDurationOption[]
   isDefault: boolean
   createdAt?: string
   updatedAt?: string
@@ -63,8 +67,10 @@ export interface BackendProviderOption {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
-  videoMaxResolution?: '480p' | '720p'
-  videoMaxDuration?: 6 | 10 | 15
+  videoMaxResolution?: VideoResolutionOption
+  videoResolutionOptions?: VideoResolutionOption[]
+  videoMaxDuration?: VideoDurationOption
+  videoDurationOptions?: VideoDurationOption[]
   isDefault: boolean
 }
 
@@ -301,8 +307,10 @@ export async function saveBackendRuntimeSettings(settings: {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
-  videoMaxResolution?: '480p' | '720p'
-  videoMaxDuration?: 6 | 10 | 15
+  videoMaxResolution?: VideoResolutionOption
+  videoResolutionOptions?: VideoResolutionOption[]
+  videoMaxDuration?: VideoDurationOption
+  videoDurationOptions?: VideoDurationOption[]
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean

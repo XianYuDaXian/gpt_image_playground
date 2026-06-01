@@ -76,6 +76,17 @@ interface UsageCodeEventItem {
   providerProfileApiMode?: 'images' | 'responses' | 'videos' | null
 }
 
+const videoDurationOptionSchema = z.union([z.literal(6), z.literal(10), z.literal(15)])
+const videoResolutionOptionSchema = z.enum(['480p', '720p'])
+const videoResolutionOptionsSchema = z.array(videoResolutionOptionSchema)
+  .min(1)
+  .max(2)
+  .transform((value) => Array.from(new Set(value)).sort((a, b) => a.localeCompare(b)) as Array<'480p' | '720p'>)
+const videoDurationOptionsSchema = z.array(videoDurationOptionSchema)
+  .min(1)
+  .max(3)
+  .transform((value) => Array.from(new Set(value)).sort((a, b) => a - b) as Array<6 | 10 | 15>)
+
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -90,8 +101,10 @@ const providerProfileSchema = z.object({
   grokApiCompat: z.boolean().default(false),
   xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
-  videoMaxResolution: z.enum(['480p', '720p']).default('480p'),
-  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
+  videoMaxResolution: videoResolutionOptionSchema.default('480p'),
+  videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
+  videoMaxDuration: videoDurationOptionSchema.default(6),
+  videoDurationOptions: videoDurationOptionsSchema.default([6]),
   isDefault: z.boolean().default(false),
 }).refine((value) => !(value.codexCli && value.grokApiCompat), {
   message: 'Codex CLI 模式与 Grok API 兼容不能同时启用',
@@ -108,8 +121,10 @@ const runtimeSettingsSchemaBase = z.object({
   grokApiCompat: z.boolean().default(false),
   xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
-  videoMaxResolution: z.enum(['480p', '720p']).default('480p'),
-  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
+  videoMaxResolution: videoResolutionOptionSchema.default('480p'),
+  videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
+  videoMaxDuration: videoDurationOptionSchema.default(6),
+  videoDurationOptions: videoDurationOptionsSchema.default([6]),
   clearInputAfterSubmit: z.boolean().default(false),
   persistInputOnRestart: z.boolean().default(true),
   reuseTaskApiProfileTemporarily: z.boolean().default(false),
@@ -201,8 +216,10 @@ const fullBackupProviderProfileSchema = z.object({
   grokApiCompat: z.boolean(),
   xaiImage2kEnabled: z.boolean(),
   responseFormatB64Json: z.boolean(),
-  videoMaxResolution: z.enum(['480p', '720p']),
-  videoMaxDuration: z.union([z.literal(6), z.literal(10), z.literal(15)]),
+  videoMaxResolution: videoResolutionOptionSchema,
+  videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
+  videoMaxDuration: videoDurationOptionSchema,
+  videoDurationOptions: videoDurationOptionsSchema.default([6]),
   isDefault: z.boolean(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -971,7 +988,9 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
     xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     videoMaxResolution: profile.videoMaxResolution,
+    videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
+    videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -993,7 +1012,9 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     videoMaxResolution: profile.videoMaxResolution,
+    videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
+    videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
     isDefault: Boolean(profile.isDefault),
   }
 }
@@ -1545,7 +1566,9 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
     xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
     responseFormatB64Json: Boolean(profile.responseFormatB64Json),
     videoMaxResolution: profile.videoMaxResolution,
+    videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
+    videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -2798,7 +2821,9 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
     xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled ? 1 : 0,
     responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json ? 1 : 0,
     videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
+    videoResolutionOptions: payload.runtimeSettings.videoResolutionOptions ?? [payload.runtimeSettings.videoMaxResolution],
     videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
+    videoDurationOptions: payload.runtimeSettings.videoDurationOptions ?? [payload.runtimeSettings.videoMaxDuration],
     isDefault: 1,
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -2956,7 +2981,9 @@ function buildParsedPayloadFromFullManifest(
       xaiImage2kEnabled: profile.xaiImage2kEnabled ? 1 : 0,
       responseFormatB64Json: profile.responseFormatB64Json ? 1 : 0,
       videoMaxResolution: profile.videoMaxResolution,
+      videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
+      videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
       isDefault: profile.isDefault ? 1 : 0,
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
@@ -3453,7 +3480,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
         responseFormatB64Json: Boolean(profile.responseFormatB64Json),
         videoMaxResolution: profile.videoMaxResolution,
+        videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
         videoMaxDuration: profile.videoMaxDuration,
+        videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
         clearInputAfterSubmit: preferences.clearInputAfterSubmit,
         persistInputOnRestart: preferences.persistInputOnRestart,
         reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
@@ -3488,7 +3517,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
       responseFormatB64Json: Boolean(profile.responseFormatB64Json),
       videoMaxResolution: profile.videoMaxResolution,
+      videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
+      videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
       clearInputAfterSubmit: preferences.clearInputAfterSubmit,
       persistInputOnRestart: preferences.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
@@ -3515,7 +3546,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       videoMaxResolution: payload.videoMaxResolution,
+      videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
+      videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
       isDefault: true,
     })
 
@@ -3546,7 +3579,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: Boolean(profile.grokApiCompat),
       xaiImage2kEnabled: Boolean(profile.xaiImage2kEnabled),
       videoMaxResolution: profile.videoMaxResolution,
+      videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
+      videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
       clearInputAfterSubmit: payload.clearInputAfterSubmit,
       persistInputOnRestart: payload.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: payload.reuseTaskApiProfileTemporarily,
@@ -3655,7 +3690,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       videoMaxResolution: payload.videoMaxResolution,
+      videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
+      videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
       isDefault: true,
     })
 
@@ -3688,7 +3725,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       videoMaxResolution: payload.videoMaxResolution,
+      videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
+      videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
       isDefault: shouldSetDefault,
     })
     if (!profile) throw new Error('创建 API 配置失败')
@@ -3738,7 +3777,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
       videoMaxResolution: payload.videoMaxResolution,
+      videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
+      videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
       isDefault: payload.isDefault,
     })
     if (!profile) throw new Error('保存 API 配置失败')

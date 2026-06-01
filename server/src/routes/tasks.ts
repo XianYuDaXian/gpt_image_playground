@@ -27,14 +27,27 @@ const videoParamsSchema = z.object({
 
 function clampVideoParamsToProvider(
   params: z.infer<typeof videoParamsSchema>,
-  provider: { grokApiCompat?: number | boolean; videoMaxResolution?: '480p' | '720p'; videoMaxDuration?: 6 | 10 | 15 },
+  provider: {
+    grokApiCompat?: number | boolean
+    videoMaxResolution?: '480p' | '720p'
+    videoResolutionOptions?: Array<'480p' | '720p'>
+    videoMaxDuration?: 6 | 10 | 15
+    videoDurationOptions?: Array<6 | 10 | 15>
+  },
 ) {
   const advancedEnabled = Boolean(provider.grokApiCompat)
-  const resolution = advancedEnabled && provider.videoMaxResolution === '720p' ? params.resolution : '480p'
-  const maxDuration = advancedEnabled
-    ? provider.videoMaxDuration === 15 ? 15 : provider.videoMaxDuration === 10 ? 10 : 6
-    : 6
-  const duration = params.duration <= maxDuration ? params.duration : maxDuration
+  const allowedResolutions: Array<'480p' | '720p'> = advancedEnabled
+    ? (provider.videoResolutionOptions?.length ? provider.videoResolutionOptions : provider.videoMaxResolution === '720p' ? ['480p', '720p'] : ['480p'])
+    : ['480p']
+  const resolution: '480p' | '720p' = allowedResolutions.includes(params.resolution)
+    ? params.resolution
+    : allowedResolutions[allowedResolutions.length - 1]
+  const allowedDurations: Array<6 | 10 | 15> = advancedEnabled
+    ? (provider.videoDurationOptions?.length ? provider.videoDurationOptions : provider.videoMaxDuration === 15 ? [6, 10, 15] : provider.videoMaxDuration === 10 ? [6, 10] : [6])
+    : [6]
+  const duration: 6 | 10 | 15 = allowedDurations.includes(params.duration)
+    ? params.duration
+    : allowedDurations[allowedDurations.length - 1]
   return {
     ...params,
     resolution,

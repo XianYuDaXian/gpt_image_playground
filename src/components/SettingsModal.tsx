@@ -57,7 +57,18 @@ import { fetchBackendTasks } from '../lib/backendTasks'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { renderTextWithLinks } from '../lib/linkify'
 import { useStore, clearAllData, clearLocalTaskCache } from '../store'
-import { DEFAULT_IMAGES_MODEL, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, type AppSettings } from '../types'
+import {
+  ALL_VIDEO_RESOLUTION_OPTIONS,
+  ALL_VIDEO_DURATION_OPTIONS,
+  DEFAULT_IMAGES_MODEL,
+  DEFAULT_RESPONSES_MODEL,
+  DEFAULT_SETTINGS,
+  normalizeVideoDurationOptions,
+  normalizeVideoResolutionOptions,
+  type AppSettings,
+  type VideoDurationOption,
+  type VideoResolutionOption,
+} from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
@@ -170,7 +181,9 @@ function createEmptyProfile(): BackendProviderProfile {
     xaiImage2kEnabled: false,
     responseFormatB64Json: false,
     videoMaxResolution: '480p',
+    videoResolutionOptions: ['480p'],
     videoMaxDuration: 6,
+    videoDurationOptions: [6],
     isDefault: false,
   }
 }
@@ -398,41 +411,82 @@ function ClearableTextarea({
   )
 }
 
-function VideoCapabilitySlider({
-  title,
+function VideoDurationOptionSelector({
   value,
-  labels,
-  suffix = '',
   onChange,
 }: {
-  title: string
-  value: string
-  labels: string[]
-  suffix?: string
-  onChange: (value: string) => void
+  value: VideoDurationOption[]
+  onChange: (value: VideoDurationOption[]) => void
 }) {
+  const selectedValues = normalizeVideoDurationOptions(value)
   return (
     <label className="block">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="text-sm font-medium text-gray-800 dark:text-gray-100">{title}</span>
+        <span className="text-sm font-medium text-gray-800 dark:text-gray-100">视频时长</span>
       </div>
-      <div role="radiogroup" aria-label={title} className="inline-flex h-10 shrink-0 items-center rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
-        {labels.map((label) => {
-          const selected = label === value
+      <div className="flex flex-wrap gap-2">
+        {ALL_VIDEO_DURATION_OPTIONS.map((item) => {
+          const selected = selectedValues.includes(item)
           return (
             <button
-              key={label}
+              key={item}
               type="button"
-              role="radio"
-              aria-checked={selected}
-              onClick={() => onChange(label)}
-              className={`inline-flex h-full min-w-12 items-center justify-center rounded-lg px-3 leading-none transition ${
+              aria-pressed={selected}
+              onClick={() => {
+                const nextValues = selected
+                  ? selectedValues.filter((value) => value !== item)
+                  : [...selectedValues, item]
+                onChange(normalizeVideoDurationOptions(nextValues))
+              }}
+              className={`inline-flex h-10 min-w-16 items-center justify-center rounded-xl border px-4 text-sm leading-none transition ${
                 selected
-                  ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
-                  : 'text-gray-500 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white'
+                  ? 'border-gray-900 bg-gray-900 text-white dark:border-white dark:bg-white dark:text-gray-900'
+                  : 'border-gray-200/60 bg-white/70 text-gray-500 shadow-sm hover:text-gray-800 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:text-white'
               }`}
             >
-              {label}{suffix}
+              {item}s
+            </button>
+          )
+        })}
+      </div>
+    </label>
+  )
+}
+
+function VideoResolutionOptionSelector({
+  value,
+  onChange,
+}: {
+  value: VideoResolutionOption[]
+  onChange: (value: VideoResolutionOption[]) => void
+}) {
+  const selectedValues = normalizeVideoResolutionOptions(value)
+  return (
+    <label className="block">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-sm font-medium text-gray-800 dark:text-gray-100">视频分辨率</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {ALL_VIDEO_RESOLUTION_OPTIONS.map((item) => {
+          const selected = selectedValues.includes(item)
+          return (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => {
+                const nextValues = selected
+                  ? selectedValues.filter((value) => value !== item)
+                  : [...selectedValues, item]
+                onChange(normalizeVideoResolutionOptions(nextValues))
+              }}
+              className={`inline-flex h-10 min-w-16 items-center justify-center rounded-xl border px-4 text-sm leading-none transition ${
+                selected
+                  ? 'border-gray-900 bg-gray-900 text-white dark:border-white dark:bg-white dark:text-gray-900'
+                  : 'border-gray-200/60 bg-white/70 text-gray-500 shadow-sm hover:text-gray-800 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-300 dark:hover:text-white'
+              }`}
+            >
+              {item}
             </button>
           )
         })}
@@ -1044,10 +1098,12 @@ export default function SettingsModal() {
             codexCli: runtimeSettings.codexCli,
             grokApiCompat: runtimeSettings.grokApiCompat,
             xaiImage2kEnabled: runtimeSettings.xaiImage2kEnabled,
-          responseFormatB64Json: runtimeSettings.responseFormatB64Json,
-          videoMaxResolution: runtimeSettings.videoMaxResolution ?? '480p',
-          videoMaxDuration: runtimeSettings.videoMaxDuration ?? 6,
-          clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
+            responseFormatB64Json: runtimeSettings.responseFormatB64Json,
+            videoMaxResolution: runtimeSettings.videoMaxResolution ?? '480p',
+            videoResolutionOptions: normalizeVideoResolutionOptions(runtimeSettings.videoResolutionOptions ?? [runtimeSettings.videoMaxResolution ?? '480p']),
+            videoMaxDuration: runtimeSettings.videoMaxDuration ?? 6,
+            videoDurationOptions: normalizeVideoDurationOptions(runtimeSettings.videoDurationOptions ?? [runtimeSettings.videoMaxDuration ?? 6]),
+            clearInputAfterSubmit: runtimeSettings.clearInputAfterSubmit,
             persistInputOnRestart: runtimeSettings.persistInputOnRestart,
             reuseTaskApiProfileTemporarily: runtimeSettings.reuseTaskApiProfileTemporarily,
             alwaysShowRetryButton: runtimeSettings.alwaysShowRetryButton,
@@ -1076,7 +1132,9 @@ export default function SettingsModal() {
           xaiImage2kEnabled: runtimeSettings.xaiImage2kEnabled,
           responseFormatB64Json: runtimeSettings.responseFormatB64Json,
           videoMaxResolution: runtimeSettings.videoMaxResolution ?? '480p',
+          videoResolutionOptions: normalizeVideoResolutionOptions(runtimeSettings.videoResolutionOptions ?? [runtimeSettings.videoMaxResolution ?? '480p']),
           videoMaxDuration: runtimeSettings.videoMaxDuration ?? 6,
+          videoDurationOptions: normalizeVideoDurationOptions(runtimeSettings.videoDurationOptions ?? [runtimeSettings.videoMaxDuration ?? 6]),
           isDefault: true,
         }]
 
@@ -1278,6 +1336,10 @@ export default function SettingsModal() {
             grokApiCompat: selectedOption.grokApiCompat,
             xaiImage2kEnabled: selectedOption.xaiImage2kEnabled,
             responseFormatB64Json: selectedOption.responseFormatB64Json,
+            videoMaxResolution: selectedOption.videoMaxResolution ?? '480p',
+            videoResolutionOptions: normalizeVideoResolutionOptions(selectedOption.videoResolutionOptions ?? [selectedOption.videoMaxResolution ?? '480p']),
+            videoMaxDuration: selectedOption.videoMaxDuration ?? 6,
+            videoDurationOptions: normalizeVideoDurationOptions(selectedOption.videoDurationOptions ?? [selectedOption.videoMaxDuration ?? 6]),
           }
         : {
             providerProfileId: draft.providerProfileId ?? null,
@@ -1304,8 +1366,24 @@ export default function SettingsModal() {
       grokApiCompat: profileDraft.grokApiCompat,
       xaiImage2kEnabled: profileDraft.apiMode === 'images' && profileDraft.grokApiCompat ? profileDraft.xaiImage2kEnabled : false,
       responseFormatB64Json: profileDraft.apiMode === 'videos' ? false : profileDraft.responseFormatB64Json,
-      videoMaxResolution: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat ? profileDraft.videoMaxResolution ?? '480p' : '480p',
-      videoMaxDuration: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat ? profileDraft.videoMaxDuration ?? 6 : 6,
+      videoMaxResolution: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
+        ? (() => {
+            const videoResolutionOptions = normalizeVideoResolutionOptions(profileDraft.videoResolutionOptions ?? [profileDraft.videoMaxResolution ?? '480p'])
+            return videoResolutionOptions[videoResolutionOptions.length - 1] ?? '480p'
+          })()
+        : '480p',
+      videoResolutionOptions: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
+        ? normalizeVideoResolutionOptions(profileDraft.videoResolutionOptions ?? [profileDraft.videoMaxResolution ?? '480p'])
+        : ['480p'],
+      videoMaxDuration: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
+        ? (() => {
+            const videoDurationOptions = normalizeVideoDurationOptions(profileDraft.videoDurationOptions ?? [profileDraft.videoMaxDuration ?? 6])
+            return videoDurationOptions[videoDurationOptions.length - 1] ?? 6
+          })()
+        : 6,
+      videoDurationOptions: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
+        ? normalizeVideoDurationOptions(profileDraft.videoDurationOptions ?? [profileDraft.videoMaxDuration ?? 6])
+        : [6],
       isDefault: Boolean(profileDraft.isDefault),
     }
 
@@ -1359,7 +1437,9 @@ export default function SettingsModal() {
           xaiImage2kEnabled: activeProviderOption.xaiImage2kEnabled,
           responseFormatB64Json: activeProviderOption.responseFormatB64Json,
           videoMaxResolution: activeProviderOption.videoMaxResolution ?? '480p',
+          videoResolutionOptions: normalizeVideoResolutionOptions(activeProviderOption.videoResolutionOptions ?? [activeProviderOption.videoMaxResolution ?? '480p']),
           videoMaxDuration: activeProviderOption.videoMaxDuration ?? 6,
+          videoDurationOptions: normalizeVideoDurationOptions(activeProviderOption.videoDurationOptions ?? [activeProviderOption.videoMaxDuration ?? 6]),
         } satisfies Partial<AppSettings>)
       }
 
@@ -2538,18 +2618,19 @@ export default function SettingsModal() {
                 />
                 {profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat && (
                   <div className="space-y-4 py-3">
-                    <VideoCapabilitySlider
-                      title="视频分辨率"
-                      value={profileDraft.videoMaxResolution ?? '480p'}
-                      labels={['480p', '720p']}
-                      onChange={(value) => updateProfileDraft({ videoMaxResolution: value as '480p' | '720p' })}
+                    <VideoResolutionOptionSelector
+                      value={normalizeVideoResolutionOptions(profileDraft.videoResolutionOptions ?? [profileDraft.videoMaxResolution ?? '480p'])}
+                      onChange={(value) => updateProfileDraft({
+                        videoResolutionOptions: value,
+                        videoMaxResolution: value[value.length - 1] ?? '480p',
+                      })}
                     />
-                    <VideoCapabilitySlider
-                      title="视频时长"
-                      value={String(profileDraft.videoMaxDuration ?? 6)}
-                      labels={['6', '10', '15']}
-                      suffix="s"
-                      onChange={(value) => updateProfileDraft({ videoMaxDuration: Number(value) as 6 | 10 | 15 })}
+                    <VideoDurationOptionSelector
+                      value={normalizeVideoDurationOptions(profileDraft.videoDurationOptions ?? [profileDraft.videoMaxDuration ?? 6])}
+                      onChange={(value) => updateProfileDraft({
+                        videoDurationOptions: value,
+                        videoMaxDuration: value[value.length - 1] ?? 6,
+                      })}
                     />
                   </div>
                 )}

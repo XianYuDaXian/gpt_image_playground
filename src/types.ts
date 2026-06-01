@@ -2,6 +2,35 @@
 
 export type ApiMode = 'images' | 'responses' | 'videos'
 export type ThemeMode = 'system' | 'light' | 'dark'
+export type VideoResolutionOption = '480p' | '720p'
+export type VideoDurationOption = 6 | 10 | 15
+
+export const ALL_VIDEO_RESOLUTION_OPTIONS: VideoResolutionOption[] = ['480p', '720p']
+export const ALL_VIDEO_DURATION_OPTIONS: VideoDurationOption[] = [6, 10, 15]
+
+export function normalizeVideoResolutionOptions(
+  value: ReadonlyArray<string> | null | undefined,
+): VideoResolutionOption[] {
+  const items = Array.from(new Set(
+    (value ?? [])
+      .map((item) => item === '720p' ? '720p' : item === '480p' ? '480p' : null)
+      .filter((item): item is VideoResolutionOption => item !== null),
+  ))
+  if (!items.length) return ['480p']
+  return ALL_VIDEO_RESOLUTION_OPTIONS.filter((item) => items.includes(item))
+}
+
+export function normalizeVideoDurationOptions(
+  value: ReadonlyArray<number> | null | undefined,
+): VideoDurationOption[] {
+  const items = Array.from(new Set(
+    (value ?? [])
+      .map((item) => item === 15 ? 15 : item === 10 ? 10 : item === 6 ? 6 : null)
+      .filter((item): item is VideoDurationOption => item !== null),
+  ))
+  if (!items.length) return [6]
+  return ALL_VIDEO_DURATION_OPTIONS.filter((item) => items.includes(item))
+}
 
 export interface AppSettings {
   baseUrl: string
@@ -16,8 +45,10 @@ export interface AppSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
-  videoMaxResolution?: '480p' | '720p'
-  videoMaxDuration?: 6 | 10 | 15
+  videoMaxResolution?: VideoResolutionOption
+  videoResolutionOptions?: VideoResolutionOption[]
+  videoMaxDuration?: VideoDurationOption
+  videoDurationOptions?: VideoDurationOption[]
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
   reuseTaskApiProfileTemporarily: boolean
@@ -44,7 +75,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   xaiImage2kEnabled: false,
   responseFormatB64Json: false,
   videoMaxResolution: '480p',
+  videoResolutionOptions: ['480p'],
   videoMaxDuration: 6,
+  videoDurationOptions: [6],
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
   reuseTaskApiProfileTemporarily: false,
@@ -74,8 +107,8 @@ export const DEFAULT_PARAMS: TaskParams = {
 
 export interface VideoTaskParams {
   aspect_ratio: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-  resolution: '480p' | '720p'
-  duration: 6 | 10 | 15
+  resolution: VideoResolutionOption
+  duration: VideoDurationOption
 }
 
 export const DEFAULT_VIDEO_PARAMS: VideoTaskParams = {

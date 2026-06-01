@@ -1,6 +1,14 @@
 import { Fragment, useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, ensureTaskImageAvailable } from '../store'
-import { DEFAULT_PARAMS, DEFAULT_VIDEO_PARAMS, type InputImage, type TaskParams, type VideoTaskParams } from '../types'
+import {
+  DEFAULT_PARAMS,
+  DEFAULT_VIDEO_PARAMS,
+  normalizeVideoDurationOptions,
+  normalizeVideoResolutionOptions,
+  type InputImage,
+  type TaskParams,
+  type VideoTaskParams,
+} from '../types'
 import {
   getAtImageQuery,
   getImageMentionLabel,
@@ -591,20 +599,26 @@ export default function InputBar() {
     taskMode === 'video'
     && activeProviderOption?.grokApiCompat
     && (authStatus?.role === 'admin' || currentUsageCodesForProvider.length > 0)
-    && (activeProviderOption.videoMaxResolution === '720p' || (activeProviderOption.videoMaxDuration ?? 6) > 6),
+    && (
+      normalizeVideoResolutionOptions(activeProviderOption.videoResolutionOptions ?? [activeProviderOption.videoMaxResolution ?? '480p']).length > 1
+      || normalizeVideoDurationOptions(activeProviderOption.videoDurationOptions ?? [activeProviderOption.videoMaxDuration ?? 6]).length > 1
+    ),
   )
-  const allowedVideoResolutions: Array<VideoTaskParams['resolution']> = activeProviderOption?.grokApiCompat && activeProviderOption.videoMaxResolution === '720p'
-    ? ['480p', '720p']
+  const allowedVideoResolutions: Array<VideoTaskParams['resolution']> = activeProviderOption?.grokApiCompat
+    ? normalizeVideoResolutionOptions(activeProviderOption.videoResolutionOptions ?? [activeProviderOption.videoMaxResolution ?? '480p'])
     : ['480p']
-  const maxVideoDuration = activeProviderOption?.grokApiCompat ? activeProviderOption.videoMaxDuration ?? 6 : 6
-  const allowedVideoDurations: Array<VideoTaskParams['duration']> = maxVideoDuration >= 15
-    ? [6, 10, 15]
-    : maxVideoDuration >= 10
-      ? [6, 10]
-      : [6]
+  const allowedVideoDurations: Array<VideoTaskParams['duration']> = activeProviderOption?.grokApiCompat
+    ? normalizeVideoDurationOptions(activeProviderOption.videoDurationOptions ?? [activeProviderOption.videoMaxDuration ?? 6])
+    : [6]
   const allowedVideoDurationLabels = allowedVideoDurations.map(String)
-  const canShowVideoResolutionControl = canShowVideoAdvancedControls && allowedVideoResolutions.length > 1
-  const canShowVideoDurationControl = canShowVideoAdvancedControls && allowedVideoDurations.length > 1
+  const canShowVideoResolutionControl = canShowVideoAdvancedControls && (
+    allowedVideoResolutions.length > 1
+    || allowedVideoResolutions[0] !== '480p'
+  )
+  const canShowVideoDurationControl = canShowVideoAdvancedControls && (
+    allowedVideoDurations.length > 1
+    || allowedVideoDurations[0] !== 6
+  )
   const getProviderQuotaSummary = useCallback((providerProfileId: string) => {
     if (authStatus?.role !== 'user') return null
     const availableCodes = userUsageCodes.filter((code) => (
@@ -738,7 +752,9 @@ export default function InputBar() {
       xaiImage2kEnabled: option.xaiImage2kEnabled,
       responseFormatB64Json: option.responseFormatB64Json,
       videoMaxResolution: option.videoMaxResolution ?? '480p',
+      videoResolutionOptions: normalizeVideoResolutionOptions(option.videoResolutionOptions ?? [option.videoMaxResolution ?? '480p']),
       videoMaxDuration: option.videoMaxDuration ?? 6,
+      videoDurationOptions: normalizeVideoDurationOptions(option.videoDurationOptions ?? [option.videoMaxDuration ?? 6]),
     })
   }, [])
 

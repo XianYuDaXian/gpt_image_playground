@@ -20,7 +20,9 @@ export interface ProviderProfileRecord {
   xaiImage2kEnabled: number
   responseFormatB64Json: number
   videoMaxResolution: '480p' | '720p'
+  videoResolutionOptions?: Array<'480p' | '720p'>
   videoMaxDuration: 6 | 10 | 15
+  videoDurationOptions?: Array<6 | 10 | 15>
   isDefault: number
   createdAt: string
   updatedAt: string
@@ -288,6 +290,59 @@ function parseProviderModelOptions(value: string | null | undefined) {
   }
 }
 
+function normalizeVideoResolutionOptions(value: ReadonlyArray<string> | null | undefined): Array<'480p' | '720p'> {
+  const items = Array.from(new Set(
+    (value ?? [])
+      .map((item) => item === '720p' ? '720p' : item === '480p' ? '480p' : null)
+      .filter((item): item is '480p' | '720p' => item !== null),
+  ))
+  if (!items.length) return ['480p']
+  const sortedOptions: Array<'480p' | '720p'> = ['480p', '720p']
+  return sortedOptions.filter((item) => items.includes(item))
+}
+
+function parseVideoResolutionOptions(
+  value: string | null | undefined,
+  fallbackMaxResolution?: string | null,
+): Array<'480p' | '720p'> {
+  if (value) {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (Array.isArray(parsed)) return normalizeVideoResolutionOptions(parsed.map((item) => String(item)))
+    } catch {
+    }
+  }
+  if (fallbackMaxResolution === '720p') return ['480p', '720p']
+  return ['480p']
+}
+
+function normalizeVideoDurationOptions(value: ReadonlyArray<number> | null | undefined): Array<6 | 10 | 15> {
+  const items = Array.from(new Set(
+    (value ?? [])
+      .map((item) => item === 15 ? 15 : item === 10 ? 10 : item === 6 ? 6 : null)
+      .filter((item): item is 6 | 10 | 15 => item !== null),
+  ))
+  if (!items.length) return [6]
+  const sortedOptions: Array<6 | 10 | 15> = [6, 10, 15]
+  return sortedOptions.filter((item) => items.includes(item))
+}
+
+function parseVideoDurationOptions(
+  value: string | null | undefined,
+  fallbackMaxDuration?: number | null,
+): Array<6 | 10 | 15> {
+  if (value) {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (Array.isArray(parsed)) return normalizeVideoDurationOptions(parsed.map((item) => Number(item)))
+    } catch {
+    }
+  }
+  if (fallbackMaxDuration === 15) return [6, 10, 15]
+  if (fallbackMaxDuration === 10) return [6, 10]
+  return [6]
+}
+
 function quotaMapsEqual(
   left: Record<string, number> | null | undefined,
   right: Record<string, number> | null | undefined,
@@ -416,7 +471,9 @@ export class AppDatabase {
         xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0,
         response_format_b64_json INTEGER NOT NULL DEFAULT 0,
         video_max_resolution TEXT NOT NULL DEFAULT '480p',
+        video_resolution_options_json TEXT,
         video_max_duration INTEGER NOT NULL DEFAULT 6,
+        video_duration_options_json TEXT,
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -604,8 +661,29 @@ export class AppDatabase {
     if (!profileColumnNames.has('video_max_resolution')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN video_max_resolution TEXT NOT NULL DEFAULT '480p'")
     }
+    if (!profileColumnNames.has('video_resolution_options_json')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN video_resolution_options_json TEXT')
+      this.sqlite.exec(`
+        UPDATE provider_profiles
+        SET video_resolution_options_json = CASE
+          WHEN video_max_resolution = '720p' THEN '["480p","720p"]'
+          ELSE '["480p"]'
+        END
+      `)
+    }
     if (!profileColumnNames.has('video_max_duration')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN video_max_duration INTEGER NOT NULL DEFAULT 6')
+    }
+    if (!profileColumnNames.has('video_duration_options_json')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN video_duration_options_json TEXT')
+      this.sqlite.exec(`
+        UPDATE provider_profiles
+        SET video_duration_options_json = CASE
+          WHEN video_max_duration >= 15 THEN '[6,10,15]'
+          WHEN video_max_duration >= 10 THEN '[6,10]'
+          ELSE '[6]'
+        END
+      `)
     }
     if (!profileColumnNames.has('tag_color')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN tag_color TEXT")
@@ -828,19 +906,23 @@ export class AppDatabase {
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
+          video_duration_options_json as videoDurationOptionsJson,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
         FROM provider_profiles
         ORDER BY is_default DESC, updated_at DESC
       `)
-      .all() as Array<ProviderProfileRecord & { modelOptionsJson: string | null }>
+      .all() as Array<ProviderProfileRecord & { modelOptionsJson: string | null; videoResolutionOptionsJson: string | null; videoDurationOptionsJson: string | null }>
     return rows.map((row) => {
-      const { modelOptionsJson, ...rest } = row
+      const { modelOptionsJson, videoResolutionOptionsJson, videoDurationOptionsJson, ...rest } = row
       return {
         ...rest,
         modelOptions: parseProviderModelOptions(modelOptionsJson),
+        videoResolutionOptions: parseVideoResolutionOptions(videoResolutionOptionsJson, rest.videoMaxResolution),
+        videoDurationOptions: parseVideoDurationOptions(videoDurationOptionsJson, rest.videoMaxDuration),
       }
     })
   }
@@ -864,18 +946,22 @@ export class AppDatabase {
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
+          video_duration_options_json as videoDurationOptionsJson,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
         FROM provider_profiles
         WHERE id = ?
       `)
-      .get(id) as (ProviderProfileRecord & { modelOptionsJson: string | null }) | undefined
+      .get(id) as (ProviderProfileRecord & { modelOptionsJson: string | null; videoResolutionOptionsJson: string | null; videoDurationOptionsJson: string | null }) | undefined
     if (!row) return undefined
     return {
       ...row,
       modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+      videoResolutionOptions: parseVideoResolutionOptions(row.videoResolutionOptionsJson, row.videoMaxResolution),
+      videoDurationOptions: parseVideoDurationOptions(row.videoDurationOptionsJson, row.videoMaxDuration),
     }
   }
 
@@ -898,7 +984,9 @@ export class AppDatabase {
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
+          video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
+          video_duration_options_json as videoDurationOptionsJson,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -906,11 +994,13 @@ export class AppDatabase {
         WHERE is_default = 1
         LIMIT 1
       `)
-      .get() as (ProviderProfileRecord & { modelOptionsJson: string | null }) | undefined
+      .get() as (ProviderProfileRecord & { modelOptionsJson: string | null; videoResolutionOptionsJson: string | null; videoDurationOptionsJson: string | null }) | undefined
     if (!row) return undefined
     return {
       ...row,
       modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+      videoResolutionOptions: parseVideoResolutionOptions(row.videoResolutionOptionsJson, row.videoMaxResolution),
+      videoDurationOptions: parseVideoDurationOptions(row.videoDurationOptionsJson, row.videoMaxDuration),
     }
   }
 
@@ -930,10 +1020,16 @@ export class AppDatabase {
     xaiImage2kEnabled?: boolean
     responseFormatB64Json?: boolean
     videoMaxResolution?: '480p' | '720p'
+    videoResolutionOptions?: Array<'480p' | '720p'>
     videoMaxDuration?: 6 | 10 | 15
+    videoDurationOptions?: Array<6 | 10 | 15>
     isDefault: boolean
   }) {
     const now = new Date().toISOString()
+    const videoResolutionOptions = normalizeVideoResolutionOptions(input.videoResolutionOptions ?? [input.videoMaxResolution ?? '480p'])
+    const videoMaxResolution = videoResolutionOptions[videoResolutionOptions.length - 1] ?? '480p'
+    const videoDurationOptions = normalizeVideoDurationOptions(input.videoDurationOptions ?? [input.videoMaxDuration ?? 6])
+    const videoMaxDuration = videoDurationOptions[videoDurationOptions.length - 1] ?? 6
     const tx = this.sqlite.transaction(() => {
       if (input.isDefault) {
         this.sqlite.prepare('UPDATE provider_profiles SET is_default = 0').run()
@@ -956,7 +1052,9 @@ export class AppDatabase {
           xai_image_2k_enabled,
           response_format_b64_json,
           video_max_resolution,
+          video_resolution_options_json,
           video_max_duration,
+          video_duration_options_json,
           is_default,
           created_at,
           updated_at
@@ -977,7 +1075,9 @@ export class AppDatabase {
           @xaiImage2kEnabled,
           @responseFormatB64Json,
           @videoMaxResolution,
+          @videoResolutionOptionsJson,
           @videoMaxDuration,
+          @videoDurationOptionsJson,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -997,7 +1097,9 @@ export class AppDatabase {
           xai_image_2k_enabled = excluded.xai_image_2k_enabled,
           response_format_b64_json = excluded.response_format_b64_json,
           video_max_resolution = excluded.video_max_resolution,
+          video_resolution_options_json = excluded.video_resolution_options_json,
           video_max_duration = excluded.video_max_duration,
+          video_duration_options_json = excluded.video_duration_options_json,
           is_default = excluded.is_default,
           updated_at = excluded.updated_at
       `).run({
@@ -1015,8 +1117,10 @@ export class AppDatabase {
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
         responseFormatB64Json: input.responseFormatB64Json ? 1 : 0,
-        videoMaxResolution: input.videoMaxResolution === '720p' ? '720p' : '480p',
-        videoMaxDuration: input.videoMaxDuration === 15 ? 15 : input.videoMaxDuration === 10 ? 10 : 6,
+        videoMaxResolution,
+        videoResolutionOptionsJson: JSON.stringify(videoResolutionOptions),
+        videoMaxDuration,
+        videoDurationOptionsJson: JSON.stringify(videoDurationOptions),
         isDefault: input.isDefault ? 1 : 0,
         createdAt: now,
         updatedAt: now,
@@ -3064,7 +3168,9 @@ ${selectUsageCodeFields()}
           xai_image_2k_enabled,
           response_format_b64_json,
           video_max_resolution,
+          video_resolution_options_json,
           video_max_duration,
+          video_duration_options_json,
           is_default,
           created_at,
           updated_at
@@ -3085,7 +3191,9 @@ ${selectUsageCodeFields()}
           @xaiImage2kEnabled,
           @responseFormatB64Json,
           @videoMaxResolution,
+          @videoResolutionOptionsJson,
           @videoMaxDuration,
+          @videoDurationOptionsJson,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -3288,6 +3396,8 @@ ${selectUsageCodeFields()}
           ...profile,
           remarkName: profile.remarkName ?? null,
           modelOptionsJson: JSON.stringify(profile.modelOptions ?? [profile.model]),
+          videoResolutionOptionsJson: JSON.stringify(normalizeVideoResolutionOptions(profile.videoResolutionOptions ?? [profile.videoMaxResolution])),
+          videoDurationOptionsJson: JSON.stringify(normalizeVideoDurationOptions(profile.videoDurationOptions ?? [profile.videoMaxDuration])),
         })
       }
       for (const setting of input.appSettings) {

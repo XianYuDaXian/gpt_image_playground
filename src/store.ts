@@ -443,8 +443,12 @@ export const useStore = create<AppState>()(
             s.responseFormatB64Json ?? st.settings.responseFormatB64Json ?? DEFAULT_SETTINGS.responseFormatB64Json,
           videoMaxResolution:
             s.videoMaxResolution ?? st.settings.videoMaxResolution ?? DEFAULT_SETTINGS.videoMaxResolution,
+          videoResolutionOptions:
+            s.videoResolutionOptions ?? st.settings.videoResolutionOptions ?? DEFAULT_SETTINGS.videoResolutionOptions,
           videoMaxDuration:
             s.videoMaxDuration ?? st.settings.videoMaxDuration ?? DEFAULT_SETTINGS.videoMaxDuration,
+          videoDurationOptions:
+            s.videoDurationOptions ?? st.settings.videoDurationOptions ?? DEFAULT_SETTINGS.videoDurationOptions,
           clearInputAfterSubmit:
             s.clearInputAfterSubmit ?? st.settings.clearInputAfterSubmit ?? DEFAULT_SETTINGS.clearInputAfterSubmit,
           persistInputOnRestart:
