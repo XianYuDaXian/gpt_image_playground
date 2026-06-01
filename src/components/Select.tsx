@@ -13,9 +13,24 @@ interface SelectProps {
   disabled?: boolean
   className?: string
   placement?: 'auto' | 'top' | 'bottom'
+  menuWidthMode?: 'trigger' | 'wide'
+  selectedLabelClassName?: string
+  optionLabelClassName?: string
+  optionItemClassName?: string
 }
 
-export default function Select({ value, onChange, options, disabled, className, placement = 'auto' }: SelectProps) {
+export default function Select({
+  value,
+  onChange,
+  options,
+  disabled,
+  className,
+  placement = 'auto',
+  menuWidthMode = 'trigger',
+  selectedLabelClassName,
+  optionLabelClassName,
+  optionItemClassName,
+}: SelectProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [openUp, setOpenUp] = useState(false)
   const [menuStyle, setMenuStyle] = useState<{ left: number; top: number; width: number }>({
@@ -49,19 +64,25 @@ export default function Select({ value, onChange, options, disabled, className, 
   const updateMenuPosition = useCallback((nextOpenUp: boolean) => {
     const rect = triggerRef.current?.getBoundingClientRect()
     if (!rect) return
-    const viewportTop = window.visualViewport?.offsetTop ?? 0
+    const viewportWidth = window.visualViewport?.width ?? window.innerWidth
     const viewportLeft = window.visualViewport?.offsetLeft ?? 0
+    const viewportTop = window.visualViewport?.offsetTop ?? 0
     const estimatedMenuHeight = Math.min(options.length * 36 + 8, 240)
+    const width = menuWidthMode === 'wide'
+      ? Math.min(Math.max(rect.width, 240), viewportWidth - 16)
+      : rect.width
+    const maxLeft = Math.max(viewportLeft + 8, viewportLeft + viewportWidth - width - 8)
+    const left = Math.min(Math.max(viewportLeft + 8, rect.left + viewportLeft), maxLeft)
     const top = nextOpenUp
       ? Math.max(viewportTop + 8, rect.top - estimatedMenuHeight - 6)
       : rect.bottom + 6
 
     setMenuStyle({
-      left: rect.left + viewportLeft,
+      left,
       top,
-      width: rect.width,
+      width,
     })
-  }, [options.length])
+  }, [menuWidthMode, options.length])
 
   const handleToggle = useCallback((e: React.MouseEvent) => {
     if (disabled) return
@@ -113,7 +134,7 @@ export default function Select({ value, onChange, options, disabled, className, 
           disabled ? '!opacity-50 !cursor-not-allowed !bg-gray-100/50 dark:!bg-white/[0.05]' : ''
         }`}
       >
-        <span className="flex min-w-0 flex-1 items-center overflow-hidden whitespace-nowrap truncate">{selectedOption?.label ?? value}</span>
+        <span className={`flex min-w-0 flex-1 items-center overflow-hidden ${selectedLabelClassName ?? 'whitespace-nowrap truncate'}`}>{selectedOption?.label ?? value}</span>
         <svg
           className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${arrowPointsUp ? 'rotate-180' : ''}`}
           fill="none"
@@ -127,31 +148,32 @@ export default function Select({ value, onChange, options, disabled, className, 
       {isOpen && createPortal(
         <div
           ref={menuRef}
-          className={`glass-surface-strong select-menu-surface fixed z-[160] border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10 ${
-            openUp ? 'animate-dropdown-up' : 'animate-dropdown-down'
-          }`}
+          className="glass-surface-strong select-menu-surface fixed z-[160] border border-gray-200/60 dark:border-white/[0.08] rounded-xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] overflow-hidden py-1 max-h-60 overflow-y-auto ring-1 ring-black/5 dark:ring-white/10"
           style={{
             left: menuStyle.left,
             top: menuStyle.top,
             width: menuStyle.width,
           }}
         >
-          {options.map((option) => (
-            <div
-              key={option.value}
-              onClick={() => {
-                onChange(option.value)
-                setIsOpen(false)
-              }}
-              className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
-                option.value === value
-                  ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium'
-                  : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
-              }`}
-            >
-              <span className="block min-w-0 whitespace-nowrap truncate">{option.label}</span>
-            </div>
-          ))}
+          {options.map((option) => {
+            const selected = option.value === value
+            return (
+              <div
+                key={String(option.value)}
+                onClick={() => {
+                  onChange(option.value)
+                  setIsOpen(false)
+                }}
+                className={`relative px-3 py-2 text-xs cursor-pointer transition-colors ${
+                  selected
+                    ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium'
+                    : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
+                } ${optionItemClassName ?? ''}`}
+              >
+                <span className={`relative block min-w-0 ${optionLabelClassName ?? 'whitespace-nowrap truncate'}`}>{option.label}</span>
+              </div>
+            )
+          })}
         </div>,
         document.body,
       )}

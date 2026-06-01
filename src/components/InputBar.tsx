@@ -1373,6 +1373,7 @@ export default function InputBar() {
             value: option.id,
           }))}
           placement="top"
+          menuWidthMode="wide"
           className="h-10 rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
         />
         {currentQuotaSummary && (
