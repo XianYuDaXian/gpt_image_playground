@@ -334,6 +334,27 @@ const API_MAX_IMAGES = 16
 const API_MAX_OUTPUT_COUNT = 16
 type MobileParamSheet = 'quality' | 'format' | 'moderation' | 'count' | 'videoResolution' | 'videoDuration'
 
+function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
+  if (!option || option.apiMode !== 'venice_images') return null
+  if (imageCount <= 0) {
+    return option.veniceGenerateEnabled === false ? '当前 Venice 配置已禁用文生图' : null
+  }
+  if (imageCount === 1) {
+    return option.veniceEditEnabled === false ? '当前 Venice 配置已禁用单图编辑' : null
+  }
+  if (imageCount <= 3) {
+    return option.veniceMultiEditEnabled === false ? '当前 Venice 配置已禁用多图编辑' : null
+  }
+  return '当前 Venice 最多支持 3 张参考图'
+}
+
+function getVeniceImageLimit(option: BackendProviderOption | null) {
+  if (!option || option.apiMode !== 'venice_images') return API_MAX_IMAGES
+  if (option.veniceEditEnabled === false && option.veniceMultiEditEnabled === false) return 0
+  if (option.veniceMultiEditEnabled === false) return 1
+  return 3
+}
+
 function useIsMobile() {
   const getIsMobile = () => {
     const ua = navigator.userAgent || ''
@@ -783,6 +804,13 @@ export default function InputBar() {
       setShowSettings(true)
       return
     }
+    if (taskMode === 'image') {
+      const capabilityError = getVeniceImageCapability(activeProviderOption, inputImages.length)
+      if (capabilityError) {
+        useStore.getState().showToast(capabilityError, 'error')
+        return
+      }
+    }
     if (!canSubmit) return
     if (authStatus?.role === 'user') {
       if (userUsageCodes.length === 0) {
@@ -806,7 +834,7 @@ export default function InputBar() {
       return
     }
     await submitWithUsageCode(null)
-  }, [activeProviderOption, authStatus?.role, canSubmit, codeHasQuota, getCodeQuotaErrorMessage, hasConfiguredProvider, setShowSettings, submitWithUsageCode, taskMode, userUsageCodes])
+  }, [activeProviderOption, authStatus?.role, canSubmit, codeHasQuota, getCodeQuotaErrorMessage, hasConfiguredProvider, inputImages.length, setShowSettings, submitWithUsageCode, taskMode, userUsageCodes])
 
   const renderUsageCodePicker = () => {
     if (!showUsageCodePicker || authStatus?.role !== 'user' || userUsageCodes.length <= 1) return null
@@ -869,6 +897,8 @@ export default function InputBar() {
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli })
   const sizeHint = useHintTooltip()
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
+  const veniceImageLimit = taskMode === 'image' ? getVeniceImageLimit(activeProviderOption) : API_MAX_IMAGES
+  const atEffectiveImageLimit = inputImages.length >= veniceImageLimit
 
   useEffect(() => {
     if (atImageMenuIndex < atImageOptions.length) return
@@ -1062,18 +1092,29 @@ export default function InputBar() {
   const handleFiles = async (files: FileList | File[]) => {
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      const currentProvider = activeProviderOption
+      const maxImages = taskMode === 'image' ? getVeniceImageLimit(currentProvider) : API_MAX_IMAGES
+      if (currentCount >= maxImages) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${maxImages} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
+      const remaining = maxImages - currentCount
       const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
+
+      if (taskMode === 'image' && currentProvider?.apiMode === 'venice_images') {
+        const nextCount = currentCount + toAdd.length
+        const capabilityError = getVeniceImageCapability(currentProvider, nextCount)
+        if (capabilityError) {
+          useStore.getState().showToast(capabilityError, 'error')
+          return
+        }
+      }
 
       for (const file of toAdd) {
         await addImageFromFile(file)
@@ -1081,7 +1122,7 @@ export default function InputBar() {
 
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${maxImages} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -2261,7 +2302,11 @@ export default function InputBar() {
                 }
                 syncMentionTagSelection(el)
               }}
-              data-placeholder={taskMode === 'video' ? '描述你想生成的视频。可添加参考图。' : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
+              data-placeholder={taskMode === 'video'
+                ? '描述你想生成的视频。可添加参考图。'
+                : activeProviderOption?.apiMode === 'venice_images' && activeProviderOption.veniceGenerateEnabled === false
+                  ? '当前 Venice 已禁用文生图。请先添加参考图。'
+                  : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
               className="w-full min-h-[42px] px-4 py-3 pr-11 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />
             {prompt.trim() && (
@@ -2352,16 +2397,16 @@ export default function InputBar() {
                   onMouseEnter={() => setAttachHover(true)}
                   onMouseLeave={() => setAttachHover(false)}
                 >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                  <ButtonTooltip visible={atEffectiveImageLimit && attachHover} text={`参考图数量已达上限（${veniceImageLimit} 张），无法继续添加`} />
                   <button
                     type="button"
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                    onClick={() => !atEffectiveImageLimit && fileInputRef.current?.click()}
                     className={`flex h-10 w-10 items-center justify-center rounded-xl shadow-sm transition-all ${
-                      atImageLimit
+                      atEffectiveImageLimit
                         ? 'cursor-not-allowed bg-gray-200 text-gray-300 dark:bg-white/[0.04] dark:text-gray-500'
                         : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
                     }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    title={atEffectiveImageLimit ? `已达上限 ${veniceImageLimit} 张` : '添加参考图'}
                   >
                     <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
@@ -2427,16 +2472,16 @@ export default function InputBar() {
                     onMouseEnter={() => setAttachHover(true)}
                     onMouseLeave={() => setAttachHover(false)}
                   >
-                    <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                    <ButtonTooltip visible={atEffectiveImageLimit && attachHover} text={`参考图数量已达上限（${veniceImageLimit} 张），无法继续添加`} />
                     <button
                       type="button"
-                      onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                      onClick={() => !atEffectiveImageLimit && fileInputRef.current?.click()}
                       className={`mobile-media-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
-                        atImageLimit
+                        atEffectiveImageLimit
                           ? 'cursor-not-allowed bg-gray-200 text-gray-300 dark:bg-white/[0.04] dark:text-gray-500'
                           : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
                       }`}
-                      title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '从相册选择'}
+                      title={atEffectiveImageLimit ? `已达上限 ${veniceImageLimit} 张` : '从相册选择'}
                     >
                       <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7a2 2 0 012-2h2l1.2 1.4A2 2 0 0010.7 7H18a2 2 0 012 2v8a2 2 0 01-2 2H6a2 2 0 01-2-2V7z" />
@@ -2449,16 +2494,16 @@ export default function InputBar() {
                     onMouseEnter={() => setAttachHover(true)}
                     onMouseLeave={() => setAttachHover(false)}
                   >
-                    <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                    <ButtonTooltip visible={atEffectiveImageLimit && attachHover} text={`参考图数量已达上限（${veniceImageLimit} 张），无法继续添加`} />
                     <button
                       type="button"
-                      onClick={() => !atImageLimit && cameraInputRef.current?.click()}
+                      onClick={() => !atEffectiveImageLimit && cameraInputRef.current?.click()}
                       className={`mobile-media-button flex h-10 w-10 shrink-0 items-center justify-center rounded-xl shadow-sm transition-all ${
-                        atImageLimit
+                        atEffectiveImageLimit
                           ? 'cursor-not-allowed bg-gray-200 text-gray-300 dark:bg-white/[0.04] dark:text-gray-500'
                           : 'bg-gray-200 text-gray-500 hover:bg-gray-300 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1]'
                       }`}
-                      title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '拍照添加'}
+                      title={atEffectiveImageLimit ? `已达上限 ${veniceImageLimit} 张` : '拍照添加'}
                     >
                       <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8.5A2.5 2.5 0 015.5 6H7l1.1-1.3A2 2 0 019.6 4h4.8a2 2 0 011.5.7L17 6h1.5A2.5 2.5 0 0121 8.5v8A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-8z" />

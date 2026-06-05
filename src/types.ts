@@ -1,6 +1,6 @@
 // ===== 设置 =====
 
-export type ApiMode = 'images' | 'responses' | 'videos'
+export type ApiMode = 'images' | 'responses' | 'videos' | 'venice_images'
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type VideoResolutionOption = '480p' | '720p'
 export type VideoDurationOption = 6 | 10 | 15
@@ -145,6 +145,8 @@ export interface TaskRecord {
   providerProfileName?: string | null
   providerProfileTagColor?: string | null
   providerProfileModel?: string | null
+  providerProfileApiMode?: ApiMode | null
+  providerProfileBaseUrl?: string | null
   /** 最近一次写入时间（ms） */
   updatedAt?: number
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */

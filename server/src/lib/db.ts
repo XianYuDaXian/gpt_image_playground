@@ -13,12 +13,15 @@ export interface ProviderProfileRecord {
   apiKeyEncrypted: string
   model: string
   modelOptions: string[] | null
-  apiMode: 'images' | 'responses' | 'videos'
+  apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
   timeoutSeconds: number
   codexCli: number
   grokApiCompat: number
   xaiImage2kEnabled: number
   responseFormatB64Json: number
+  veniceGenerateEnabled: number
+  veniceEditEnabled: number
+  veniceMultiEditEnabled: number
   videoMaxResolution: '480p' | '720p'
   videoResolutionOptions?: Array<'480p' | '720p'>
   videoMaxDuration: 6 | 10 | 15
@@ -141,7 +144,7 @@ export interface UsageQuotaEventRecord {
   providerProfileId: string | null
   providerProfileName: string | null
   providerProfileTagColor: string | null
-  providerProfileApiMode: 'images' | 'responses' | 'videos' | null
+  providerProfileApiMode: 'images' | 'responses' | 'videos' | 'venice_images' | null
   createdAt: string
 }
 
@@ -470,6 +473,9 @@ export class AppDatabase {
         grok_api_compat INTEGER NOT NULL DEFAULT 0,
         xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0,
         response_format_b64_json INTEGER NOT NULL DEFAULT 0,
+        venice_generate_enabled INTEGER NOT NULL DEFAULT 1,
+        venice_edit_enabled INTEGER NOT NULL DEFAULT 1,
+        venice_multi_edit_enabled INTEGER NOT NULL DEFAULT 1,
         video_max_resolution TEXT NOT NULL DEFAULT '480p',
         video_resolution_options_json TEXT,
         video_max_duration INTEGER NOT NULL DEFAULT 6,
@@ -657,6 +663,15 @@ export class AppDatabase {
     }
     if (!profileColumnNames.has('xai_image_2k_enabled')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN xai_image_2k_enabled INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('venice_generate_enabled')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_generate_enabled INTEGER NOT NULL DEFAULT 1')
+    }
+    if (!profileColumnNames.has('venice_edit_enabled')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_edit_enabled INTEGER NOT NULL DEFAULT 1')
+    }
+    if (!profileColumnNames.has('venice_multi_edit_enabled')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_multi_edit_enabled INTEGER NOT NULL DEFAULT 1')
     }
     if (!profileColumnNames.has('video_max_resolution')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN video_max_resolution TEXT NOT NULL DEFAULT '480p'")
@@ -905,6 +920,9 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          venice_generate_enabled as veniceGenerateEnabled,
+          venice_edit_enabled as veniceEditEnabled,
+          venice_multi_edit_enabled as veniceMultiEditEnabled,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -945,6 +963,9 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          venice_generate_enabled as veniceGenerateEnabled,
+          venice_edit_enabled as veniceEditEnabled,
+          venice_multi_edit_enabled as veniceMultiEditEnabled,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -983,6 +1004,9 @@ export class AppDatabase {
           grok_api_compat as grokApiCompat,
           xai_image_2k_enabled as xaiImage2kEnabled,
           response_format_b64_json as responseFormatB64Json,
+          venice_generate_enabled as veniceGenerateEnabled,
+          venice_edit_enabled as veniceEditEnabled,
+          venice_multi_edit_enabled as veniceMultiEditEnabled,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -1013,12 +1037,15 @@ export class AppDatabase {
     apiKeyEncrypted: string
     model: string
     modelOptions?: string[] | null
-    apiMode: 'images' | 'responses' | 'videos'
+    apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
     timeoutSeconds: number
     codexCli?: boolean
     grokApiCompat?: boolean
     xaiImage2kEnabled?: boolean
     responseFormatB64Json?: boolean
+    veniceGenerateEnabled?: boolean
+    veniceEditEnabled?: boolean
+    veniceMultiEditEnabled?: boolean
     videoMaxResolution?: '480p' | '720p'
     videoResolutionOptions?: Array<'480p' | '720p'>
     videoMaxDuration?: 6 | 10 | 15
@@ -1051,6 +1078,9 @@ export class AppDatabase {
           grok_api_compat,
           xai_image_2k_enabled,
           response_format_b64_json,
+          venice_generate_enabled,
+          venice_edit_enabled,
+          venice_multi_edit_enabled,
           video_max_resolution,
           video_resolution_options_json,
           video_max_duration,
@@ -1074,6 +1104,9 @@ export class AppDatabase {
           @grokApiCompat,
           @xaiImage2kEnabled,
           @responseFormatB64Json,
+          @veniceGenerateEnabled,
+          @veniceEditEnabled,
+          @veniceMultiEditEnabled,
           @videoMaxResolution,
           @videoResolutionOptionsJson,
           @videoMaxDuration,
@@ -1096,6 +1129,9 @@ export class AppDatabase {
           grok_api_compat = excluded.grok_api_compat,
           xai_image_2k_enabled = excluded.xai_image_2k_enabled,
           response_format_b64_json = excluded.response_format_b64_json,
+          venice_generate_enabled = excluded.venice_generate_enabled,
+          venice_edit_enabled = excluded.venice_edit_enabled,
+          venice_multi_edit_enabled = excluded.venice_multi_edit_enabled,
           video_max_resolution = excluded.video_max_resolution,
           video_resolution_options_json = excluded.video_resolution_options_json,
           video_max_duration = excluded.video_max_duration,
@@ -1117,6 +1153,9 @@ export class AppDatabase {
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
         responseFormatB64Json: input.responseFormatB64Json ? 1 : 0,
+        veniceGenerateEnabled: input.veniceGenerateEnabled === false ? 0 : 1,
+        veniceEditEnabled: input.veniceEditEnabled === false ? 0 : 1,
+        veniceMultiEditEnabled: input.veniceMultiEditEnabled === false ? 0 : 1,
         videoMaxResolution,
         videoResolutionOptionsJson: JSON.stringify(videoResolutionOptions),
         videoMaxDuration,
@@ -1489,7 +1528,7 @@ ${selectUsageCodeFields()}
 
   appendProviderQuotaOverrideForUsageCodes(input: {
     providerProfileId: string
-    apiMode: 'images' | 'responses' | 'videos'
+    apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
   }) {
     const now = new Date().toISOString()
     const isVideoMode = input.apiMode === 'videos'

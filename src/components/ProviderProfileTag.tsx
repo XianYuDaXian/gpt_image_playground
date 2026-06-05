@@ -47,7 +47,15 @@ export function formatProviderProfileTagText(input: {
     parts.push('默认')
   }
   if (input.includeMode !== false && input.apiMode) {
-    parts.push(input.apiMode === 'videos' ? '视频' : '图片')
+    parts.push(
+      input.apiMode === 'videos'
+        ? '视频'
+        : input.apiMode === 'responses'
+          ? 'Responses'
+          : input.apiMode === 'venice_images'
+            ? 'Venice'
+            : '图片',
+    )
   }
   parts.push(input.preferRemarkName && input.remarkName ? input.remarkName : input.name)
   return parts.join(' · ')

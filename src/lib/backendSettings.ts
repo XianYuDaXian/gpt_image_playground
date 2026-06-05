@@ -39,6 +39,12 @@ export interface BackendProviderProfile {
   apiKeyConfigured?: boolean
   model: string
   modelOptions?: string[] | null
+  veniceGenerateModel?: string | null
+  veniceEditModel?: string | null
+  veniceMultiEditModel?: string | null
+  veniceGenerateEnabled?: boolean
+  veniceEditEnabled?: boolean
+  veniceMultiEditEnabled?: boolean
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
@@ -62,6 +68,12 @@ export interface BackendProviderOption {
   apiMode: AppSettings['apiMode']
   model: string
   modelOptions?: string[] | null
+  veniceGenerateModel?: string | null
+  veniceEditModel?: string | null
+  veniceMultiEditModel?: string | null
+  veniceGenerateEnabled?: boolean
+  veniceEditEnabled?: boolean
+  veniceMultiEditEnabled?: boolean
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean

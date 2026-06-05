@@ -73,7 +73,7 @@ interface UsageCodeEventItem {
   providerProfileId: string | null
   providerProfileName: string | null
   providerProfileTagColor: string | null
-  providerProfileApiMode?: 'images' | 'responses' | 'videos' | null
+  providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | null
 }
 
 const videoDurationOptionSchema = z.union([z.literal(6), z.literal(10), z.literal(15)])
@@ -95,7 +95,10 @@ const providerProfileSchema = z.object({
   apiKey: z.string().optional(),
   model: z.string().min(1),
   modelOptions: z.array(z.string().trim().min(1)).max(32).optional().nullable(),
-  apiMode: z.enum(['images', 'responses', 'videos']),
+  veniceGenerateEnabled: z.boolean().default(true),
+  veniceEditEnabled: z.boolean().default(true),
+  veniceMultiEditEnabled: z.boolean().default(true),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
@@ -115,12 +118,15 @@ const runtimeSettingsSchemaBase = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1),
   model: z.string().min(1),
-  apiMode: z.enum(['images', 'responses', 'videos']),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
   xaiImage2kEnabled: z.boolean().default(false),
   responseFormatB64Json: z.boolean().default(false),
+  veniceGenerateEnabled: z.boolean().default(true),
+  veniceEditEnabled: z.boolean().default(true),
+  veniceMultiEditEnabled: z.boolean().default(true),
   videoMaxResolution: videoResolutionOptionSchema.default('480p'),
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema.default(6),
@@ -210,12 +216,15 @@ const fullBackupProviderProfileSchema = z.object({
   apiKey: z.string(),
   model: z.string().min(1),
   modelOptions: z.array(z.string().min(1)).nullable().optional(),
-  apiMode: z.enum(['images', 'responses', 'videos']),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
   timeoutSeconds: z.number().int().positive(),
   codexCli: z.boolean(),
   grokApiCompat: z.boolean(),
   xaiImage2kEnabled: z.boolean(),
   responseFormatB64Json: z.boolean(),
+  veniceGenerateEnabled: z.boolean().default(true),
+  veniceEditEnabled: z.boolean().default(true),
+  veniceMultiEditEnabled: z.boolean().default(true),
   videoMaxResolution: videoResolutionOptionSchema,
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema,
@@ -528,7 +537,7 @@ const usageCodeMediaExportDownloadCompleteSchema = z.object({
   fileName: z.string().min(1),
 })
 
-function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | null }) {
+function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | null }) {
   const isVideoProvider = event.providerProfileApiMode === 'videos'
   if (event.reason === 'admin_adjust_total') {
     if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') {
@@ -960,6 +969,7 @@ async function listBackupImportCandidates(rootDir: string): Promise<BackupImport
 }
 
 function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: ProviderProfileRecord, includeApiKey = false) {
+  const modelOptions = profile.modelOptions ?? []
   let apiKey = ''
   let apiKeyConfigured = true
   let apiKeyMasked: string | null = null
@@ -980,7 +990,13 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
     apiKeyMasked,
     apiKeyConfigured,
     model: profile.model,
-    modelOptions: profile.modelOptions ?? [profile.model],
+    modelOptions: modelOptions.length ? modelOptions : [profile.model],
+    veniceGenerateModel: modelOptions[1] ?? profile.model,
+    veniceEditModel: modelOptions[2] ?? profile.model,
+    veniceMultiEditModel: modelOptions[3] ?? modelOptions[2] ?? profile.model,
+    veniceGenerateEnabled: Boolean(profile.veniceGenerateEnabled),
+    veniceEditEnabled: Boolean(profile.veniceEditEnabled),
+    veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
@@ -998,6 +1014,7 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
 }
 
 function serializeProviderOption(profile: ProviderProfileRecord) {
+  const modelOptions = profile.modelOptions ?? []
   return {
     id: profile.id,
     name: profile.name,
@@ -1005,7 +1022,13 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     tagColor: profile.tagColor,
     apiMode: profile.apiMode,
     model: profile.model,
-    modelOptions: profile.modelOptions ?? [profile.model],
+    modelOptions: modelOptions.length ? modelOptions : [profile.model],
+    veniceGenerateModel: modelOptions[1] ?? profile.model,
+    veniceEditModel: modelOptions[2] ?? profile.model,
+    veniceMultiEditModel: modelOptions[3] ?? modelOptions[2] ?? profile.model,
+    veniceGenerateEnabled: Boolean(profile.veniceGenerateEnabled),
+    veniceEditEnabled: Boolean(profile.veniceEditEnabled),
+    veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
@@ -2820,6 +2843,9 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
     grokApiCompat: payload.runtimeSettings.grokApiCompat ? 1 : 0,
     xaiImage2kEnabled: payload.runtimeSettings.xaiImage2kEnabled ? 1 : 0,
     responseFormatB64Json: payload.runtimeSettings.responseFormatB64Json ? 1 : 0,
+    veniceGenerateEnabled: payload.runtimeSettings.veniceGenerateEnabled === false ? 0 : 1,
+    veniceEditEnabled: payload.runtimeSettings.veniceEditEnabled === false ? 0 : 1,
+    veniceMultiEditEnabled: payload.runtimeSettings.veniceMultiEditEnabled === false ? 0 : 1,
     videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
     videoResolutionOptions: payload.runtimeSettings.videoResolutionOptions ?? [payload.runtimeSettings.videoMaxResolution],
     videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
@@ -2980,6 +3006,9 @@ function buildParsedPayloadFromFullManifest(
       grokApiCompat: profile.grokApiCompat ? 1 : 0,
       xaiImage2kEnabled: profile.xaiImage2kEnabled ? 1 : 0,
       responseFormatB64Json: profile.responseFormatB64Json ? 1 : 0,
+      veniceGenerateEnabled: profile.veniceGenerateEnabled === false ? 0 : 1,
+      veniceEditEnabled: profile.veniceEditEnabled === false ? 0 : 1,
+      veniceMultiEditEnabled: profile.veniceMultiEditEnabled === false ? 0 : 1,
       videoMaxResolution: profile.videoMaxResolution,
       videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
@@ -3545,6 +3574,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      veniceGenerateEnabled: payload.veniceGenerateEnabled,
+      veniceEditEnabled: payload.veniceEditEnabled,
+      veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3689,6 +3721,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      veniceGenerateEnabled: payload.veniceGenerateEnabled,
+      veniceEditEnabled: payload.veniceEditEnabled,
+      veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3724,6 +3759,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      veniceGenerateEnabled: payload.veniceGenerateEnabled,
+      veniceEditEnabled: payload.veniceEditEnabled,
+      veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3776,6 +3814,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       grokApiCompat: payload.grokApiCompat,
       xaiImage2kEnabled: payload.xaiImage2kEnabled,
       responseFormatB64Json: payload.responseFormatB64Json,
+      veniceGenerateEnabled: payload.veniceGenerateEnabled,
+      veniceEditEnabled: payload.veniceEditEnabled,
+      veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,

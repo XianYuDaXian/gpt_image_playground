@@ -70,20 +70,61 @@ function buildHeaders(apiKey: string) {
 }
 
 async function readErrorMessage(response: Response) {
-  let message = `HTTP ${response.status}`
+  const statusPrefix = `HTTP ${response.status}`
+
+  const collectParts = (value: unknown, parts: string[], seen = new Set<unknown>()) => {
+    if (value == null || seen.has(value)) return
+    if (typeof value === 'string') {
+      const text = value.trim()
+      if (text) parts.push(text)
+      return
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      parts.push(String(value))
+      return
+    }
+    if (Array.isArray(value)) {
+      seen.add(value)
+      for (const item of value) collectParts(item, parts, seen)
+      return
+    }
+    if (typeof value === 'object') {
+      seen.add(value)
+      const record = value as Record<string, unknown>
+      const preferredKeys = ['message', 'detail', 'details', 'error', 'errors', 'title', 'code', 'type', 'param']
+      for (const key of preferredKeys) {
+        if (key in record) collectParts(record[key], parts, seen)
+      }
+      for (const [key, item] of Object.entries(record)) {
+        if (preferredKeys.includes(key)) continue
+        if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+          const text = String(item).trim()
+          if (text) parts.push(`${key}: ${text}`)
+        }
+      }
+    }
+  }
+
   try {
-    const payload = await response.json() as { error?: { message?: string }; message?: string }
-    if (payload.error?.message) message = payload.error.message
-    else if (payload.message) message = payload.message
+    const payload = await response.json() as Record<string, unknown>
+    const parts: string[] = []
+    collectParts(payload, parts)
+    const uniqueParts = Array.from(new Set(parts.map((item) => item.trim()).filter(Boolean)))
+    if (uniqueParts.length > 0) {
+      return `${statusPrefix} - ${uniqueParts.join(' | ')}`
+    }
   } catch {
     try {
-      const text = await response.text()
-      if (text) message = text
+      const text = (await response.text()).trim()
+      if (text) {
+        return `${statusPrefix} - ${text}`
+      }
     } catch {
       /* ignore */
     }
   }
-  return message
+
+  return statusPrefix
 }
 
 function createResponsesInput(prompt: string, inputImageDataUrls: string[]) {
@@ -145,6 +186,60 @@ async function fetchRemoteImage(url: string) {
     buffer: Buffer.from(arrayBuffer),
     mimeType: response.headers.get('content-type') || 'image/png',
   }
+}
+
+function isVeniceProvider(payload: TaskExecutionPayload) {
+  return /venice/i.test(payload.provider.baseUrl) || /venice/i.test(payload.provider.name)
+}
+
+function shouldUseVeniceCompat(payload: TaskExecutionPayload) {
+  return payload.provider.apiMode === 'venice_images' || payload.provider.grokApiCompat || isVeniceProvider(payload)
+}
+
+function pickVeniceModel(
+  payload: TaskExecutionPayload,
+  kind: 'generate' | 'edit' | 'multi-edit',
+) {
+  const options = payload.provider.modelOptions ?? []
+  const generateModel = options[1] || payload.provider.model
+  const editModel = options[2] || payload.provider.model
+  const multiEditModel = options[3] || editModel || payload.provider.model
+
+  if (kind === 'generate') return generateModel || payload.provider.model
+  if (kind === 'multi-edit') return multiEditModel || editModel || payload.provider.model
+  return editModel || payload.provider.model
+}
+
+function getVeniceResolution(
+  payload: TaskExecutionPayload,
+  kind: 'generate' | 'edit' | 'multi-edit',
+  fallback?: GrokResolution,
+) {
+  if (!fallback) return undefined
+  return fallback === '2k' ? '2K' : '1K'
+}
+
+async function extractBinaryImageResult(response: Response, outputFormatHint?: string) {
+  const arrayBuffer = await response.arrayBuffer()
+  const buffer = Buffer.from(arrayBuffer)
+  if (!buffer.length) {
+    throw new Error('接口未返回图片数据')
+  }
+
+  const contentType = response.headers.get('content-type')?.trim().toLowerCase()
+  const normalizedHint = outputFormatHint?.trim().toLowerCase()
+  const mimeType = contentType && contentType.startsWith('image/')
+    ? contentType
+    : normalizedHint === 'jpeg' || normalizedHint === 'jpg'
+      ? 'image/jpeg'
+      : normalizedHint === 'webp'
+        ? 'image/webp'
+        : 'image/png'
+
+  return [{
+    buffer,
+    mimeType,
+  }] satisfies GeneratedImageResult[]
 }
 
 function buildApiUrl(baseUrl: string, pathName: string) {
@@ -357,6 +452,47 @@ async function callImagesApi(
   const grokSize = mapSizeToGrokParams(payload.params.size, Boolean(payload.provider.xaiImage2kEnabled))
 
   const runSingleEdit = async () => {
+    if (shouldUseVeniceCompat(payload) && isVeniceProvider(payload)) {
+      if (payload.maskImage) {
+        throw new Error('Venice 兼容模式暂不支持遮罩编辑')
+      }
+
+      const inputImageDataUrls = await Promise.all(
+        payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
+      )
+
+      const usesMultipleImages = inputImageDataUrls.length > 1
+      const endpoint = usesMultipleImages ? 'image/multi-edit' : 'image/edit'
+      const response = await fetchWithTimeout(
+        buildApiUrl(payload.provider.baseUrl, endpoint),
+        {
+          method: 'POST',
+          headers: {
+            ...buildHeaders(apiKey),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt,
+            ...(usesMultipleImages
+              ? { images: inputImageDataUrls.map((dataUrl) => dataUrl.replace(/^data:[^;]+;base64,/, '')) }
+              : { image: inputImageDataUrls[0]?.replace(/^data:[^;]+;base64,/, '') }),
+            modelId: pickVeniceModel(payload, usesMultipleImages ? 'multi-edit' : 'edit'),
+            output_format: payload.params.output_format,
+            safe_mode: false,
+            ...(grokSize.aspectRatio && grokSize.aspectRatio !== 'auto' ? { aspect_ratio: grokSize.aspectRatio } : {}),
+            ...(getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) ? { resolution: getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) } : {}),
+          }),
+        },
+        payload.provider.timeoutSeconds,
+      )
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response))
+      }
+
+      return extractBinaryImageResult(response, payload.params.output_format)
+    }
+
     if (payload.provider.grokApiCompat) {
       if (payload.maskImage) {
         throw new Error('Grok Images API 兼容模式暂不支持遮罩编辑')
@@ -464,6 +600,36 @@ async function callImagesApi(
   }
 
   const runSingleGeneration = async () => {
+    if (shouldUseVeniceCompat(payload) && isVeniceProvider(payload)) {
+      const response = await fetchWithTimeout(
+        buildApiUrl(payload.provider.baseUrl, 'images/generations'),
+        {
+          method: 'POST',
+          headers: {
+            ...buildHeaders(apiKey),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: pickVeniceModel(payload, 'generate'),
+            prompt,
+            size: payload.params.size,
+            ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
+          }),
+        },
+        payload.provider.timeoutSeconds,
+      )
+
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response))
+      }
+
+      const result = await response.json() as {
+        data?: Array<{ b64_json?: string; url?: string }>
+      }
+
+      return extractImageResults(result.data)
+    }
+
     if (payload.provider.grokApiCompat) {
       const response = await fetchWithTimeout(
         buildApiUrl(payload.provider.baseUrl, 'images/generations'),

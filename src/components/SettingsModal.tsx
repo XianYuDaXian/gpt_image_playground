@@ -174,6 +174,12 @@ function createEmptyProfile(): BackendProviderProfile {
     apiKeyConfigured: false,
     model: DEFAULT_IMAGES_MODEL,
     modelOptions: [DEFAULT_IMAGES_MODEL],
+    veniceGenerateModel: '',
+    veniceEditModel: '',
+    veniceMultiEditModel: '',
+    veniceGenerateEnabled: true,
+    veniceEditEnabled: true,
+    veniceMultiEditEnabled: true,
     apiMode: 'images',
     timeoutSeconds: DEFAULT_SETTINGS.timeout,
     codexCli: false,
@@ -198,6 +204,12 @@ function createCopiedProfile(profile: BackendProviderProfile): BackendProviderPr
     apiKeyMasked: profile.apiKeyMasked ?? null,
     apiKeyConfigured: profile.apiKeyConfigured ?? false,
     modelOptions: profile.modelOptions?.length ? [...profile.modelOptions] : [profile.model],
+    veniceGenerateModel: profile.veniceGenerateModel ?? '',
+    veniceEditModel: profile.veniceEditModel ?? '',
+    veniceMultiEditModel: profile.veniceMultiEditModel ?? '',
+    veniceGenerateEnabled: profile.veniceGenerateEnabled ?? true,
+    veniceEditEnabled: profile.veniceEditEnabled ?? true,
+    veniceMultiEditEnabled: profile.veniceMultiEditEnabled ?? true,
     isDefault: false,
   }
 }
@@ -1355,16 +1367,48 @@ export default function SettingsModal() {
       remarkName: profileDraft.remarkName?.trim() || null,
       baseUrl: normalizeBaseUrl(profileDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
       model: profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-      modelOptions: Array.from(new Set(
-        [profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode), ...(profileDraft.modelOptions ?? [])]
-          .map((item) => String(item ?? '').trim())
-          .filter(Boolean),
-      )),
+      veniceGenerateModel: profileDraft.apiMode === 'venice_images'
+        ? (profileDraft.veniceGenerateModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
+        : null,
+      veniceEditModel: profileDraft.apiMode === 'venice_images'
+        ? (profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
+        : null,
+      veniceMultiEditModel: profileDraft.apiMode === 'venice_images'
+        ? (profileDraft.veniceMultiEditModel?.trim() || profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
+        : null,
+      veniceGenerateEnabled: profileDraft.apiMode === 'venice_images'
+        ? profileDraft.veniceGenerateEnabled !== false
+        : true,
+      veniceEditEnabled: profileDraft.apiMode === 'venice_images'
+        ? profileDraft.veniceEditEnabled !== false
+        : true,
+      veniceMultiEditEnabled: profileDraft.apiMode === 'venice_images'
+        ? profileDraft.veniceMultiEditEnabled !== false
+        : true,
+      modelOptions: profileDraft.apiMode === 'venice_images'
+        ? Array.from(new Set([
+          profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
+          profileDraft.veniceGenerateModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
+          profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
+          profileDraft.veniceMultiEditModel?.trim() || profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
+          ...(profileDraft.modelOptions ?? []),
+        ].map((item) => String(item ?? '').trim()).filter(Boolean)))
+        : Array.from(new Set(
+          [profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode), ...(profileDraft.modelOptions ?? [])]
+            .map((item) => String(item ?? '').trim())
+            .filter(Boolean),
+        )),
       timeoutSeconds: Number(profileDraft.timeoutSeconds) || DEFAULT_SETTINGS.timeout,
-      apiMode: profileDraft.apiMode === 'videos' ? 'videos' : profileDraft.apiMode === 'responses' ? 'responses' : 'images',
+      apiMode: profileDraft.apiMode === 'videos'
+        ? 'videos'
+        : profileDraft.apiMode === 'responses'
+          ? 'responses'
+          : profileDraft.apiMode === 'venice_images'
+            ? 'venice_images'
+            : 'images',
       codexCli: profileDraft.apiMode === 'videos' ? false : profileDraft.codexCli,
       grokApiCompat: profileDraft.grokApiCompat,
-      xaiImage2kEnabled: profileDraft.apiMode === 'images' && profileDraft.grokApiCompat ? profileDraft.xaiImage2kEnabled : false,
+      xaiImage2kEnabled: (profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images') && profileDraft.grokApiCompat ? profileDraft.xaiImage2kEnabled : false,
       responseFormatB64Json: profileDraft.apiMode === 'videos' ? false : profileDraft.responseFormatB64Json,
       videoMaxResolution: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
         ? (() => {
@@ -2523,73 +2567,160 @@ export default function SettingsModal() {
                   }}
                   options={[
                     { label: 'Images API (/v1/images)', value: 'images' },
+                    { label: 'Venice Images (/image/*)', value: 'venice_images' },
                     { label: 'Responses API (/v1/responses)', value: 'responses' },
                     { label: 'Videos API (/v1/videos)', value: 'videos' },
                   ]}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
+                {profileDraft.apiMode === 'venice_images' && (
+                  <div className="mt-2 rounded-2xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200">
+                    此模式需要分别填写 Venice 文生图、单图编辑、多图编辑三个模型。系统会自动分发：不上传图片时走文生图，上传 1 张图时走单图编辑，上传 2 到 3 张图时走多图编辑。
+                  </div>
+                )}
               </label>
 
-              <label className="block">
-                <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">模型 ID</span>
-                <ClearableInput
-                  value={profileDraft.model}
-                  onChange={(event) => updateProfileDraft({ model: event.target.value })}
-                  onBlur={saveCurrentModelToDraft}
-                  onClear={() => updateProfileDraft({ model: '' })}
-                  placeholder={getDefaultModelForMode(profileDraft.apiMode)}
-                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
-                />
-              </label>
+              {profileDraft.apiMode !== 'venice_images' && (
+                <label className="block">
+                  <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">模型 ID</span>
+                  <ClearableInput
+                    value={profileDraft.model}
+                    onChange={(event) => updateProfileDraft({ model: event.target.value })}
+                    onBlur={saveCurrentModelToDraft}
+                    onClear={() => updateProfileDraft({ model: '' })}
+                    placeholder={getDefaultModelForMode(profileDraft.apiMode)}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                  />
+                </label>
+              )}
 
-              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-xs text-gray-500 dark:text-gray-400">已保存模型</span>
-                  <button
-                    type="button"
-                    onClick={saveCurrentModelToDraft}
-                    className="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
-                  >
-                    保存当前模型
-                  </button>
+              {profileDraft.apiMode === 'venice_images' && (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className={`rounded-2xl border px-3 py-3 transition ${
+                    profileDraft.veniceGenerateEnabled !== false
+                      ? 'border-gray-200/70 bg-gray-50/70 dark:border-white/[0.08] dark:bg-white/[0.03]'
+                      : 'border-gray-200/50 bg-gray-100/60 opacity-70 dark:border-white/[0.06] dark:bg-white/[0.02]'
+                  }`}>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">文生图模型</div>
+                        <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">不上传参考图时使用。</div>
+                      </div>
+                      <Switch
+                        checked={profileDraft.veniceGenerateEnabled !== false}
+                        onChange={(checked) => updateProfileDraft({ veniceGenerateEnabled: checked })}
+                      />
+                    </div>
+                    <ClearableInput
+                      value={profileDraft.veniceGenerateModel ?? ''}
+                      onChange={(event) => updateProfileDraft({ veniceGenerateModel: event.target.value })}
+                      onClear={() => updateProfileDraft({ veniceGenerateModel: '' })}
+                      placeholder={profileDraft.model || '例如：flux-dev'}
+                      disabled={profileDraft.veniceGenerateEnabled === false}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    />
+                  </div>
+                  <div className={`rounded-2xl border px-3 py-3 transition ${
+                    profileDraft.veniceEditEnabled !== false
+                      ? 'border-gray-200/70 bg-gray-50/70 dark:border-white/[0.08] dark:bg-white/[0.03]'
+                      : 'border-gray-200/50 bg-gray-100/60 opacity-70 dark:border-white/[0.06] dark:bg-white/[0.02]'
+                  }`}>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">单图编辑模型</div>
+                        <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">上传 1 张参考图时使用。</div>
+                      </div>
+                      <Switch
+                        checked={profileDraft.veniceEditEnabled !== false}
+                        onChange={(checked) => updateProfileDraft({ veniceEditEnabled: checked })}
+                      />
+                    </div>
+                    <ClearableInput
+                      value={profileDraft.veniceEditModel ?? ''}
+                      onChange={(event) => updateProfileDraft({ veniceEditModel: event.target.value })}
+                      onClear={() => updateProfileDraft({ veniceEditModel: '' })}
+                      placeholder={profileDraft.model || '例如：grok-imagine-edit'}
+                      disabled={profileDraft.veniceEditEnabled === false}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    />
+                  </div>
+                  <div className={`rounded-2xl border px-3 py-3 transition ${
+                    profileDraft.veniceMultiEditEnabled !== false
+                      ? 'border-gray-200/70 bg-gray-50/70 dark:border-white/[0.08] dark:bg-white/[0.03]'
+                      : 'border-gray-200/50 bg-gray-100/60 opacity-70 dark:border-white/[0.06] dark:bg-white/[0.02]'
+                  }`}>
+                    <div className="mb-3 flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-800 dark:text-gray-100">多图编辑模型</div>
+                        <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">上传 2 到 3 张参考图时使用。</div>
+                      </div>
+                      <Switch
+                        checked={profileDraft.veniceMultiEditEnabled !== false}
+                        onChange={(checked) => updateProfileDraft({ veniceMultiEditEnabled: checked })}
+                      />
+                    </div>
+                    <ClearableInput
+                      value={profileDraft.veniceMultiEditModel ?? ''}
+                      onChange={(event) => updateProfileDraft({ veniceMultiEditModel: event.target.value })}
+                      onClear={() => updateProfileDraft({ veniceMultiEditModel: '' })}
+                      placeholder={profileDraft.veniceEditModel || profileDraft.model || '例如：grok-imagine-edit'}
+                      disabled={profileDraft.veniceMultiEditEnabled === false}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    />
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {(profileDraft.modelOptions ?? []).length > 0 ? (
-                    (profileDraft.modelOptions ?? []).map((model) => {
-                      const selected = model === profileDraft.model
-                      return (
-                        <div
-                          key={model}
-                          className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs ${
-                            selected
-                              ? 'bg-blue-500 text-white'
-                              : 'bg-white text-gray-600 ring-1 ring-gray-200 dark:bg-white/[0.05] dark:text-gray-300 dark:ring-white/[0.08]'
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => updateProfileDraft({ model })}
-                            className="truncate text-left"
-                            title={model}
+              )}
+
+              {profileDraft.apiMode !== 'venice_images' && (
+                <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">已保存模型</span>
+                    <button
+                      type="button"
+                      onClick={saveCurrentModelToDraft}
+                      className="rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20"
+                    >
+                      保存当前模型
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(profileDraft.modelOptions ?? []).length > 0 ? (
+                      (profileDraft.modelOptions ?? []).map((model) => {
+                        const selected = model === profileDraft.model
+                        return (
+                          <div
+                            key={model}
+                            className={`inline-flex max-w-full items-center gap-1 rounded-full px-2.5 py-1 text-xs ${
+                              selected
+                                ? 'bg-blue-500 text-white'
+                                : 'bg-white text-gray-600 ring-1 ring-gray-200 dark:bg-white/[0.05] dark:text-gray-300 dark:ring-white/[0.08]'
+                            }`}
                           >
-                            {model}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => removeModelOptionFromDraft(model)}
-                            className={selected ? 'text-white/80 hover:text-white' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'}
-                            aria-label={`删除模型 ${model}`}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      )
-                    })
-                  ) : (
-                    <span className="text-xs text-gray-400 dark:text-gray-500">当前没有已保存模型</span>
-                  )}
+                            <button
+                              type="button"
+                              onClick={() => updateProfileDraft({ model })}
+                              className="truncate text-left"
+                              title={model}
+                            >
+                              {model}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeModelOptionFromDraft(model)}
+                              className={selected ? 'text-white/80 hover:text-white' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-200'}
+                              aria-label={`删除模型 ${model}`}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <span className="text-xs text-gray-400 dark:text-gray-500">当前没有已保存模型</span>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               <label className="block">
                 <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求超时 (秒)</span>
@@ -2609,7 +2740,9 @@ export default function SettingsModal() {
                   title="Grok API 兼容"
                   description={profileDraft.apiMode === 'videos'
                     ? '启用后该视频配置会显示 Grok 相关能力设置。'
-                    : '启用后改用 xAI Images 接口的字段。尺寸会换算成 xAI 支持的比例与分辨率。遮罩编辑不会提交到该接口。'}
+                    : profileDraft.apiMode === 'venice_images'
+                      ? '启用后按 Grok 风格提交尺寸参数。尺寸会换算成接口支持的比例与分辨率。遮罩编辑不会提交到该接口。'
+                      : '启用后改用 xAI Images 接口的字段。尺寸会换算成 xAI 支持的比例与分辨率。遮罩编辑不会提交到该接口。'}
                   checked={profileDraft.grokApiCompat}
                   onChange={(checked) => updateProfileDraft({
                     grokApiCompat: checked,
@@ -2639,7 +2772,9 @@ export default function SettingsModal() {
                     {profileDraft.grokApiCompat && (
                       <PreferenceRow
                         title="允许 xAI 2K 图片"
-                        description="开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。"
+                        description={profileDraft.apiMode === 'venice_images'
+                          ? '开启后会按请求尺寸尽量提交更高分辨率。关闭时固定提交 1K。'
+                          : '开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。'}
                         checked={profileDraft.xaiImage2kEnabled}
                         onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
                       />
@@ -2655,7 +2790,9 @@ export default function SettingsModal() {
                     />
                     <PreferenceRow
                       title="返回 Base64 图片数据"
-                      description={<>开启后在请求体中加入 <code className="rounded bg-gray-200 px-1 py-0.5 font-mono dark:bg-white/[0.08]">response_format: b64_json</code>，尝试让接口直接返回 Base64 图片。</>}
+                      description={profileDraft.apiMode === 'venice_images'
+                        ? 'Venice 图片接口当前直接返回图片文件流。此开关在该模式下不会生效。'
+                        : <>开启后在请求体中加入 <code className="rounded bg-gray-200 px-1 py-0.5 font-mono dark:bg-white/[0.08]">response_format: b64_json</code>，尝试让接口直接返回 Base64 图片。</>}
                       checked={profileDraft.responseFormatB64Json}
                       onChange={(checked) => updateProfileDraft({ responseFormatB64Json: checked })}
                     />

@@ -9,6 +9,13 @@ import { ParamValue } from '../lib/paramDisplay'
 import UsageCodeBadge from './UsageCodeBadge'
 import ProviderProfileTag from './ProviderProfileTag'
 
+function formatTaskEndpointLabel(apiMode?: TaskRecord['providerProfileApiMode'] | null) {
+  if (apiMode === 'videos') return 'Videos'
+  if (apiMode === 'responses') return 'Responses'
+  if (apiMode === 'venice_images') return 'Venice'
+  return 'Images'
+}
+
 interface Props {
   task: TaskRecord
   onReuse: () => void
@@ -298,6 +305,13 @@ export default function TaskCard({
   const isUsageCodeUser = authStatus?.role === 'user'
   const taskSourceLabel = task.providerProfileName ?? task.providerProfileId ?? null
   const taskModelLabel = isUsageCodeUser ? null : (task.providerProfileModel ?? null)
+  const taskEndpointLabel = task.providerProfileApiMode ? formatTaskEndpointLabel(task.providerProfileApiMode) : null
+  const taskEndpointTitle = task.providerProfileBaseUrl
+    ? `${taskEndpointLabel ?? '接口'} · ${task.providerProfileBaseUrl}`
+    : taskEndpointLabel
+  const errorSummary = task.status === 'error'
+    ? (task.error?.trim() || '生成失败')
+    : ''
   const isSwipeReady = Math.abs(swipeOffset) >= 40
   const showSwipeAction = isSwipeReady || swipeActionActive
   const showThumbnailPlaceholder =
@@ -491,7 +505,7 @@ export default function TaskCard({
             </div>
           )}
           {task.status === 'error' && !hasOutputImage && !hasOutputVideo && (
-            <div className="flex flex-col items-center gap-1 px-2">
+            <div className="flex flex-col items-center gap-2 px-3 text-center">
               <svg
                 className="w-7 h-7 text-red-400"
                 fill="none"
@@ -505,8 +519,14 @@ export default function TaskCard({
                   d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <span className="text-xs text-red-400 text-center leading-tight">
+              <span className="text-xs font-medium text-red-400 leading-tight">
                 失败
+              </span>
+              <span
+                className="max-w-full break-words text-[11px] leading-4 text-red-500/90 dark:text-red-300/90"
+                title={errorSummary}
+              >
+                {errorSummary}
               </span>
             </div>
           )}
@@ -606,6 +626,14 @@ export default function TaskCard({
                   includeDefault={false}
                   className="max-w-[7rem] flex-shrink-0 rounded px-1.5 py-0.5 text-xs leading-4"
                 />
+              )}
+              {taskEndpointLabel && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.06] text-gray-600 dark:text-gray-300 flex-shrink-0"
+                  title={taskEndpointTitle ?? undefined}
+                >
+                  {taskEndpointLabel}
+                </span>
               )}
               {isVideoTask ? (
                 <>

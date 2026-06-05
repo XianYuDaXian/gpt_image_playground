@@ -434,7 +434,7 @@ export const useStore = create<AppState>()(
           ...st.settings,
           ...s,
           apiMode:
-            s.apiMode === 'images' || s.apiMode === 'responses' || s.apiMode === 'videos'
+            s.apiMode === 'images' || s.apiMode === 'responses' || s.apiMode === 'videos' || s.apiMode === 'venice_images'
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
@@ -938,6 +938,11 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
 
   if (!prompt.trim()) {
     showToast('请输入提示词', 'error')
+    return
+  }
+
+  if (taskMode === 'image' && settings.apiMode === 'venice_images' && inputImages.length > 3) {
+    showToast('当前 Venice 最多支持 3 张参考图', 'error')
     return
   }
 

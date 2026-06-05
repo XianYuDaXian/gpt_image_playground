@@ -10,6 +10,7 @@ export default function ImageContextMenu() {
   const setDetailTaskId = useStore((s) => s.setDetailTaskId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const settings = useStore((s) => s.settings)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -131,8 +132,9 @@ export default function ImageContextMenu() {
   const handleEdit = async (e: React.MouseEvent) => {
     e.stopPropagation()
     setMenuInfo(null)
-    if (inputImages.length >= 16) {
-      showToast('参考图数量已达上限（16 张），无法继续添加', 'error')
+    const maxImages = settings.apiMode === 'venice_images' ? 3 : 16
+    if (inputImages.length >= maxImages) {
+      showToast(`参考图数量已达上限（${maxImages} 张），无法继续添加`, 'error')
       return
     }
 

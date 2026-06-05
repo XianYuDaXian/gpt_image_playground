@@ -141,6 +141,33 @@ function getTaskErrorForViewer(task: TaskRecord, exposeDetailedError?: boolean) 
   return '生成失败，请联系管理员'
 }
 
+function resolveDisplayedProviderModel(
+  task: TaskRecord,
+  inputImages: TaskImageRecord[],
+  providerProfile?: Pick<ProviderProfileRecord, 'model' | 'modelOptions' | 'apiMode'> | null,
+) {
+  if (!providerProfile) return null
+  if (providerProfile.apiMode !== 'venice_images') {
+    return providerProfile.model ?? null
+  }
+
+  const modelOptions = providerProfile.modelOptions ?? []
+  const generateModel = modelOptions[1] ?? providerProfile.model
+  const editModel = modelOptions[2] ?? providerProfile.model
+  const multiEditModel = modelOptions[3] ?? modelOptions[2] ?? providerProfile.model
+
+  if (task.taskType === 'video') {
+    return providerProfile.model ?? null
+  }
+  if (inputImages.length <= 0) {
+    return generateModel ?? null
+  }
+  if (inputImages.length === 1) {
+    return editModel ?? null
+  }
+  return multiEditModel ?? null
+}
+
 export function serializeTaskRecord(
   task: TaskRecord,
   images: TaskImageRecord[],
@@ -149,7 +176,7 @@ export function serializeTaskRecord(
     exposeUsageCodeAlias?: boolean
     exposeDetailedError?: boolean
     preferProviderRemark?: boolean
-    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'remarkName' | 'model' | 'tagColor'> | null
+    providerProfile?: Pick<ProviderProfileRecord, 'id' | 'name' | 'remarkName' | 'model' | 'modelOptions' | 'tagColor' | 'apiMode' | 'baseUrl'> | null
   } = {},
 ) {
   const inputImages = images.filter((image) => image.kind === 'input' || image.kind === 'video_input')
@@ -197,7 +224,9 @@ export function serializeTaskRecord(
       ? (options.providerProfile?.remarkName ?? options.providerProfile?.name ?? null)
       : (options.providerProfile?.name ?? null),
     providerProfileTagColor: options.providerProfile?.tagColor ?? null,
-    providerProfileModel: options.providerProfile?.model ?? null,
+    providerProfileModel: resolveDisplayedProviderModel(task, inputImages, options.providerProfile),
+    providerProfileApiMode: options.providerProfile?.apiMode ?? null,
+    providerProfileBaseUrl: options.providerProfile?.baseUrl ?? null,
     inputImageIds: inputImages.map((image) => image.id),
     outputImages: outputImages.map((image) => image.id),
     outputVideos: outputVideos.map((video) => video.id),

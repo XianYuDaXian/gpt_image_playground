@@ -14,7 +14,7 @@ const envSchema = z.object({
   UPSTREAM_API_URL: z.string().optional(),
   UPSTREAM_API_KEY: z.string().optional(),
   UPSTREAM_MODEL: z.string().optional(),
-  UPSTREAM_API_MODE: z.enum(['images', 'responses', 'videos']).optional(),
+  UPSTREAM_API_MODE: z.enum(['images', 'responses', 'videos', 'venice_images']).optional(),
   UPSTREAM_TIMEOUT_SECONDS: z.coerce.number().int().positive().optional(),
   UPSTREAM_CODEX_CLI: z.string().optional(),
   VERSION_CHECK_REPO_OWNER: z.string().default('XianYuDaXian'),
