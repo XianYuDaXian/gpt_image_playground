@@ -1,8 +1,8 @@
-import { useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
+import { useCallback, useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
 import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { useTrackedImageLoad } from '../hooks/useTrackedImageLoad'
-import ImageLoadingOverlay from './ImageLoadingOverlay'
+import DetailOutputImageCarousel from './DetailOutputImageCarousel'
+import type { ImageCarouselHandle } from '../lib/touchGesture'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
@@ -60,7 +60,7 @@ export default function DetailModal() {
   const [now, setNow] = useState(Date.now())
   const [isTaskIdPopoverOpen, setIsTaskIdPopoverOpen] = useState(false)
   const imagePanelRef = useRef<HTMLDivElement>(null)
-  const mainImageRef = useRef<HTMLImageElement>(null)
+  const carouselRef = useRef<ImageCarouselHandle>(null)
   const taskIdPopoverRef = useRef<HTMLDivElement>(null)
   const [imageLabelLeft, setImageLabelLeft] = useState(8)
   const useNativeVideoControls = useMemo(() => {
@@ -173,14 +173,6 @@ export default function DetailModal() {
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
   const currentOutputImageBytes = currentOutputImageId ? task?.imageBytesById?.[currentOutputImageId] ?? null : null
   const currentOutputImageSrc = currentOutputImageId ? resolveTaskImageSrc(currentOutputImageId, imageSrcs, task) : ''
-  const {
-    displaySrc: currentDisplayImageSrc,
-    isLoading: isMainImageLoading,
-    progress: mainImageLoadProgress,
-  } = useTrackedImageLoad(currentOutputImageSrc, {
-    expectedBytes: currentOutputImageBytes,
-    enabled: Boolean(currentOutputImageId),
-  })
 
   useEffect(() => {
     if (outputImageCount === 0) return
@@ -203,55 +195,38 @@ export default function DetailModal() {
   const maskSrc = task?.maskImageId ? imageSrcs[task.maskImageId] || '' : ''
   const allInputImageIds = task?.inputImageIds ?? []
 
-  useEffect(() => {
-    if (!currentOutputImageId || !currentDisplayImageSrc) return
+  const handleActiveImageReady = useCallback((imageId: string, image: HTMLImageElement) => {
+    if (imageId !== currentOutputImageId) return
+    const panel = imagePanelRef.current
+    if (!panel) return
 
-    let cancelled = false
-    const image = new Image()
-    image.onload = () => {
-      if (!cancelled && image.naturalWidth > 0 && image.naturalHeight > 0) {
-        setImageRatios((prev) => ({
-          ...prev,
-          [currentOutputImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
-        }))
-        setImageSizes((prev) => ({
-          ...prev,
-          [currentOutputImageId]: `${image.naturalWidth}×${image.naturalHeight}`,
-        }))
-      }
-    }
-    image.src = currentDisplayImageSrc
-    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+    const panelRect = panel.getBoundingClientRect()
+    const imageRect = image.getBoundingClientRect()
+    setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
+
+    if (image.naturalWidth > 0 && image.naturalHeight > 0) {
       setImageRatios((prev) => ({
         ...prev,
-        [currentOutputImageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
+        [imageId]: formatImageRatio(image.naturalWidth, image.naturalHeight),
       }))
       setImageSizes((prev) => ({
         ...prev,
-        [currentOutputImageId]: `${image.naturalWidth}×${image.naturalHeight}`,
+        [imageId]: `${image.naturalWidth}×${image.naturalHeight}`,
       }))
     }
-
-    return () => {
-      cancelled = true
-    }
-  }, [currentOutputImageId, currentDisplayImageSrc])
+  }, [currentOutputImageId])
 
   useEffect(() => {
     const updateImageLabelLeft = () => {
       const panel = imagePanelRef.current
-      const image = mainImageRef.current
-      if (!panel || !image) return
-
-      const panelRect = panel.getBoundingClientRect()
-      const imageRect = image.getBoundingClientRect()
-      setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
+      if (!panel) return
+      setImageLabelLeft(8)
     }
 
     updateImageLabelLeft()
     window.addEventListener('resize', updateImageLabelLeft)
     return () => window.removeEventListener('resize', updateImageLabelLeft)
-  }, [currentDisplayImageSrc])
+  }, [imageIndex, currentOutputImageSrc])
 
   useEffect(() => {
     let cancelled = false
@@ -288,8 +263,7 @@ export default function DetailModal() {
   const hasOutputImages = !isVideoTask && outputLen > 0
   const hasOutputVideo = isVideoTask && Boolean(task.outputVideos?.length)
   const hasRenderedOutput = isVideoTask ? Boolean(currentOutputVideoSrc) || hasOutputVideo : hasOutputImages
-  const isMainImageReady = Boolean(currentDisplayImageSrc) && !isMainImageLoading
-  const isTaskBlurred = (isVideoTask ? Boolean(currentOutputVideoSrc) : isMainImageReady) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
+  const isTaskBlurred = (isVideoTask ? Boolean(currentOutputVideoSrc) : hasOutputImages) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
   const runningStepText = task.serverStatus === 'queued'
     ? (task.queuePosition && task.queuePosition > 0 ? `排队中，前方还有 ${task.queueAhead ?? Math.max(task.queuePosition - 1, 0)} 个任务` : '排队中')
     : (task.currentStep || '正在继续生成剩余图片')
@@ -410,28 +384,20 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 flex items-end justify-center p-1 md:items-center md:p-4"
       onClick={() => setDetailTaskId(null)}
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="detail-modal-panel glass-surface-strong relative border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-4xl w-full max-h-[82dvh] overflow-hidden flex flex-col md:max-h-[90vh] md:flex-row z-10 ring-1 ring-black/5 dark:ring-white/10 animate-modal-in"
+        className="detail-modal-panel glass-surface-strong relative flex h-[min(96dvh,100%)] max-h-[96dvh] w-full max-w-4xl flex-col overflow-y-auto overscroll-contain rounded-3xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 animate-modal-in md:h-auto md:max-h-[90vh] md:flex-row md:overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex h-14 items-center justify-end px-4 md:hidden">
-          <button
-            onClick={() => setDetailTaskId(null)}
-            className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400"
-            aria-label="关闭"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-
         {/* 左侧：图片 */}
-        <div ref={imagePanelRef} className="md:w-1/2 w-full h-52 md:h-auto bg-gray-100 dark:bg-black/20 relative flex items-center justify-center flex-shrink-0 min-h-[13rem] md:min-h-[16rem]">
+        <div
+          ref={imagePanelRef}
+          className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 min-h-[70dvh] md:h-auto md:min-h-[16rem] md:w-1/2 md:flex-none"
+          style={{ touchAction: 'pan-y' }}
+        >
           {hasRenderedOutput && (
             <>
               {isVideoTask ? (
@@ -442,54 +408,36 @@ export default function DetailModal() {
                   blurred={isTaskBlurred}
                 />
               ) : (
-                <>
-                  {(isMainImageLoading || !currentDisplayImageSrc) && (
-                    <ImageLoadingOverlay
-                      progress={mainImageLoadProgress}
-                      imageIndex={imageIndex + 1}
-                      imageTotal={outputLen}
-                      variant="light"
-                    />
-                  )}
-                  {currentDisplayImageSrc && (
-                    <img
-                      ref={mainImageRef}
-                      src={currentDisplayImageSrc}
-                      data-image-id={currentOutputImageId}
-                      data-original-src={task.imageUrlsById?.[currentOutputImageId]}
-                      className={`saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer transition duration-200 ${
-                        isMainImageLoading ? 'opacity-0' : 'opacity-100'
-                      } ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
-                      onLoad={() => {
-                        const panel = imagePanelRef.current
-                        const image = mainImageRef.current
-                        if (!panel || !image) return
-
-                        const panelRect = panel.getBoundingClientRect()
-                        const imageRect = image.getBoundingClientRect()
-                        setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
-
-                        const remoteUrl = task.imageUrlsById?.[currentOutputImageId]
-                        if (remoteUrl && currentOutputImageId) {
-                          void cacheTaskImageForEditing(currentOutputImageId, remoteUrl, image)
-                        }
-                      }}
-                      onClick={() => {
-                        if (isMainImageLoading) return
-                        setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
-                      }}
-                      alt=""
-                    />
-                  )}
-                </>
+                <div className="absolute inset-0">
+                  <DetailOutputImageCarousel
+                    ref={carouselRef}
+                    task={task}
+                    imageSrcs={imageSrcs}
+                    imageIndex={imageIndex}
+                    onImageIndexChange={setImageIndex}
+                    isTaskBlurred={isTaskBlurred}
+                    onActiveImageReady={handleActiveImageReady}
+                    onOpenLightbox={(imageId) => setLightboxImageId(imageId, task.outputImages)}
+                  />
+                </div>
               )}
               <button
                 type="button"
+                onClick={() => setDetailTaskId(null)}
+                className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white/90 backdrop-blur transition hover:bg-black/60 md:hidden"
+                aria-label="关闭"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <button
+                type="button"
                 onClick={() => toggleTaskImageBlur(task.id)}
-                className={`absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur transition ${
+                className={`absolute top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur transition md:right-4 md:top-4 ${
                   isTaskBlurred
-                    ? 'border-blue-300/70 bg-blue-500/80 text-white'
-                    : 'border-white/30 bg-black/40 text-white/80 hover:bg-black/55'
+                    ? 'right-14 border-blue-300/70 bg-blue-500/80 text-white'
+                    : 'right-14 border-white/30 bg-black/40 text-white/80 hover:bg-black/55 md:right-4'
                 }`}
                 title={isTaskBlurred ? '解除当前任务模糊' : '模糊当前任务'}
               >
@@ -535,27 +483,29 @@ export default function DetailModal() {
               {!isVideoTask && outputLen > 1 && (
                 <>
                   <button
-                    onClick={() =>
-                      setImageIndex((current) => (current - 1 + outputLen) % outputLen)
-                    }
-                    className="absolute left-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                    type="button"
+                    data-no-carousel-swipe
+                    onClick={() => carouselRef.current?.animatePrev()}
+                    className="absolute left-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:left-2"
+                    aria-label="上一张"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                     </svg>
                   </button>
                   <button
-                    onClick={() =>
-                      setImageIndex((current) => (current + 1) % outputLen)
-                    }
-                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                    type="button"
+                    data-no-carousel-swipe
+                    onClick={() => carouselRef.current?.animateNext()}
+                    className="absolute right-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:right-2"
+                    aria-label="下一张"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </button>
                   <div
-                    className="absolute bottom-2 left-1/2 z-10 flex max-w-[min(74%,26rem)] -translate-x-1/2 flex-col items-center gap-1 rounded-2xl bg-black/50 px-2 py-1.5 text-white shadow-lg backdrop-blur-sm sm:max-w-[min(70%,28rem)]"
+                    className="absolute bottom-1.5 left-1/2 z-10 flex max-w-[min(88%,26rem)] -translate-x-1/2 flex-col items-center gap-0.5 rounded-xl bg-black/50 px-1.5 py-1 text-white shadow-lg backdrop-blur-sm sm:bottom-2 sm:max-w-[min(70%,28rem)] sm:gap-1 sm:rounded-2xl sm:px-2 sm:py-1.5"
                     onClick={stopThumbnailGesture}
                     onMouseDown={stopThumbnailGesture}
                     onTouchStart={stopThumbnailGesture}
@@ -571,7 +521,7 @@ export default function DetailModal() {
                             key={imgId}
                             type="button"
                             onClick={() => setImageIndex(index)}
-                            className={`h-8 w-8 shrink-0 overflow-hidden rounded-md border transition sm:h-9 sm:w-9 ${
+                            className={`h-7 w-7 shrink-0 overflow-hidden rounded-md border transition sm:h-9 sm:w-9 ${
                               index === imageIndex
                                 ? 'border-blue-400 ring-2 ring-blue-400/80'
                                 : 'border-white/30 opacity-70 hover:opacity-100'
@@ -655,7 +605,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="md:w-1/2 w-full p-4 overflow-y-auto flex flex-col md:p-5">
+        <div className="detail-modal-info-panel flex w-full flex-shrink-0 flex-col border-t border-gray-200/70 p-4 tiny-scrollbar dark:border-white/[0.08] md:min-h-0 md:w-1/2 md:flex-1 md:basis-0 md:flex-none md:overflow-y-auto md:overscroll-contain md:border-t-0 md:p-5">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"

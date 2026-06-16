@@ -66,6 +66,7 @@ export default function TaskCard({
   const longPressTimerRef = useRef<number | null>(null)
   const longPressTriggeredRef = useRef(false)
   const taskIdPopoverRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
 
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current != null) {
@@ -78,6 +79,20 @@ export default function TaskCard({
     target instanceof HTMLElement && Boolean(target.closest('img.saveable-image'))
 
   const handleTouchStart = (e: React.TouchEvent) => {
+    // 卡片预览区禁止双指捏合，避免连带页面缩放
+    if (e.touches.length > 1) {
+      e.preventDefault()
+      e.stopPropagation()
+      clearLongPressTimer()
+      touchStartRef.current = null
+      horizontalSwipeRef.current = false
+      swipeLockRef.current = null
+      setIsSwiping(false)
+      setSwipeOffset(0)
+      setSwipeActionActive(false)
+      return
+    }
+
     if (swipeResetTimerRef.current != null) {
       window.clearTimeout(swipeResetTimerRef.current)
       swipeResetTimerRef.current = null
@@ -115,6 +130,11 @@ export default function TaskCard({
   }
 
   const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length > 1) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     if (!touchStartRef.current) return
     const deltaX = e.touches[0].clientX - touchStartRef.current.x
     const deltaY = e.touches[0].clientY - touchStartRef.current.y
@@ -210,6 +230,25 @@ export default function TaskCard({
     clearLongPressTimer()
     if (swipeResetTimerRef.current != null) {
       window.clearTimeout(swipeResetTimerRef.current)
+    }
+  }, [])
+
+  // 原生拦截双指手势，避免预览图触发页面捏合缩放
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+
+    const blockMultiTouch = (event: TouchEvent) => {
+      if (event.touches.length > 1) {
+        event.preventDefault()
+      }
+    }
+
+    card.addEventListener('touchstart', blockMultiTouch, { passive: false })
+    card.addEventListener('touchmove', blockMultiTouch, { passive: false })
+    return () => {
+      card.removeEventListener('touchstart', blockMultiTouch)
+      card.removeEventListener('touchmove', blockMultiTouch)
     }
   }, [])
 
@@ -347,6 +386,7 @@ export default function TaskCard({
       </div>
 
       <div
+        ref={cardRef}
         className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
           !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
         } ${
@@ -361,7 +401,7 @@ export default function TaskCard({
           WebkitTouchCallout: 'none',
           WebkitUserSelect: 'none',
           userSelect: 'none',
-          touchAction: 'pan-y',
+          touchAction: 'manipulation',
         }}
         onClick={(e) => {
           if (Date.now() < suppressClickUntilRef.current) {
@@ -424,7 +464,10 @@ export default function TaskCard({
       )}
       <div className="flex h-40">
         {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div
+          className="task-card-preview relative flex h-full w-40 min-w-[10rem] flex-shrink-0 items-center justify-center overflow-hidden bg-gray-100 dark:bg-black/20"
+          style={{ touchAction: 'manipulation' }}
+        >
           {isVideoTask && thumbSrc && (
             <>
               <img

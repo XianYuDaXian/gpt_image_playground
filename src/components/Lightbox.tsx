@@ -1,9 +1,14 @@
 import { Suspense, lazy, useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable } from '../store'
+import { useStore, getCachedImage, ensureTaskImageAvailable } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
-import { useTrackedImageLoad } from '../hooks/useTrackedImageLoad'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
-import ImageLoadingOverlay from './ImageLoadingOverlay'
+import { resolveTaskImageDisplaySrc } from '../lib/resolveTaskImageDisplay'
+import {
+  isLightboxSwipeTarget,
+  isTouchTapLike,
+  type ImageCarouselHandle,
+} from '../lib/touchGesture'
+import LightboxImageCarousel from './LightboxImageCarousel'
 
 const ReferenceImageEditorModal = lazy(() => import('./ReferenceImageEditorModal'))
 
@@ -25,10 +30,16 @@ export default function Lightbox() {
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const setLightboxStartEditor = useStore((s) => s.setLightboxStartEditor)
   const inputImages = useStore((s) => s.inputImages)
-  const [src, setSrc] = useState('')
+  const [asyncSrc, setAsyncSrc] = useState('')
   const [showEditor, setShowEditor] = useState(false)
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
+
+  const syncSrc = useMemo(
+    () => (lightboxImageId ? resolveTaskImageDisplaySrc(lightboxImageId, tasks) : ''),
+    [lightboxImageId, tasks],
+  )
+  const src = syncSrc || asyncSrc
 
   const [maskImageSrc, setMaskImageSrc] = useState('')
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
@@ -36,33 +47,37 @@ export default function Lightbox() {
   const close = useCallback(() => setLightboxImageId(null), [setLightboxImageId])
   useCloseOnEscape(Boolean(lightboxImageId), close)
 
-  // 图片加载
+  // 同步缓存未命中时再异步拉取，避免打开大图时先清空 src 触发加载动画
   useEffect(() => {
     let cancelled = false
 
     if (!lightboxImageId) {
-      setSrc('')
+      setAsyncSrc('')
       setShowEditor(false)
       setLightboxStartEditor(false)
       return
     }
 
-    setSrc('')
+    if (syncSrc) {
+      setAsyncSrc('')
+      return
+    }
 
     const imageId = lightboxImageId
     const cached = getCachedImage(imageId)
     if (cached) {
-      setSrc(cached)
-    } else {
-      ensureTaskImageAvailable(imageId).then((url) => {
-        if (!cancelled && url) setSrc(url)
-      })
+      setAsyncSrc(cached)
+      return
     }
+
+    ensureTaskImageAvailable(imageId).then((url) => {
+      if (!cancelled && url) setAsyncSrc(url)
+    })
 
     return () => {
       cancelled = true
     }
-  }, [lightboxImageId, setLightboxStartEditor])
+  }, [lightboxImageId, syncSrc, setLightboxStartEditor])
 
   const isReferenceImage = Boolean(lightboxImageId && inputImages.some((image) => image.id === lightboxImageId))
 
@@ -134,25 +149,11 @@ export default function Lightbox() {
   const total = lightboxImageList.length
   const showNav = total > 1
 
-  const goTo = useCallback((idx: number) => {
+  const goToIndex = useCallback((idx: number) => {
     if (lightboxImageList.length === 0) return
     const wrapped = ((idx % lightboxImageList.length) + lightboxImageList.length) % lightboxImageList.length
     setLightboxImageId(lightboxImageList[wrapped], lightboxImageList)
   }, [lightboxImageList, setLightboxImageId])
-
-  const goPrev = useCallback(() => { if (showNav) goTo(currentIndex - 1) }, [showNav, currentIndex, goTo])
-  const goNext = useCallback(() => { if (showNav) goTo(currentIndex + 1) }, [showNav, currentIndex, goTo])
-
-  // 键盘左右切换
-  useEffect(() => {
-    if (!lightboxImageId || !showNav) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev() }
-      if (e.key === 'ArrowRight') { e.preventDefault(); goNext() }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [lightboxImageId, showNav, goPrev, goNext])
 
   if (!lightboxImageId) return null
 
@@ -160,14 +161,13 @@ export default function Lightbox() {
     <>
       <LightboxInner
         imageId={lightboxImageId}
-        src={src}
+        imageIds={lightboxImageList}
         maskPreviewSrc={maskPreviewSrc}
         onClose={close}
         showNav={showNav}
         currentIndex={currentIndex}
         total={total}
-        onPrev={goPrev}
-        onNext={goNext}
+        onGoToIndex={goToIndex}
         isReferenceImage={isReferenceImage}
         onEdit={() => setShowEditor(true)}
       />
@@ -193,41 +193,33 @@ export default function Lightbox() {
 
 interface LightboxInnerProps {
   imageId: string
-  src: string
+  imageIds: string[]
   maskPreviewSrc?: string
   onClose: () => void
   showNav: boolean
   currentIndex: number
   total: number
-  onPrev: () => void
-  onNext: () => void
+  onGoToIndex: (index: number) => void
   isReferenceImage: boolean
   onEdit: () => void
 }
 
 /** 内部组件：保证挂载时 DOM 已经存在，所有 ref / effect 都可靠 */
-function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, isReferenceImage, onEdit }: LightboxInnerProps) {
-  const tasks = useStore((s) => s.tasks)
+function LightboxInner({
+  imageId,
+  imageIds,
+  maskPreviewSrc,
+  onClose,
+  showNav,
+  currentIndex,
+  total,
+  onGoToIndex,
+  isReferenceImage,
+  onEdit,
+}: LightboxInnerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const imageRef = useRef<HTMLImageElement>(null)
-  const matchedTask = useMemo(
-    () => tasks.find((item) =>
-      item.inputImageIds.includes(imageId) ||
-      item.outputImages.includes(imageId) ||
-      item.maskImageId === imageId,
-    ) ?? null,
-    [tasks, imageId],
-  )
-  const expectedBytes = matchedTask?.imageBytesById?.[imageId] ?? null
-  const {
-    displaySrc,
-    isLoading: isImageLoading,
-    progress: imageLoadProgress,
-  } = useTrackedImageLoad(src, {
-    expectedBytes,
-    enabled: Boolean(imageId),
-  })
-
+  const carouselPanelRef = useRef<HTMLDivElement>(null)
+  const carouselRef = useRef<ImageCarouselHandle>(null)
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
   const txRef = useRef(0)
@@ -269,13 +261,29 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
   const didDragRef = useRef(false)
   const suppressNextClickRef = useRef(false)
 
+  const didNavSwipeRef = useRef(false)
+  const closeTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const handleCarouselSwipeGesture = useCallback((payload: { didSwipe: boolean; tapLike: boolean }) => {
+    if (payload.didSwipe) {
+      didNavSwipeRef.current = true
+      suppressNextClickRef.current = true
+      if (closeTapTimerRef.current) {
+        clearTimeout(closeTapTimerRef.current)
+        closeTapTimerRef.current = null
+      }
+      tapRef.current = { time: 0, x: 0, y: 0 }
+    }
+  }, [])
+
   // 切换图片时重置缩放
   useEffect(() => {
     scaleRef.current = 1
     txRef.current = 0
     tyRef.current = 0
+    didNavSwipeRef.current = false
     rerender()
-  }, [src, rerender])
+  }, [imageId, rerender])
 
   useEffect(() => {
     const suppressClick = () => {
@@ -287,7 +295,7 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
   }, [])
 
   const getCenter = useCallback(() => {
-    const rect = containerRef.current?.getBoundingClientRect()
+    const rect = carouselPanelRef.current?.getBoundingClientRect() ?? containerRef.current?.getBoundingClientRect()
     if (!rect) return { cx: 0, cy: 0 }
     return { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 }
   }, [])
@@ -408,7 +416,16 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
     const el = containerRef.current
     if (!el) return
 
+    const clearCloseTapTimer = () => {
+      if (closeTapTimerRef.current) {
+        clearTimeout(closeTapTimerRef.current)
+        closeTapTimerRef.current = null
+      }
+    }
+
     const onTouchStart = (e: TouchEvent) => {
+      clearCloseTapTimer()
+
       if (isLightboxControl(e.target)) {
         tapRef.current = { time: 0, x: 0, y: 0 }
         touchStartedOnImageRef.current = false
@@ -436,7 +453,8 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
         const t = e.touches[0]
         const now = Date.now()
         const prev = tapRef.current
-        touchStartedOnImageRef.current = e.target instanceof HTMLImageElement
+        touchStartedOnImageRef.current = isLightboxSwipeTarget(e.target)
+        didNavSwipeRef.current = false
 
         // 双击检测
         if (
@@ -497,16 +515,40 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
       if (e.touches.length < 2) pinchRef.current.active = false
       if (e.touches.length === 0) {
         dragRef.current.active = false
+
+        const endTouch = e.changedTouches[0]
+        const start = tapRef.current
+        const totalDeltaX = endTouch ? endTouch.clientX - start.x : 0
+        const totalDeltaY = endTouch ? endTouch.clientY - start.y : 0
+        const tapLike = isTouchTapLike(totalDeltaX, totalDeltaY)
+
         if (hadMultiTouchRef.current) {
           hadMultiTouchRef.current = false
           tapRef.current = { time: 0, x: 0, y: 0 }
           return
         }
-        // 单击关闭：未缩放时任意位置关闭；缩放时仅点击图片外关闭。
+
+        if (didNavSwipeRef.current) {
+          suppressNextClickRef.current = true
+          tapRef.current = { time: 0, x: 0, y: 0 }
+          return
+        }
+
+        // 单击关闭：未缩放时点击图片外关闭；有明显位移时不触发。
+        if (!tapLike) {
+          tapRef.current = { time: 0, x: 0, y: 0 }
+          return
+        }
+        if (scaleRef.current <= 1 && touchStartedOnImageRef.current) {
+          tapRef.current = { time: 0, x: 0, y: 0 }
+          return
+        }
         if (scaleRef.current <= 1 || !touchStartedOnImageRef.current) {
           const prev = tapRef.current
           if (prev.time > 0 && Date.now() - prev.time < 300) {
-            setTimeout(() => {
+            clearCloseTapTimer()
+            closeTapTimerRef.current = setTimeout(() => {
+              closeTapTimerRef.current = null
               if (tapRef.current.time === prev.time) {
                 onClose()
               }
@@ -519,18 +561,41 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
     el.addEventListener('touchstart', onTouchStart, { passive: false })
     el.addEventListener('touchmove', onTouchMove, { passive: false })
     el.addEventListener('touchend', onTouchEnd)
+    el.addEventListener('touchcancel', onTouchEnd)
     return () => {
+      clearCloseTapTimer()
       el.removeEventListener('touchstart', onTouchStart)
       el.removeEventListener('touchmove', onTouchMove)
       el.removeEventListener('touchend', onTouchEnd)
+      el.removeEventListener('touchcancel', onTouchEnd)
     }
   }, [apply, getCenter, onClose])
+
+  // 键盘左右切换（与箭头共用轮播补间动画）
+  useEffect(() => {
+    if (!showNav) return
+    const onKey = (e: KeyboardEvent) => {
+      if (scaleRef.current > 1) return
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        carouselRef.current?.animatePrev()
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        carouselRef.current?.animateNext()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showNav])
 
   const s = scaleRef.current
   const tx = txRef.current
   const ty = tyRef.current
   const isZoomed = s > 1
   const isDragging = dragRef.current.active || pinchRef.current.active
+  const zoomTransform = `translate(${tx}px, ${ty}px) scale(${s})`
+  const zoomTransition = isDragging ? 'none' : 'transform 0.2s ease-out'
   const zoomPercent = Math.round(s * 100)
 
   const navBtnClass =
@@ -541,7 +606,10 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
       ref={containerRef}
       data-lightbox-root
       className="fixed inset-0 z-[60] flex items-center justify-center select-none"
-      style={{ cursor: isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'pointer' }}
+      style={{
+        cursor: isZoomed ? (isDragging ? 'grabbing' : 'grab') : 'pointer',
+        touchAction: 'none',
+      }}
       onClick={onClick}
       onDoubleClick={onDoubleClick}
     >
@@ -559,49 +627,19 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
       >
         {isReferenceImage ? '高级编辑' : '高级编辑并加入参考图'}
       </button>
-      <div className="relative animate-zoom-in">
-        <div
-          className="relative flex min-h-[12rem] min-w-[12rem] items-center justify-center"
-          style={{
-            transform: `translate(${tx}px, ${ty}px) scale(${s})`,
-            transition: isDragging ? 'none' : 'transform 0.2s ease-out',
-            willChange: 'transform',
-          }}
-        >
-          {(isImageLoading || !displaySrc) && (
-            <ImageLoadingOverlay
-              progress={imageLoadProgress}
-              imageIndex={currentIndex >= 0 ? currentIndex + 1 : undefined}
-              imageTotal={total}
-              variant="dark"
-            />
-          )}
-          {displaySrc && (
-            <img
-              ref={imageRef}
-              src={displaySrc}
-              data-image-id={imageId}
-              data-original-src={matchedTask?.imageUrlsById?.[imageId]}
-              className={`saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl transition-opacity duration-200 ${
-                isImageLoading ? 'opacity-0' : 'opacity-100'
-              }`}
-              onLoad={(event) => {
-                const remoteUrl = matchedTask?.imageUrlsById?.[imageId]
-                if (!remoteUrl) return
-                void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
-              }}
-              onDragStart={(e) => e.preventDefault()}
-              alt=""
-            />
-          )}
-          {maskPreviewSrc && !isImageLoading && displaySrc && (
-            <img
-              src={maskPreviewSrc}
-              className="absolute inset-0 w-full h-full object-contain rounded-lg pointer-events-none"
-              alt=""
-            />
-          )}
-        </div>
+      <div className="pointer-events-auto relative flex h-[100dvh] w-[100vw] items-center justify-center animate-zoom-in">
+        <LightboxImageCarousel
+          ref={carouselRef}
+          imageIds={imageIds.length > 0 ? imageIds : [imageId]}
+          currentIndex={currentIndex >= 0 ? currentIndex : 0}
+          maskPreviewSrc={maskPreviewSrc}
+          zoomTransform={zoomTransform}
+          zoomTransition={zoomTransition}
+          swipeEnabled={showNav && !isZoomed}
+          onIndexChangeRequest={onGoToIndex}
+          onSwipeGesture={handleCarouselSwipeGesture}
+          carouselPanelRef={carouselPanelRef}
+        />
       </div>
 
       {/* 左右切换按钮 */}
@@ -613,7 +651,7 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
             onPointerDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
             onTouchEnd={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); goPrev() }}
+            onClick={(e) => { e.stopPropagation(); carouselRef.current?.animatePrev() }}
           >
             <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -625,7 +663,7 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
             onPointerDown={(e) => e.stopPropagation()}
             onTouchStart={(e) => e.stopPropagation()}
             onTouchEnd={(e) => e.stopPropagation()}
-            onClick={(e) => { e.stopPropagation(); goNext() }}
+            onClick={(e) => { e.stopPropagation(); carouselRef.current?.animateNext() }}
           >
             <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -651,7 +689,4 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
       )}
     </div>
   )
-
-  function goPrev() { onPrev() }
-  function goNext() { onNext() }
 }

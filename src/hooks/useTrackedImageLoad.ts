@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  getCachedLoadedImageById,
+  getCachedLoadedImageSrc,
+  peekCachedLoadedImageById,
+  peekCachedLoadedImageSrc,
+  setCachedLoadedImageById,
+  setCachedLoadedImageSrc,
+} from '../lib/imageLoadCache'
+import {
   createInitialImageLoadProgress,
   decodeImageUrl,
   fetchImageBlobWithProgress,
@@ -7,35 +15,83 @@ import {
   type ImageLoadProgress,
 } from '../lib/imageLoadProgress'
 
+function createDoneProgress(expectedBytes: number | null): ImageLoadProgress {
+  return {
+    stage: 'done',
+    loadedBytes: expectedBytes ?? 0,
+    totalBytes: expectedBytes,
+    percent: 100,
+    expectedBytes,
+  }
+}
+
+function resolveInitialDisplaySrc(src: string, imageId?: string) {
+  if (imageId) {
+    const cachedById = getCachedLoadedImageById(imageId)
+    if (cachedById) return cachedById
+  }
+  if (src) {
+    const cachedBySrc = getCachedLoadedImageSrc(src)
+    if (cachedBySrc) return cachedBySrc
+  }
+  return ''
+}
+
 export function useTrackedImageLoad(
   src: string,
   options?: {
+    imageId?: string
     expectedBytes?: number | null
     enabled?: boolean
   },
 ) {
+  const imageId = options?.imageId ?? ''
   const expectedBytes = options?.expectedBytes ?? null
   const enabled = options?.enabled ?? true
-  const [displaySrc, setDisplaySrc] = useState('')
-  const [progress, setProgress] = useState<ImageLoadProgress>(createInitialImageLoadProgress)
+  const initialDisplaySrc = enabled ? resolveInitialDisplaySrc(src, imageId) : ''
+  const [displaySrc, setDisplaySrc] = useState(initialDisplaySrc)
+  const [progress, setProgress] = useState<ImageLoadProgress>(
+    initialDisplaySrc ? createDoneProgress(expectedBytes) : createInitialImageLoadProgress(),
+  )
   const objectUrlRef = useRef<string | null>(null)
+  const ownsObjectUrlRef = useRef(false)
 
   useEffect(() => {
-    const cleanupObjectUrl = () => {
-      if (!objectUrlRef.current) return
+    const cleanupOwnedObjectUrl = () => {
+      if (!objectUrlRef.current || !ownsObjectUrlRef.current) return
       URL.revokeObjectURL(objectUrlRef.current)
       objectUrlRef.current = null
+      ownsObjectUrlRef.current = false
+    }
+
+    const finish = (nextDisplaySrc: string, ownsObjectUrl: boolean) => {
+      objectUrlRef.current = ownsObjectUrl ? nextDisplaySrc : null
+      ownsObjectUrlRef.current = ownsObjectUrl
+      if (src) setCachedLoadedImageSrc(src, nextDisplaySrc, ownsObjectUrl)
+      if (imageId) setCachedLoadedImageById(imageId, nextDisplaySrc, ownsObjectUrl)
+      setDisplaySrc(nextDisplaySrc)
+      setProgress(createDoneProgress(expectedBytes))
     }
 
     if (!enabled) {
-      cleanupObjectUrl()
+      cleanupOwnedObjectUrl()
       setDisplaySrc('')
       setProgress(createInitialImageLoadProgress())
       return
     }
 
+    if (imageId) {
+      const cachedById = getCachedLoadedImageById(imageId)
+      if (cachedById) {
+        cleanupOwnedObjectUrl()
+        setDisplaySrc(cachedById)
+        setProgress(createDoneProgress(expectedBytes))
+        return
+      }
+    }
+
     if (!src) {
-      cleanupObjectUrl()
+      cleanupOwnedObjectUrl()
       setDisplaySrc('')
       setProgress({
         stage: 'preparing',
@@ -47,36 +103,25 @@ export function useTrackedImageLoad(
       return
     }
 
+    const cachedBySrc = getCachedLoadedImageSrc(src)
+    if (cachedBySrc) {
+      cleanupOwnedObjectUrl()
+      if (imageId) setCachedLoadedImageById(imageId, cachedBySrc, cachedBySrc.startsWith('blob:'))
+      setDisplaySrc(cachedBySrc)
+      setProgress(createDoneProgress(expectedBytes))
+      return
+    }
+
     const abortController = new AbortController()
     let cancelled = false
 
-    const finish = (nextDisplaySrc: string) => {
-      if (cancelled) return
-      setDisplaySrc(nextDisplaySrc)
-      setProgress({
-        stage: 'done',
-        loadedBytes: expectedBytes ?? 0,
-        totalBytes: expectedBytes,
-        percent: 100,
-        expectedBytes,
-      })
-    }
-
     const run = async () => {
-      cleanupObjectUrl()
-      setDisplaySrc('')
+      cleanupOwnedObjectUrl()
 
       if (isInstantImageSrc(src)) {
-        setProgress({
-          stage: 'decoding',
-          loadedBytes: expectedBytes ?? 0,
-          totalBytes: expectedBytes,
-          percent: null,
-          expectedBytes,
-        })
         try {
           await decodeImageUrl(src)
-          finish(src)
+          if (!cancelled) finish(src, false)
         } catch {
           if (!cancelled) {
             setProgress({
@@ -91,6 +136,14 @@ export function useTrackedImageLoad(
         return
       }
 
+      setProgress({
+        stage: 'downloading',
+        loadedBytes: 0,
+        totalBytes: expectedBytes,
+        percent: 0,
+        expectedBytes,
+      })
+
       try {
         const blob = await fetchImageBlobWithProgress(
           src,
@@ -103,29 +156,14 @@ export function useTrackedImageLoad(
         if (cancelled) return
 
         const objectUrl = URL.createObjectURL(blob)
-        objectUrlRef.current = objectUrl
-        setProgress({
-          stage: 'decoding',
-          loadedBytes: blob.size,
-          totalBytes: blob.size,
-          percent: 100,
-          expectedBytes,
-        })
         await decodeImageUrl(objectUrl)
         if (cancelled) return
-        finish(objectUrl)
+        finish(objectUrl, true)
       } catch {
         if (cancelled || abortController.signal.aborted) return
-        setProgress({
-          stage: 'decoding',
-          loadedBytes: 0,
-          totalBytes: expectedBytes,
-          percent: null,
-          expectedBytes,
-        })
         try {
           await decodeImageUrl(src)
-          finish(src)
+          if (!cancelled) finish(src, false)
         } catch {
           if (!cancelled) {
             setProgress({
@@ -145,17 +183,28 @@ export function useTrackedImageLoad(
     return () => {
       cancelled = true
       abortController.abort()
-      cleanupObjectUrl()
+      if (objectUrlRef.current && ownsObjectUrlRef.current) {
+        const cachedBySrc = src ? peekCachedLoadedImageSrc(src) : null
+        const cachedById = imageId ? peekCachedLoadedImageById(imageId) : null
+        if (cachedBySrc !== objectUrlRef.current && cachedById !== objectUrlRef.current) {
+          URL.revokeObjectURL(objectUrlRef.current)
+        }
+        objectUrlRef.current = null
+        ownsObjectUrlRef.current = false
+      }
     }
-  }, [src, expectedBytes, enabled])
+  }, [src, imageId, expectedBytes, enabled])
 
   const isLoading = progress.stage === 'preparing'
     || progress.stage === 'downloading'
     || progress.stage === 'decoding'
 
+  const showLoadingOverlay = progress.stage === 'preparing' || progress.stage === 'downloading'
+
   return {
     displaySrc,
     isLoading,
+    showLoadingOverlay,
     progress,
     isError: progress.stage === 'error',
   }

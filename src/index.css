@@ -585,6 +585,30 @@ input[type="number"] {
   -webkit-backdrop-filter: none !important;
 }
 
+@media (max-width: 767px) {
+  .detail-modal-panel {
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .detail-modal-info-panel {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* 任务卡片：仅允许平移，禁止双指捏合页面缩放 */
+.task-card-preview,
+.task-card-preview img {
+  touch-action: manipulation;
+}
+
+@media (min-width: 768px) {
+  .detail-modal-image-panel,
+  .detail-modal-image-panel img.saveable-image {
+    touch-action: manipulation;
+  }
+}
+
 .detail-video-element {
   position: absolute;
   inset: 0;
