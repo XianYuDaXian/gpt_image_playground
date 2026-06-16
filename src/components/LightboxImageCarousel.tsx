@@ -8,6 +8,7 @@ import {
   isTouchTapLike,
   resolveTouchAxisLock,
   resolveTouchSwipeThreshold,
+  commitCarouselPendingSlide,
   type ImageCarouselHandle,
   type TouchAxisLock,
 } from '../lib/touchGesture'
@@ -126,6 +127,7 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   const panelRef = carouselPanelRef ?? internalPanelRef
   const trackRef = useRef<HTMLDivElement>(null)
   const [dragOffset, setDragOffset] = useState(0)
+  const [visualIndex, setVisualIndex] = useState(currentIndex)
   const [isDragging, setIsDragging] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
   const isAnimatingRef = useRef(false)
@@ -143,6 +145,9 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
 
   useEffect(() => {
     currentIndexRef.current = currentIndex
+    if (!isAnimatingRef.current && !isDraggingRef.current) {
+      setVisualIndex(currentIndex)
+    }
   }, [currentIndex])
 
   useEffect(() => {
@@ -187,9 +192,25 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
     onIndexChangeRequest(wrapped)
   }, [imageTotal, onIndexChangeRequest])
 
+  const commitPendingSlide = useCallback(() => {
+    const result = commitCarouselPendingSlide({
+      pendingIndexRef,
+      isAnimatingRef,
+      indexRef: currentIndexRef,
+      setIsAnimating,
+      goToIndex,
+      updateDragOffset,
+    })
+    if (result.committed) {
+      setVisualIndex(result.visualIndex)
+    }
+    return result.committed
+  }, [goToIndex, updateDragOffset])
+
   const runSlideAnimation = useCallback((targetOffset: number, pendingIndex: number | null) => {
     pendingIndexRef.current = pendingIndex
     setIsDragging(false)
+    isAnimatingRef.current = true
     setIsAnimating(true)
 
     requestAnimationFrame(() => {
@@ -202,8 +223,11 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   const finalizeSlideAnimation = useCallback(() => {
     const pendingIndex = pendingIndexRef.current
     pendingIndexRef.current = null
+    isAnimatingRef.current = false
     setIsAnimating(false)
     if (pendingIndex != null) {
+      currentIndexRef.current = pendingIndex
+      setVisualIndex(pendingIndex)
       goToIndex(pendingIndex)
     }
     updateDragOffset(0)
@@ -233,7 +257,8 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   }, [currentIndex, isAnimating, isDragging, updateDragOffset])
 
   const handleTouchStart = (event: React.TouchEvent) => {
-    if (!swipeEnabled || !showTrack || slideWidth <= 0 || isAnimating) return
+    if (!swipeEnabled || !showTrack || slideWidth <= 0) return
+    commitPendingSlide()
     if (!(event.target instanceof Element)) return
     if (!event.target.closest('img.saveable-image') && !event.target.closest('[data-lightbox-carousel]')) return
 
@@ -244,7 +269,10 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   }
 
   const handleTouchMove = (event: React.TouchEvent) => {
-    if (!touchStartRef.current || !swipeEnabled || !showTrack || slideWidth <= 0 || isAnimating) return
+    if (isAnimatingRef.current) {
+      commitPendingSlide()
+    }
+    if (!touchStartRef.current || !swipeEnabled || !showTrack || slideWidth <= 0) return
 
     const deltaX = event.touches[0].clientX - touchStartRef.current.x
     const deltaY = event.touches[0].clientY - touchStartRef.current.y
@@ -326,13 +354,14 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   }
 
   const animateStep = useCallback((direction: -1 | 1) => {
-    if (slideWidth <= 0 || isAnimatingRef.current || isDraggingRef.current || imageTotal <= 1) return
+    if (slideWidth <= 0 || isDraggingRef.current || imageTotal <= 1) return
+    if (isAnimatingRef.current) commitPendingSlide()
     const current = currentIndexRef.current
     if (direction < 0 && current <= 0) return
     if (direction > 0 && current >= imageTotal - 1) return
     const next = current + direction
     runSlideAnimation(direction > 0 ? -slideWidth : slideWidth, next)
-  }, [imageTotal, runSlideAnimation, slideWidth])
+  }, [commitPendingSlide, imageTotal, runSlideAnimation, slideWidth])
 
   useImperativeHandle(ref, () => ({
     animatePrev: () => animateStep(-1),
@@ -340,20 +369,22 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
   }), [animateStep])
 
   const handleTouchCancel = () => {
+    commitPendingSlide()
     touchStartRef.current = null
     swipeLockRef.current = null
     setIsDragging(false)
-    if (!isAnimating) {
+    if (!isAnimatingRef.current) {
       runSlideAnimation(0, null)
     }
     onSwipeGesture?.({ didSwipe: false, tapLike: true })
   }
 
   const translateX = showTrack && slideWidth > 0
-    ? -(currentIndex * slideWidth) + dragOffset
+    ? -(visualIndex * slideWidth) + dragOffset
     : 0
 
-  const trackTransition = isDragging
+  // 仅在补间动画阶段启用 transition，避免初次定位或外部切 index 时误播滑动
+  const trackTransition = isDragging || !isAnimating
     ? 'none'
     : `transform ${CAROUSEL_SLIDE_TRANSITION_MS}ms ${CAROUSEL_SLIDE_EASING}`
 
@@ -388,17 +419,17 @@ const LightboxImageCarousel = forwardRef<ImageCarouselHandle, LightboxImageCarou
             <div
               className="relative flex h-full w-full items-center justify-center"
               style={{
-                transform: index === currentIndex ? zoomTransform : 'none',
-                transition: index === currentIndex ? zoomTransition : 'none',
-                willChange: index === currentIndex ? 'transform' : undefined,
+                transform: index === visualIndex ? zoomTransform : 'none',
+                transition: index === visualIndex ? zoomTransition : 'none',
+                willChange: index === visualIndex ? 'transform' : undefined,
               }}
             >
               <LightboxSlide
                 imageId={imageId}
-                isActive={index === currentIndex}
+                isActive={index === visualIndex}
                 imageIndex={index + 1}
                 imageTotal={imageTotal}
-                maskPreviewSrc={index === currentIndex ? maskPreviewSrc : undefined}
+                maskPreviewSrc={index === visualIndex ? maskPreviewSrc : undefined}
               />
             </div>
           </div>

@@ -591,8 +591,27 @@ input[type="number"] {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
+  .detail-modal-image-panel {
+    touch-action: pan-y;
+  }
+
   .detail-modal-info-panel {
     padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (min-width: 768px) {
+  .detail-modal-panel {
+    min-height: min(90vh, 36rem);
+  }
+
+  .detail-modal-image-panel {
+    touch-action: manipulation;
+    min-height: min(90vh, 36rem);
+  }
+
+  .detail-modal-info-panel {
+    max-height: min(90vh, 36rem);
   }
 }
 

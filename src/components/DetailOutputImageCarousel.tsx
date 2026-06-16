@@ -4,10 +4,11 @@ import { useTrackedImageLoad } from '../hooks/useTrackedImageLoad'
 import {
   CAROUSEL_SLIDE_EASING,
   CAROUSEL_SLIDE_TRANSITION_MS,
-  isCarouselSwipeTarget,
+  isDetailCarouselSwipeTarget,
   isTouchTapLike,
   resolveTouchAxisLock,
   resolveTouchSwipeThreshold,
+  commitCarouselPendingSlide,
   type ImageCarouselHandle,
   type TouchAxisLock,
 } from '../lib/touchGesture'
@@ -87,7 +88,7 @@ function OutputImageSlide({
           data-image-id={imageId}
           data-original-src={originalSrc}
           className={`saveable-image max-h-[calc(100%-3.25rem)] max-w-full object-contain transition duration-200 md:max-h-[calc(100%-2rem)] md:max-w-[calc(100%-2rem)] ${
-            isActive ? 'cursor-pointer' : 'pointer-events-none'
+            isActive ? 'cursor-pointer' : ''
           } ${showLoadingOverlay && isActive ? 'opacity-0' : 'opacity-100'} ${
             isTaskBlurred ? 'scale-[1.02] blur-md' : ''
           }`}
@@ -141,6 +142,7 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   const trackRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const [dragOffset, setDragOffset] = useState(0)
+  const [visualIndex, setVisualIndex] = useState(imageIndex)
   const [isDragging, setIsDragging] = useState(false)
   const [isAnimating, setIsAnimating] = useState(false)
   const isAnimatingRef = useRef(false)
@@ -158,6 +160,9 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
 
   useEffect(() => {
     imageIndexRef.current = imageIndex
+    if (!isAnimatingRef.current && !isDraggingRef.current) {
+      setVisualIndex(imageIndex)
+    }
   }, [imageIndex])
 
   useEffect(() => {
@@ -217,9 +222,25 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
     setDragOffset(offset)
   }, [])
 
+  const commitPendingSlide = useCallback(() => {
+    const result = commitCarouselPendingSlide({
+      pendingIndexRef,
+      isAnimatingRef,
+      indexRef: imageIndexRef,
+      setIsAnimating,
+      goToIndex,
+      updateDragOffset,
+    })
+    if (result.committed) {
+      setVisualIndex(result.visualIndex)
+    }
+    return result.committed
+  }, [goToIndex, updateDragOffset])
+
   const runSlideAnimation = useCallback((targetOffset: number, pendingIndex: number | null) => {
     pendingIndexRef.current = pendingIndex
     setIsDragging(false)
+    isAnimatingRef.current = true
     setIsAnimating(true)
 
     requestAnimationFrame(() => {
@@ -232,8 +253,11 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   const finalizeSlideAnimation = useCallback(() => {
     const pendingIndex = pendingIndexRef.current
     pendingIndexRef.current = null
+    isAnimatingRef.current = false
     setIsAnimating(false)
     if (pendingIndex != null) {
+      imageIndexRef.current = pendingIndex
+      setVisualIndex(pendingIndex)
       goToIndex(pendingIndex)
     }
     updateDragOffset(0)
@@ -241,10 +265,10 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
 
   const handleTrackTransitionEnd = useCallback((event: React.TransitionEvent<HTMLDivElement>) => {
     if (event.propertyName !== 'transform') return
-    if (!isAnimating) return
+    if (!isAnimatingRef.current) return
     if (event.target !== trackRef.current) return
     finalizeSlideAnimation()
-  }, [finalizeSlideAnimation, isAnimating])
+  }, [finalizeSlideAnimation])
 
   useEffect(() => {
     if (!isAnimating) return
@@ -263,13 +287,14 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   }, [imageIndex, isAnimating, isDragging, updateDragOffset])
 
   const handleTouchStart = (event: React.TouchEvent) => {
-    if (outputLen <= 1 || slideWidth <= 0 || isAnimating) return
+    if (outputLen <= 1 || slideWidth <= 0) return
+    const committed = commitPendingSlide()
     if (event.touches.length > 1) {
       event.preventDefault()
       event.stopPropagation()
       return
     }
-    if (!isCarouselSwipeTarget(event.target)) return
+    if (!committed && !isDetailCarouselSwipeTarget(event.target)) return
 
     touchStartRef.current = { x: event.touches[0].clientX, y: event.touches[0].clientY }
     swipeLockRef.current = null
@@ -284,7 +309,16 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
       event.stopPropagation()
       return
     }
-    if (!touchStartRef.current || outputLen <= 1 || slideWidth <= 0 || isAnimating) return
+    if (isAnimatingRef.current) {
+      commitPendingSlide()
+      if (!touchStartRef.current && event.touches.length > 0 && isDetailCarouselSwipeTarget(event.target)) {
+        touchStartRef.current = { x: event.touches[0].clientX, y: event.touches[0].clientY }
+        swipeLockRef.current = 'horizontal'
+        suppressImageTapRef.current = true
+        setIsDragging(true)
+      }
+    }
+    if (!touchStartRef.current || outputLen <= 1 || slideWidth <= 0) return
 
     const deltaX = event.touches[0].clientX - touchStartRef.current.x
     const deltaY = event.touches[0].clientY - touchStartRef.current.y
@@ -361,22 +395,24 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   }
 
   const handleTouchCancel = () => {
+    commitPendingSlide()
     touchStartRef.current = null
     swipeLockRef.current = null
     setIsDragging(false)
-    if (!isAnimating) {
+    if (!isAnimatingRef.current) {
       runSlideAnimation(0, null)
     }
   }
 
   const animateStep = useCallback((direction: -1 | 1) => {
-    if (slideWidth <= 0 || isAnimatingRef.current || isDraggingRef.current || outputLen <= 1) return
+    if (slideWidth <= 0 || isDraggingRef.current || outputLen <= 1) return
+    if (isAnimatingRef.current) commitPendingSlide()
     const current = imageIndexRef.current
     if (direction < 0 && current <= 0) return
     if (direction > 0 && current >= outputLen - 1) return
     const next = current + direction
     runSlideAnimation(direction > 0 ? -slideWidth : slideWidth, next)
-  }, [outputLen, runSlideAnimation, slideWidth])
+  }, [commitPendingSlide, outputLen, runSlideAnimation, slideWidth])
 
   useImperativeHandle(ref, () => ({
     animatePrev: () => animateStep(-1),
@@ -392,18 +428,20 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   }, [onOpenLightbox])
 
   const translateX = slideWidth > 0
-    ? -(imageIndex * slideWidth) + dragOffset
+    ? -(visualIndex * slideWidth) + dragOffset
     : 0
 
-  const trackTransition = isDragging
+  // 仅在补间动画阶段启用 transition，避免打开大图或缩略图跳切时误播滑动
+  const trackTransition = isDragging || !isAnimating
     ? 'none'
     : `transform ${CAROUSEL_SLIDE_TRANSITION_MS}ms ${CAROUSEL_SLIDE_EASING}`
 
   return (
     <div
       ref={panelRef}
+      data-detail-carousel
       className="relative h-full w-full overflow-hidden"
-      style={{ touchAction: outputLen > 1 && !isAnimating ? 'pan-y' : 'manipulation' }}
+      style={{ touchAction: outputLen > 1 ? (isAnimating ? 'none' : 'pan-y') : 'manipulation' }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -432,7 +470,7 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
                 imageId={imageId}
                 src={src}
                 expectedBytes={expectedBytes}
-                isActive={index === imageIndex}
+                isActive={index === visualIndex}
                 imageIndex={index + 1}
                 imageTotal={outputLen}
                 isTaskBlurred={isTaskBlurred}

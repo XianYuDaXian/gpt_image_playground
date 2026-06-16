@@ -40,6 +40,12 @@ export function isCarouselSwipeTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('img.saveable-image'))
 }
 
+export function isDetailCarouselSwipeTarget(target: EventTarget | null) {
+  return target instanceof Element && Boolean(
+    target.closest('img.saveable-image') || target.closest('[data-detail-carousel]'),
+  )
+}
+
 export function isLightboxSwipeTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('img.saveable-image'))
 }
@@ -53,4 +59,41 @@ export const CAROUSEL_SLIDE_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)'
 export interface ImageCarouselHandle {
   animatePrev: () => void
   animateNext: () => void
+}
+
+interface CommitCarouselPendingSlideOptions {
+  pendingIndexRef: { current: number | null }
+  isAnimatingRef: { current: boolean }
+  indexRef: { current: number }
+  setIsAnimating: (value: boolean) => void
+  goToIndex: (index: number) => void
+  updateDragOffset: (offset: number) => void
+}
+
+export interface CommitCarouselPendingSlideResult {
+  committed: boolean
+  visualIndex: number
+}
+
+/** 立即结束轮播补间并提交待定 index，便于连续滑动打断 */
+export function commitCarouselPendingSlide(
+  options: CommitCarouselPendingSlideOptions,
+): CommitCarouselPendingSlideResult {
+  const visualIndex = options.indexRef.current
+  if (!options.isAnimatingRef.current) {
+    return { committed: false, visualIndex }
+  }
+
+  const pendingIndex = options.pendingIndexRef.current
+  options.pendingIndexRef.current = null
+  options.isAnimatingRef.current = false
+  options.setIsAnimating(false)
+
+  if (pendingIndex != null) {
+    options.indexRef.current = pendingIndex
+    options.goToIndex(pendingIndex)
+  }
+
+  options.updateDragOffset(0)
+  return { committed: true, visualIndex: options.indexRef.current }
 }

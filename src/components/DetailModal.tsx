@@ -389,14 +389,13 @@ export default function DetailModal() {
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="detail-modal-panel glass-surface-strong relative flex h-[min(96dvh,100%)] max-h-[96dvh] w-full max-w-4xl flex-col overflow-y-auto overscroll-contain rounded-3xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 animate-modal-in md:h-auto md:max-h-[90vh] md:flex-row md:overflow-hidden"
+        className="detail-modal-panel glass-surface-strong relative z-10 flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 animate-modal-in max-md:h-[min(96dvh,100%)] max-md:max-h-[96dvh] max-md:overflow-y-auto max-md:overscroll-contain md:max-h-[90vh] md:flex-row"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 左侧：图片 */}
         <div
           ref={imagePanelRef}
-          className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 min-h-[70dvh] md:h-auto md:min-h-[16rem] md:w-1/2 md:flex-none"
-          style={{ touchAction: 'pan-y' }}
+          className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 max-md:h-[70dvh] max-md:min-h-[70dvh] md:w-1/2 md:min-h-[16rem] md:self-stretch"
         >
           {hasRenderedOutput && (
             <>
@@ -605,7 +604,7 @@ export default function DetailModal() {
         </div>
 
         {/* 右侧：信息 */}
-        <div className="detail-modal-info-panel flex w-full flex-shrink-0 flex-col border-t border-gray-200/70 p-4 tiny-scrollbar dark:border-white/[0.08] md:min-h-0 md:w-1/2 md:flex-1 md:basis-0 md:flex-none md:overflow-y-auto md:overscroll-contain md:border-t-0 md:p-5">
+        <div className="detail-modal-info-panel flex w-full min-w-0 flex-col border-t border-gray-200/70 p-4 tiny-scrollbar dark:border-white/[0.08] max-md:flex-shrink-0 md:w-1/2 md:overflow-y-auto md:overscroll-contain md:border-t-0 md:p-5">
           <button
             onClick={() => setDetailTaskId(null)}
             className="absolute top-3 right-3 hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-white/[0.06] transition text-gray-400 z-10 md:block"
