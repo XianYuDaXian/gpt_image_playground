@@ -1,7 +1,9 @@
-import { Suspense, lazy, useEffect, useState, useRef, useCallback } from 'react'
+import { Suspense, lazy, useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useStore, cacheTaskImageForEditing, getCachedImage, ensureTaskImageAvailable } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useTrackedImageLoad } from '../hooks/useTrackedImageLoad'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
+import ImageLoadingOverlay from './ImageLoadingOverlay'
 
 const ReferenceImageEditorModal = lazy(() => import('./ReferenceImageEditorModal'))
 
@@ -152,7 +154,7 @@ export default function Lightbox() {
     return () => window.removeEventListener('keydown', onKey)
   }, [lightboxImageId, showNav, goPrev, goNext])
 
-  if (!lightboxImageId || !src) return null
+  if (!lightboxImageId) return null
 
   return (
     <>
@@ -207,6 +209,24 @@ interface LightboxInnerProps {
 function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, currentIndex, total, onPrev, onNext, isReferenceImage, onEdit }: LightboxInnerProps) {
   const tasks = useStore((s) => s.tasks)
   const containerRef = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const matchedTask = useMemo(
+    () => tasks.find((item) =>
+      item.inputImageIds.includes(imageId) ||
+      item.outputImages.includes(imageId) ||
+      item.maskImageId === imageId,
+    ) ?? null,
+    [tasks, imageId],
+  )
+  const expectedBytes = matchedTask?.imageBytesById?.[imageId] ?? null
+  const {
+    displaySrc,
+    isLoading: isImageLoading,
+    progress: imageLoadProgress,
+  } = useTrackedImageLoad(src, {
+    expectedBytes,
+    enabled: Boolean(imageId),
+  })
 
   // 用 ref 追踪最新变换，避免闭包过期
   const scaleRef = useRef(1)
@@ -541,36 +561,40 @@ function LightboxInner({ imageId, src, maskPreviewSrc, onClose, showNav, current
       </button>
       <div className="relative animate-zoom-in">
         <div
-          className="relative flex items-center justify-center"
+          className="relative flex min-h-[12rem] min-w-[12rem] items-center justify-center"
           style={{
             transform: `translate(${tx}px, ${ty}px) scale(${s})`,
             transition: isDragging ? 'none' : 'transform 0.2s ease-out',
             willChange: 'transform',
           }}
         >
-          <img
-            src={src}
-            data-image-id={imageId}
-            data-original-src={tasks.find((item) =>
-              item.inputImageIds.includes(imageId) ||
-              item.outputImages.includes(imageId) ||
-              item.maskImageId === imageId,
-            )?.imageUrlsById?.[imageId]}
-            className="saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
-            onLoad={(event) => {
-              const task = tasks.find((item) =>
-                item.inputImageIds.includes(imageId) ||
-                item.outputImages.includes(imageId) ||
-                item.maskImageId === imageId,
-              )
-              const remoteUrl = task?.imageUrlsById?.[imageId]
-              if (!remoteUrl) return
-              void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
-            }}
-            onDragStart={(e) => e.preventDefault()}
-            alt=""
-          />
-          {maskPreviewSrc && (
+          {(isImageLoading || !displaySrc) && (
+            <ImageLoadingOverlay
+              progress={imageLoadProgress}
+              imageIndex={currentIndex >= 0 ? currentIndex + 1 : undefined}
+              imageTotal={total}
+              variant="dark"
+            />
+          )}
+          {displaySrc && (
+            <img
+              ref={imageRef}
+              src={displaySrc}
+              data-image-id={imageId}
+              data-original-src={matchedTask?.imageUrlsById?.[imageId]}
+              className={`saveable-image max-w-[85vw] max-h-[85vh] object-contain rounded-lg shadow-2xl transition-opacity duration-200 ${
+                isImageLoading ? 'opacity-0' : 'opacity-100'
+              }`}
+              onLoad={(event) => {
+                const remoteUrl = matchedTask?.imageUrlsById?.[imageId]
+                if (!remoteUrl) return
+                void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
+              }}
+              onDragStart={(e) => e.preventDefault()}
+              alt=""
+            />
+          )}
+          {maskPreviewSrc && !isImageLoading && displaySrc && (
             <img
               src={maskPreviewSrc}
               className="absolute inset-0 w-full h-full object-contain rounded-lg pointer-events-none"

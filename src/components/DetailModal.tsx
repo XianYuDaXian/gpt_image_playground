@@ -1,6 +1,8 @@
 import { useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
 import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useTrackedImageLoad } from '../hooks/useTrackedImageLoad'
+import ImageLoadingOverlay from './ImageLoadingOverlay'
 import { formatImageRatio } from '../lib/size'
 import { ActualValueBadge, DetailParamValue } from '../lib/paramDisplay'
 import { copyBlobToClipboard, copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
@@ -19,6 +21,18 @@ function formatBytes(bytes: number) {
     unitIndex += 1
   }
   return `${value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${units[unitIndex]}`
+}
+
+function resolveTaskImageSrc(
+  imageId: string,
+  imageSrcs: Record<string, string>,
+  task?: {
+    imageUrlsById?: Record<string, string>
+    imagePreviewUrlsById?: Record<string, string>
+  } | null,
+) {
+  if (!imageId || !task) return ''
+  return imageSrcs[imageId] || task.imageUrlsById?.[imageId] || task.imagePreviewUrlsById?.[imageId] || ''
 }
 
 export default function DetailModal() {
@@ -155,9 +169,23 @@ export default function DetailModal() {
     }
   }, [task])
 
+  const outputImageCount = task?.outputImages?.length ?? 0
   const currentOutputImageId = task?.outputImages?.[imageIndex] || ''
   const currentOutputImageBytes = currentOutputImageId ? task?.imageBytesById?.[currentOutputImageId] ?? null : null
-  const currentOutputImageSrc = currentOutputImageId ? imageSrcs[currentOutputImageId] || '' : ''
+  const currentOutputImageSrc = currentOutputImageId ? resolveTaskImageSrc(currentOutputImageId, imageSrcs, task) : ''
+  const {
+    displaySrc: currentDisplayImageSrc,
+    isLoading: isMainImageLoading,
+    progress: mainImageLoadProgress,
+  } = useTrackedImageLoad(currentOutputImageSrc, {
+    expectedBytes: currentOutputImageBytes,
+    enabled: Boolean(currentOutputImageId),
+  })
+
+  useEffect(() => {
+    if (outputImageCount === 0) return
+    setImageIndex((current) => (current >= outputImageCount ? outputImageCount - 1 : current))
+  }, [outputImageCount])
   const currentOutputVideoId = task?.outputVideos?.[0] || ''
   const currentOutputVideoRemoteSrc = currentOutputVideoId
     ? task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
@@ -176,7 +204,7 @@ export default function DetailModal() {
   const allInputImageIds = task?.inputImageIds ?? []
 
   useEffect(() => {
-    if (!currentOutputImageId || !currentOutputImageSrc) return
+    if (!currentOutputImageId || !currentDisplayImageSrc) return
 
     let cancelled = false
     const image = new Image()
@@ -192,7 +220,7 @@ export default function DetailModal() {
         }))
       }
     }
-    image.src = currentOutputImageSrc
+    image.src = currentDisplayImageSrc
     if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
       setImageRatios((prev) => ({
         ...prev,
@@ -207,7 +235,7 @@ export default function DetailModal() {
     return () => {
       cancelled = true
     }
-  }, [currentOutputImageId, currentOutputImageSrc])
+  }, [currentOutputImageId, currentDisplayImageSrc])
 
   useEffect(() => {
     const updateImageLabelLeft = () => {
@@ -223,7 +251,7 @@ export default function DetailModal() {
     updateImageLabelLeft()
     window.addEventListener('resize', updateImageLabelLeft)
     return () => window.removeEventListener('resize', updateImageLabelLeft)
-  }, [currentOutputImageSrc])
+  }, [currentDisplayImageSrc])
 
   useEffect(() => {
     let cancelled = false
@@ -245,7 +273,7 @@ export default function DetailModal() {
 
   if (!task) return null
 
-  const outputLen = task.outputImages?.length || 0
+  const outputLen = outputImageCount
   const isVideoTask = task.taskType === 'video'
   const videoParams = isVideoTask ? task.params as VideoTaskParams : null
   const currentImageRatio = currentOutputImageId ? imageRatios[currentOutputImageId] : ''
@@ -257,8 +285,11 @@ export default function DetailModal() {
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const showPromptWarning = Boolean(currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const aggregateActualParams = outputLen > 0 ? { ...task.actualParams, n: outputLen } : task.actualParams
-  const hasRenderedOutput = Boolean(isVideoTask ? currentOutputVideoSrc : outputLen > 0 && currentOutputImageSrc)
-  const isTaskBlurred = hasRenderedOutput && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
+  const hasOutputImages = !isVideoTask && outputLen > 0
+  const hasOutputVideo = isVideoTask && Boolean(task.outputVideos?.length)
+  const hasRenderedOutput = isVideoTask ? Boolean(currentOutputVideoSrc) || hasOutputVideo : hasOutputImages
+  const isMainImageReady = Boolean(currentDisplayImageSrc) && !isMainImageLoading
+  const isTaskBlurred = (isVideoTask ? Boolean(currentOutputVideoSrc) : isMainImageReady) && (taskImageBlurOverrides[task.id] ?? blurLoadedImages)
   const runningStepText = task.serverStatus === 'queued'
     ? (task.queuePosition && task.queuePosition > 0 ? `排队中，前方还有 ${task.queueAhead ?? Math.max(task.queuePosition - 1, 0)} 个任务` : '排队中')
     : (task.currentStep || '正在继续生成剩余图片')
@@ -411,31 +442,46 @@ export default function DetailModal() {
                   blurred={isTaskBlurred}
                 />
               ) : (
-              <img
-                ref={mainImageRef}
-                src={currentOutputImageSrc}
-                data-image-id={currentOutputImageId}
-                data-original-src={task.imageUrlsById?.[currentOutputImageId]}
-                className={`saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer transition duration-200 ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
-                onLoad={() => {
-                  const panel = imagePanelRef.current
-                  const image = mainImageRef.current
-                  if (!panel || !image) return
+                <>
+                  {(isMainImageLoading || !currentDisplayImageSrc) && (
+                    <ImageLoadingOverlay
+                      progress={mainImageLoadProgress}
+                      imageIndex={imageIndex + 1}
+                      imageTotal={outputLen}
+                      variant="light"
+                    />
+                  )}
+                  {currentDisplayImageSrc && (
+                    <img
+                      ref={mainImageRef}
+                      src={currentDisplayImageSrc}
+                      data-image-id={currentOutputImageId}
+                      data-original-src={task.imageUrlsById?.[currentOutputImageId]}
+                      className={`saveable-image max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain cursor-pointer transition duration-200 ${
+                        isMainImageLoading ? 'opacity-0' : 'opacity-100'
+                      } ${isTaskBlurred ? 'scale-[1.02] blur-md' : ''}`}
+                      onLoad={() => {
+                        const panel = imagePanelRef.current
+                        const image = mainImageRef.current
+                        if (!panel || !image) return
 
-                  const panelRect = panel.getBoundingClientRect()
-                  const imageRect = image.getBoundingClientRect()
-                  setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
+                        const panelRect = panel.getBoundingClientRect()
+                        const imageRect = image.getBoundingClientRect()
+                        setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
 
-                  const remoteUrl = task.imageUrlsById?.[currentOutputImageId]
-                  if (remoteUrl && currentOutputImageId) {
-                    void cacheTaskImageForEditing(currentOutputImageId, remoteUrl, image)
-                  }
-                }}
-                onClick={() =>
-                  setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
-                }
-                alt=""
-              />
+                        const remoteUrl = task.imageUrlsById?.[currentOutputImageId]
+                        if (remoteUrl && currentOutputImageId) {
+                          void cacheTaskImageForEditing(currentOutputImageId, remoteUrl, image)
+                        }
+                      }}
+                      onClick={() => {
+                        if (isMainImageLoading) return
+                        setLightboxImageId(task.outputImages[imageIndex], task.outputImages)
+                      }}
+                      alt=""
+                    />
+                  )}
+                </>
               )}
               <button
                 type="button"
@@ -490,11 +536,9 @@ export default function DetailModal() {
                 <>
                   <button
                     onClick={() =>
-                      setImageIndex(
-                        (imageIndex - 1 + outputLen) % outputLen,
-                      )
+                      setImageIndex((current) => (current - 1 + outputLen) % outputLen)
                     }
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                    className="absolute left-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -502,9 +546,9 @@ export default function DetailModal() {
                   </button>
                   <button
                     onClick={() =>
-                      setImageIndex((imageIndex + 1) % outputLen)
+                      setImageIndex((current) => (current + 1) % outputLen)
                     }
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                    className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                   >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -521,7 +565,7 @@ export default function DetailModal() {
                   >
                     <div className="mask-edge-x tiny-scrollbar flex max-w-[10rem] gap-1 overflow-x-auto px-2 py-0.5 sm:max-w-[16rem] md:max-w-[18rem]">
                       {task.outputImages.map((imgId, index) => {
-                        const src = imageSrcs[imgId] || task.imageUrlsById?.[imgId] || ''
+                        const src = resolveTaskImageSrc(imgId, imageSrcs, task)
                         return (
                           <button
                             key={imgId}
