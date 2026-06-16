@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth } from '../lib/auth.js'
-import { serializeTaskRecord, loadSerializedTask } from '../lib/taskDto.js'
+import { serializeTaskRecord, loadSerializedTask, resolveProviderModelLabel } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
 
 const ADMIN_TASK_LIST_LIMIT = 2000
@@ -376,12 +376,19 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    const inputImageCount = pendingFiles.filter((file) => file.fieldname !== 'mask').length
+    const providerProfileModel = resolveProviderModelLabel(providerProfile, {
+      taskType,
+      inputImageCount,
+    })
+
     const task = app.db.createTask({
       id: taskId,
       prompt,
       taskType,
       paramsJson: JSON.stringify(taskType === 'video' ? parsedVideoParams : parsedParams),
       providerProfileId: providerProfile.id,
+      providerProfileModel,
       ownerUsageCodeId: auth.role === 'user' ? selectedUsageCodeId : null,
       ownerKind: auth.role === 'user' ? 'usage_code' : 'admin',
       reservedImageCredits,

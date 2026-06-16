@@ -14,6 +14,7 @@ import {
   fetchBackendRuntimeSettings,
   fetchBackendUsageCodeEvents,
   fetchBackendUsageCodes,
+  fetchBackendAdminTaskCleanupCandidates,
   fetchBackendManagementLogs,
   fetchBackendMediaStats,
   resetBackendRemoteData,
@@ -35,6 +36,7 @@ import {
   type BackendUsageCodeEventTimePreset,
   type BackendUsageCodeUserTier,
   type BackendUsageCode,
+  type BackendAdminTaskCleanupCandidate,
 } from '../lib/backendSettings'
 import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
 import {
@@ -180,6 +182,7 @@ function createEmptyProfile(): BackendProviderProfile {
     veniceGenerateEnabled: true,
     veniceEditEnabled: true,
     veniceMultiEditEnabled: true,
+    veniceSkipResolution: false,
     apiMode: 'images',
     timeoutSeconds: DEFAULT_SETTINGS.timeout,
     codexCli: false,
@@ -210,6 +213,7 @@ function createCopiedProfile(profile: BackendProviderProfile): BackendProviderPr
     veniceGenerateEnabled: profile.veniceGenerateEnabled ?? true,
     veniceEditEnabled: profile.veniceEditEnabled ?? true,
     veniceMultiEditEnabled: profile.veniceMultiEditEnabled ?? true,
+    veniceSkipResolution: profile.veniceSkipResolution ?? false,
     isDefault: false,
   }
 }
@@ -542,6 +546,11 @@ export default function SettingsModal() {
   const [isImporting, setIsImporting] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [isClearingRemote, setIsClearingRemote] = useState(false)
+  const [selectedCleanupUsageCodeIds, setSelectedCleanupUsageCodeIds] = useState<string[]>([])
+  const [cleanupUsageCodeSearchQuery, setCleanupUsageCodeSearchQuery] = useState('')
+  const [adminTaskCleanupCandidates, setAdminTaskCleanupCandidates] = useState<BackendAdminTaskCleanupCandidate[]>([])
+  const [selectedCleanupAdminTaskIds, setSelectedCleanupAdminTaskIds] = useState<string[]>([])
+  const [cleanupAdminTaskSearchQuery, setCleanupAdminTaskSearchQuery] = useState('')
   const [isSavingReminders, setIsSavingReminders] = useState(false)
   const [usageCodeExportSummary, setUsageCodeExportSummary] = useState<UsageCodeMediaExportSummary | null>(null)
   const [usageCodeExportFiles, setUsageCodeExportFiles] = useState<UsageCodeMediaExportFile[]>([])
@@ -640,6 +649,62 @@ export default function SettingsModal() {
         .includes(query),
     )
   }, [usageCodeSearchQuery, usageCodes])
+
+  const filteredCleanupUsageCodes = useMemo(() => {
+    const query = cleanupUsageCodeSearchQuery.trim().toLowerCase()
+    if (!query) return usageCodes
+    return usageCodes.filter((code) =>
+      [code.name, code.code ?? '', formatUsageCodeUserTier(code.userTier)]
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [cleanupUsageCodeSearchQuery, usageCodes])
+
+  const selectedCleanupUsageCodeSummary = useMemo(() => {
+    const selectedCodes = usageCodes.filter((code) => selectedCleanupUsageCodeIds.includes(code.id))
+    return {
+      count: selectedCodes.length,
+      imageCount: selectedCodes.reduce((sum, code) => sum + (code.outputImageCount ?? 0), 0),
+      videoCount: selectedCodes.reduce((sum, code) => sum + (code.outputVideoCount ?? 0), 0),
+      totalBytes: selectedCodes.reduce((sum, code) => sum + (code.taskMediaBytes ?? 0), 0),
+    }
+  }, [selectedCleanupUsageCodeIds, usageCodes])
+
+  const formatAdminCleanupTaskTypeLabel = (taskType: string) => (taskType === 'video' ? '视频' : '图片')
+
+  const filteredCleanupAdminTasks = useMemo(() => {
+    const query = cleanupAdminTaskSearchQuery.trim().toLowerCase()
+    if (!query) return adminTaskCleanupCandidates
+    return adminTaskCleanupCandidates.filter((task) =>
+      [
+        task.prompt,
+        task.taskType,
+        formatAdminCleanupTaskTypeLabel(task.taskType),
+        task.id,
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    )
+  }, [cleanupAdminTaskSearchQuery, adminTaskCleanupCandidates])
+
+  const selectedCleanupAdminTaskSummary = useMemo(() => {
+    const selectedTasks = adminTaskCleanupCandidates.filter((task) => selectedCleanupAdminTaskIds.includes(task.id))
+    return {
+      count: selectedTasks.length,
+      imageCount: selectedTasks.reduce((sum, task) => sum + (task.outputImageCount ?? 0), 0),
+      videoCount: selectedTasks.reduce((sum, task) => sum + (task.outputVideoCount ?? 0), 0),
+      totalBytes: selectedTasks.reduce((sum, task) => sum + (task.taskMediaBytes ?? 0), 0),
+    }
+  }, [selectedCleanupAdminTaskIds, adminTaskCleanupCandidates])
+
+  const allAdminTaskCleanupSummary = useMemo(() => ({
+    count: adminTaskCleanupCandidates.length,
+    imageCount: adminTaskCleanupCandidates.reduce((sum, task) => sum + (task.outputImageCount ?? 0), 0),
+    videoCount: adminTaskCleanupCandidates.reduce((sum, task) => sum + (task.outputVideoCount ?? 0), 0),
+    totalBytes: adminTaskCleanupCandidates.reduce((sum, task) => sum + (task.taskMediaBytes ?? 0), 0),
+  }), [adminTaskCleanupCandidates])
 
   const calculateQuotaExpression = (rawValue: string, baseValue: number) => {
     const value = rawValue.trim().replace(/\s+/g, '')
@@ -1081,7 +1146,7 @@ export default function SettingsModal() {
   }
 
   const loadSettings = async () => {
-    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextUsageCodeExportFiles, nextReminders, nextManagementLogs, nextMediaStats] = await Promise.all([
+    const [runtimeSettings, nextProfiles, nextProviderOptions, nextDistribution, nextUsageCodes, nextUsageCodeExportSummary, nextUsageCodeExportFiles, nextReminders, nextManagementLogs, nextMediaStats, nextAdminTaskCleanupCandidates] = await Promise.all([
       fetchBackendRuntimeSettings().catch(() => null),
       isAdmin ? fetchBackendProviderProfiles().catch(() => []) : Promise.resolve([]),
       fetchBackendProviderOptions().catch(() => []),
@@ -1092,6 +1157,7 @@ export default function SettingsModal() {
       isAdmin ? fetchAdminBackendReminders().catch(() => []) : fetchBackendReminders().catch(() => []),
       isAdmin ? fetchBackendManagementLogs().catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
       isAdmin ? fetchBackendMediaStats().catch(() => null) : Promise.resolve(null),
+      isAdmin ? fetchBackendAdminTaskCleanupCandidates().catch(() => []) : Promise.resolve([]),
     ])
 
     const nextDraft: AppSettings = {
@@ -1169,6 +1235,7 @@ export default function SettingsModal() {
     setUsageCodeExportSummary(nextUsageCodeExportSummary)
     setManagementLogs(nextManagementLogs.items)
     setMediaStats(nextMediaStats)
+    setAdminTaskCleanupCandidates(nextAdminTaskCleanupCandidates)
     setExpandedUsageCodeIds((prev) => {
       const existing = new Set(prev)
       return nextUsageCodes
@@ -1209,6 +1276,17 @@ export default function SettingsModal() {
     if (backupState?.phase !== 'completed' && backupState?.phase !== 'failed') return
     void fetchBackendMediaStats()
       .then((result) => setMediaStats(result))
+      .catch(() => undefined)
+  }, [showSettings, isAdmin, activeTab, backupState?.phase, backupState?.finishedAt])
+
+  useEffect(() => {
+    if (!showSettings || !isAdmin || activeTab !== 'data') return
+    if (backupState?.phase !== 'completed' && backupState?.phase !== 'failed') return
+    void fetchBackendAdminTaskCleanupCandidates()
+      .then((items) => {
+        setAdminTaskCleanupCandidates(items)
+        setSelectedCleanupAdminTaskIds((prev) => prev.filter((id) => items.some((item) => item.id === id)))
+      })
       .catch(() => undefined)
   }, [showSettings, isAdmin, activeTab, backupState?.phase, backupState?.finishedAt])
 
@@ -1385,14 +1463,17 @@ export default function SettingsModal() {
       veniceMultiEditEnabled: profileDraft.apiMode === 'venice_images'
         ? profileDraft.veniceMultiEditEnabled !== false
         : true,
+      veniceSkipResolution: profileDraft.apiMode === 'venice_images'
+        ? profileDraft.veniceSkipResolution === true
+        : false,
       modelOptions: profileDraft.apiMode === 'venice_images'
-        ? Array.from(new Set([
-          profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-          profileDraft.veniceGenerateModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-          profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-          profileDraft.veniceMultiEditModel?.trim() || profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-          ...(profileDraft.modelOptions ?? []),
-        ].map((item) => String(item ?? '').trim()).filter(Boolean)))
+        ? (() => {
+            const base = profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode)
+            const generateModel = profileDraft.veniceGenerateModel?.trim() || base
+            const editModel = profileDraft.veniceEditModel?.trim() || base
+            const multiEditModel = profileDraft.veniceMultiEditModel?.trim() || editModel || base
+            return [base, generateModel, editModel, multiEditModel]
+          })()
         : Array.from(new Set(
           [profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode), ...(profileDraft.modelOptions ?? [])]
             .map((item) => String(item ?? '').trim())
@@ -1909,10 +1990,13 @@ export default function SettingsModal() {
     }
   }
 
-  const handleResetRemoteData = async (mode: 'tasks' | 'all' | 'usage_code_tasks_only') => {
+  const handleResetRemoteData = async (
+    mode: 'tasks' | 'all' | 'usage_code_tasks_only' | 'admin_tasks_only',
+    options?: { usageCodeIds?: string[]; taskIds?: string[] },
+  ) => {
     setIsClearingRemote(true)
     try {
-      await resetBackendRemoteData(mode)
+      await resetBackendRemoteData(mode, options)
       const latestAuth = await fetchAuthStatus()
       useStore.getState().setAuthStatus(latestAuth)
       useStore.getState().showToast('清理任务已提交，请等待进度完成', 'success')
@@ -2769,6 +2853,14 @@ export default function SettingsModal() {
                 )}
                 {profileDraft.apiMode !== 'videos' && (
                   <>
+                    {profileDraft.apiMode === 'venice_images' && (
+                      <PreferenceRow
+                        title="不传递分辨率"
+                        description="开启后，威尼斯图片编辑请求不会附带 resolution 参数。"
+                        checked={profileDraft.veniceSkipResolution === true}
+                        onChange={(checked) => updateProfileDraft({ veniceSkipResolution: checked })}
+                      />
+                    )}
                     {profileDraft.grokApiCompat && (
                       <PreferenceRow
                         title="允许 xAI 2K 图片"
@@ -3755,6 +3847,12 @@ export default function SettingsModal() {
                                 : backupState.phase === 'failed'
                                   ? '使用码任务与产物清理失败'
                                   : '正在清理使用码任务与产物'
+                              : backupState.operation === 'remote_reset_admin'
+                                ? backupState.phase === 'completed'
+                                  ? '管理员任务与产物已清理完成'
+                                  : backupState.phase === 'failed'
+                                    ? '管理员任务与产物清理失败'
+                                    : '正在清理管理员任务与产物'
                               : backupState.operation === 'remote_reset_all'
                                 ? backupState.phase === 'completed'
                                   ? '远端全部数据已清空'
@@ -3799,7 +3897,7 @@ export default function SettingsModal() {
               )}
               <div className="rounded-2xl border border-gray-200/80 bg-white/50 p-4 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <div className="text-sm font-medium text-gray-800 dark:text-gray-100">数据管理操作日志</div>
-                <div className="mt-3 space-y-2">
+                <div className="mt-3 max-h-44 space-y-2 overflow-y-auto tiny-scrollbar">
                   {managementLogs.length ? managementLogs.map((item) => (
                     <div
                       key={item.id}
@@ -3891,6 +3989,280 @@ export default function SettingsModal() {
                   )}
                 </div>
               )}
+              <div className="rounded-xl border border-gray-200/70 bg-white/40 px-4 py-3 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                <div className="text-sm font-medium text-gray-800 dark:text-gray-100">清理指定分发码产物</div>
+                <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  只删除所选分发码提交的任务卡片与对应媒体文件，不会删除分发码本身、配额与活动日志。搜索不会清空已勾选项。
+                </p>
+                {usageCodes.length ? (
+                  <>
+                    <ClearableInput
+                      value={cleanupUsageCodeSearchQuery}
+                      onChange={(event) => setCleanupUsageCodeSearchQuery(event.target.value)}
+                      onClear={() => setCleanupUsageCodeSearchQuery('')}
+                      placeholder="搜索分发码别名或码值"
+                      className="mt-3 w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                    />
+                    <div className="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      {selectedCleanupUsageCodeSummary.count > 0 ? (
+                        <>
+                          <span>{`已选 ${selectedCleanupUsageCodeSummary.count} 个分发码`}</span>
+                          <span>{` · 图片 ${selectedCleanupUsageCodeSummary.imageCount}`}</span>
+                          <span>{` · 视频 ${selectedCleanupUsageCodeSummary.videoCount}`}</span>
+                          <span>{` · 占用 ${formatBytes(selectedCleanupUsageCodeSummary.totalBytes)}`}</span>
+                        </>
+                      ) : (
+                        <span>尚未选择分发码</span>
+                      )}
+                      {cleanupUsageCodeSearchQuery.trim()
+                        ? ` · 当前列表 ${filteredCleanupUsageCodes.length} 个`
+                        : ''}
+                    </div>
+                    {filteredCleanupUsageCodes.length ? (
+                      <div className="mt-2 max-h-44 space-y-2 overflow-y-auto tiny-scrollbar">
+                        {filteredCleanupUsageCodes.map((code) => {
+                          const checked = selectedCleanupUsageCodeIds.includes(code.id)
+                          return (
+                            <label
+                              key={code.id}
+                              className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200/70 bg-white/70 px-3 py-2 text-sm transition hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSelectedCleanupUsageCodeIds((prev) => (
+                                    checked
+                                      ? prev.filter((item) => item !== code.id)
+                                      : [...prev, code.id]
+                                  ))
+                                }}
+                                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-500 focus:ring-blue-500 dark:border-white/20 dark:bg-white/[0.04]"
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block font-medium text-gray-800 dark:text-gray-100">{code.name || '未命名使用码'}</span>
+                                <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                                  {`任务 ${code.taskCount} · 图片 ${code.outputImageCount} · 视频 ${code.outputVideoCount}`}
+                                </span>
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">没有匹配的分发码。</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">暂无分发码可选。</div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCleanupUsageCodeIds((prev) => Array.from(new Set([
+                        ...prev,
+                        ...filteredCleanupUsageCodes.map((code) => code.id),
+                      ])))
+                    }}
+                    disabled={!filteredCleanupUsageCodes.length || isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    全选当前结果
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const visibleIds = new Set(filteredCleanupUsageCodes.map((code) => code.id))
+                      setSelectedCleanupUsageCodeIds((prev) => prev.filter((id) => !visibleIds.has(id)))
+                    }}
+                    disabled={
+                      !filteredCleanupUsageCodes.some((code) => selectedCleanupUsageCodeIds.includes(code.id))
+                      || isClearingRemote
+                      || isImporting
+                      || isExporting
+                      || Boolean(backupState?.active)
+                    }
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    取消当前结果
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCleanupUsageCodeIds([])}
+                    disabled={!selectedCleanupUsageCodeIds.length || isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    清空全部选择
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedCodes = usageCodes.filter((code) => selectedCleanupUsageCodeIds.includes(code.id))
+                    const label = selectedCodes.map((code) => code.name || '未命名使用码').join('、')
+                    setConfirmDialog({
+                      title: '清理所选分发码产物',
+                      message: `这会删除以下分发码提交的全部任务卡片与媒体产物：\n\n${label}\n\n不会删除分发码、配额记录、活动日志、API 配置或其他分发码任务。`,
+                      confirmText: '确认清理',
+                      tone: 'danger',
+                      action: () => {
+                        void handleResetRemoteData('usage_code_tasks_only', {
+                          usageCodeIds: selectedCleanupUsageCodeIds,
+                        })
+                      },
+                    })
+                  }}
+                  disabled={
+                    !selectedCleanupUsageCodeIds.length
+                    || isClearingRemote
+                    || isImporting
+                    || isExporting
+                    || Boolean(backupState?.active)
+                  }
+                  className="mt-3 w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                >
+                  {isClearingRemote || backupState?.active ? '清理进行中...' : '清理所选分发码产物'}
+                </button>
+              </div>
+              <div className="rounded-xl border border-gray-200/70 bg-white/40 px-4 py-3 dark:border-white/[0.08] dark:bg-white/[0.02]">
+                <div className="text-sm font-medium text-gray-800 dark:text-gray-100">清理指定管理员任务</div>
+                <p className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                  只删除管理员登录后提交的任务卡片与对应媒体文件。可按任务类型、提示词或任务 ID 搜索，搜索不会清空已勾选项。
+                </p>
+                {adminTaskCleanupCandidates.length ? (
+                  <>
+                    <ClearableInput
+                      value={cleanupAdminTaskSearchQuery}
+                      onChange={(event) => setCleanupAdminTaskSearchQuery(event.target.value)}
+                      onClear={() => setCleanupAdminTaskSearchQuery('')}
+                      placeholder="搜索任务类型、提示词或任务 ID"
+                      className="mt-3 w-full rounded-xl border border-gray-200/70 bg-white/70 px-3 py-2 text-sm outline-none dark:border-white/[0.08] dark:bg-white/[0.03]"
+                    />
+                    <div className="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      {selectedCleanupAdminTaskSummary.count > 0 ? (
+                        <>
+                          <span>{`已选 ${selectedCleanupAdminTaskSummary.count} 个任务`}</span>
+                          <span>{` · 图片 ${selectedCleanupAdminTaskSummary.imageCount}`}</span>
+                          <span>{` · 视频 ${selectedCleanupAdminTaskSummary.videoCount}`}</span>
+                          <span>{` · 占用 ${formatBytes(selectedCleanupAdminTaskSummary.totalBytes)}`}</span>
+                        </>
+                      ) : (
+                        <span>尚未选择管理员任务</span>
+                      )}
+                      {cleanupAdminTaskSearchQuery.trim()
+                        ? ` · 当前列表 ${filteredCleanupAdminTasks.length} 个`
+                        : ''}
+                    </div>
+                    {filteredCleanupAdminTasks.length ? (
+                      <div className="mt-2 max-h-44 space-y-2 overflow-y-auto tiny-scrollbar">
+                        {filteredCleanupAdminTasks.map((task) => {
+                          const checked = selectedCleanupAdminTaskIds.includes(task.id)
+                          const promptPreview = task.prompt.length > 60 ? `${task.prompt.slice(0, 60)}…` : task.prompt
+                          return (
+                            <label
+                              key={task.id}
+                              className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200/70 bg-white/70 px-3 py-2 text-sm transition hover:bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:hover:bg-white/[0.06]"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setSelectedCleanupAdminTaskIds((prev) => (
+                                    checked
+                                      ? prev.filter((item) => item !== task.id)
+                                      : [...prev, task.id]
+                                  ))
+                                }}
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-gray-300 text-blue-500 focus:ring-blue-500 dark:border-white/20 dark:bg-white/[0.04]"
+                              />
+                              <span className="min-w-0 flex-1">
+                                <span className="block break-words font-medium text-gray-800 dark:text-gray-100">
+                                  {`${formatAdminCleanupTaskTypeLabel(task.taskType)} · ${promptPreview || '（无提示词）'}`}
+                                </span>
+                                <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                                  {`图片 ${task.outputImageCount} · 视频 ${task.outputVideoCount} · 占用 ${formatBytes(task.taskMediaBytes)}`}
+                                </span>
+                              </span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">没有匹配的管理员任务。</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">暂无管理员任务可选。</div>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCleanupAdminTaskIds((prev) => Array.from(new Set([
+                        ...prev,
+                        ...filteredCleanupAdminTasks.map((task) => task.id),
+                      ])))
+                    }}
+                    disabled={!filteredCleanupAdminTasks.length || isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    全选当前结果
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const visibleIds = new Set(filteredCleanupAdminTasks.map((task) => task.id))
+                      setSelectedCleanupAdminTaskIds((prev) => prev.filter((id) => !visibleIds.has(id)))
+                    }}
+                    disabled={
+                      !filteredCleanupAdminTasks.some((task) => selectedCleanupAdminTaskIds.includes(task.id))
+                      || isClearingRemote
+                      || isImporting
+                      || isExporting
+                      || Boolean(backupState?.active)
+                    }
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    取消当前结果
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCleanupAdminTaskIds([])}
+                    disabled={!selectedCleanupAdminTaskIds.length || isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
+                    className="rounded-lg border border-gray-200/80 bg-gray-50/80 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.06] dark:text-gray-200 dark:hover:bg-white/[0.1]"
+                  >
+                    清空全部选择
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const summary = selectedCleanupAdminTaskSummary
+                    setConfirmDialog({
+                      title: '清理所选管理员任务',
+                      message: `这会删除所选管理员任务卡片与媒体产物：\n\n已选 ${summary.count} 个任务\n图片 ${summary.imageCount} · 视频 ${summary.videoCount} · 占用 ${formatBytes(summary.totalBytes)}\n\n不会删除使用码任务、API 配置或分发设置。`,
+                      confirmText: '确认清理',
+                      tone: 'danger',
+                      action: () => {
+                        void handleResetRemoteData('admin_tasks_only', {
+                          taskIds: selectedCleanupAdminTaskIds,
+                        })
+                      },
+                    })
+                  }}
+                  disabled={
+                    !selectedCleanupAdminTaskIds.length
+                    || isClearingRemote
+                    || isImporting
+                    || isExporting
+                    || Boolean(backupState?.active)
+                  }
+                  className="mt-3 w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+                >
+                  {isClearingRemote || backupState?.active ? '清理进行中...' : '清理所选管理员任务'}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() =>
@@ -3908,6 +4280,25 @@ export default function SettingsModal() {
                 className="w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
               >
                 {isClearingRemote || backupState?.active ? '清理进行中...' : '清除全部使用码任务与产物'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const summary = allAdminTaskCleanupSummary
+                  setConfirmDialog({
+                    title: '清除全部管理员任务与产物',
+                    message: `这会删除所有管理员提交的任务卡片与媒体产物：\n\n共 ${summary.count} 个任务\n图片 ${summary.imageCount} · 视频 ${summary.videoCount} · 占用 ${formatBytes(summary.totalBytes)}\n\n不会删除使用码任务、API 配置或分发设置。`,
+                    confirmText: '确认清除',
+                    tone: 'danger',
+                    action: () => {
+                      void handleResetRemoteData('admin_tasks_only')
+                    },
+                  })
+                }}
+                disabled={isClearingRemote || isImporting || isExporting || Boolean(backupState?.active)}
+                className="w-full rounded-xl border border-amber-200/80 bg-amber-50/50 px-4 py-2.5 text-sm text-amber-700 transition hover:bg-amber-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+              >
+                {isClearingRemote || backupState?.active ? '清理进行中...' : '清除全部管理员任务与产物'}
               </button>
               <div className="grid grid-cols-2 gap-3">
                 <button

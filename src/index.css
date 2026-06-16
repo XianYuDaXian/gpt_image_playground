@@ -586,13 +586,53 @@ input[type="number"] {
 }
 
 @media (max-width: 767px) {
+  .detail-modal-shell {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: stretch;
+    padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+  }
+
   .detail-modal-panel {
     -webkit-overflow-scrolling: touch;
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    max-height: 100%;
+    border-radius: 0;
+    border-left-width: 0;
+    border-right-width: 0;
   }
 
   .detail-modal-image-panel {
-    touch-action: pan-y;
+    --detail-mobile-top-chrome: 3.5rem;
+    --detail-mobile-bottom-chrome: 4.75rem;
+    touch-action: manipulation;
+    flex-shrink: 0;
+    height: 40dvh;
+    min-height: 34dvh;
+    max-height: 40dvh;
+  }
+
+  .detail-modal-control-top {
+    top: max(0.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem));
+  }
+
+  .detail-modal-control-top-left {
+    left: max(0.75rem, calc(env(safe-area-inset-left, 0px) + 0.5rem));
+  }
+
+  .detail-modal-control-top-right {
+    right: max(0.75rem, calc(env(safe-area-inset-right, 0px) + 0.5rem));
+  }
+
+  .detail-modal-control-top-right-secondary {
+    right: max(3.75rem, calc(env(safe-area-inset-right, 0px) + 3.5rem));
+  }
+
+  .detail-modal-carousel-bottom {
+    bottom: 0.75rem;
   }
 
   .detail-modal-info-panel {

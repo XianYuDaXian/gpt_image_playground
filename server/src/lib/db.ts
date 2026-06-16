@@ -22,6 +22,7 @@ export interface ProviderProfileRecord {
   veniceGenerateEnabled: number
   veniceEditEnabled: number
   veniceMultiEditEnabled: number
+  veniceSkipResolution: number
   videoMaxResolution: '480p' | '720p'
   videoResolutionOptions?: Array<'480p' | '720p'>
   videoMaxDuration: 6 | 10 | 15
@@ -41,6 +42,7 @@ export interface TaskRecord {
   paramsJson: string
   errorMessage: string | null
   providerProfileId: string | null
+  providerProfileModel: string | null
   upstreamRequestId: string | null
   upstreamUsageJson: string | null
   ownerUsageCodeId: string | null
@@ -131,7 +133,20 @@ export interface UsageCodeStatsRecord extends UsageCodeRecord {
   taskCount: number
   outputImageCount: number
   outputVideoCount: number
+  taskMediaBytes: number
   quotaEvents?: UsageQuotaEventRecord[]
+}
+
+export interface AdminTaskCleanupCandidateRecord {
+  id: string
+  prompt: string
+  taskType: string
+  providerProfileId: string | null
+  providerProfileLabel: string
+  outputImageCount: number
+  outputVideoCount: number
+  taskMediaBytes: number
+  createdAt: string
 }
 
 export interface UsageQuotaEventRecord {
@@ -279,7 +294,10 @@ function stringifyProviderImageQuotaMap(value: Record<string, number> | null | u
   return JSON.stringify(Object.fromEntries(entries))
 }
 
-function parseProviderModelOptions(value: string | null | undefined) {
+function parseProviderModelOptions(
+  value: string | null | undefined,
+  apiMode?: ProviderProfileRecord['apiMode'],
+) {
   if (!value) return null
   try {
     const parsed = JSON.parse(value) as unknown
@@ -287,10 +305,40 @@ function parseProviderModelOptions(value: string | null | undefined) {
     const items = parsed
       .map((item) => String(item ?? '').trim())
       .filter(Boolean)
-    return items.length ? Array.from(new Set(items)) : null
+    if (!items.length) return null
+    if (apiMode === 'venice_images') {
+      return items
+    }
+    return Array.from(new Set(items))
   } catch {
     return null
   }
+}
+
+function serializeProviderModelOptions(
+  model: string,
+  modelOptions: string[] | null | undefined,
+  apiMode: ProviderProfileRecord['apiMode'],
+) {
+  const base = String(model ?? '').trim()
+  const trimmed = (modelOptions ?? [])
+    .map((item) => String(item ?? '').trim())
+
+  if (apiMode === 'venice_images') {
+    const slots = [
+      trimmed[0] || base,
+      trimmed[1] || base,
+      trimmed[2] || base,
+      trimmed[3] || trimmed[2] || base,
+    ]
+    return JSON.stringify(slots.filter((item) => item.length > 0))
+  }
+
+  const normalized = trimmed.filter(Boolean)
+  const items = normalized.length && normalized[0] === base
+    ? normalized
+    : (base ? [base, ...normalized] : normalized)
+  return JSON.stringify(Array.from(new Set(items)))
 }
 
 function normalizeVideoResolutionOptions(value: ReadonlyArray<string> | null | undefined): Array<'480p' | '720p'> {
@@ -476,6 +524,7 @@ export class AppDatabase {
         venice_generate_enabled INTEGER NOT NULL DEFAULT 1,
         venice_edit_enabled INTEGER NOT NULL DEFAULT 1,
         venice_multi_edit_enabled INTEGER NOT NULL DEFAULT 1,
+        venice_skip_resolution INTEGER NOT NULL DEFAULT 0,
         video_max_resolution TEXT NOT NULL DEFAULT '480p',
         video_resolution_options_json TEXT,
         video_max_duration INTEGER NOT NULL DEFAULT 6,
@@ -504,6 +553,7 @@ export class AppDatabase {
         params_json TEXT NOT NULL,
         error_message TEXT,
         provider_profile_id TEXT,
+        provider_profile_model TEXT,
         upstream_request_id TEXT,
         upstream_usage_json TEXT,
         created_at TEXT NOT NULL,
@@ -650,6 +700,9 @@ export class AppDatabase {
     if (!taskColumnNames.has('reserved_image_credits')) {
       this.sqlite.exec('ALTER TABLE tasks ADD COLUMN reserved_image_credits INTEGER NOT NULL DEFAULT 0')
     }
+    if (!taskColumnNames.has('provider_profile_model')) {
+      this.sqlite.exec('ALTER TABLE tasks ADD COLUMN provider_profile_model TEXT')
+    }
     const profileColumns = this.sqlite.prepare('PRAGMA table_info(provider_profiles)').all() as Array<{ name: string }>
     const profileColumnNames = new Set(profileColumns.map((column) => column.name))
     if (!profileColumnNames.has('codex_cli')) {
@@ -672,6 +725,9 @@ export class AppDatabase {
     }
     if (!profileColumnNames.has('venice_multi_edit_enabled')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_multi_edit_enabled INTEGER NOT NULL DEFAULT 1')
+    }
+    if (!profileColumnNames.has('venice_skip_resolution')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_skip_resolution INTEGER NOT NULL DEFAULT 0')
     }
     if (!profileColumnNames.has('video_max_resolution')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN video_max_resolution TEXT NOT NULL DEFAULT '480p'")
@@ -923,6 +979,7 @@ export class AppDatabase {
           venice_generate_enabled as veniceGenerateEnabled,
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
+          venice_skip_resolution as veniceSkipResolution,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -938,7 +995,7 @@ export class AppDatabase {
       const { modelOptionsJson, videoResolutionOptionsJson, videoDurationOptionsJson, ...rest } = row
       return {
         ...rest,
-        modelOptions: parseProviderModelOptions(modelOptionsJson),
+        modelOptions: parseProviderModelOptions(modelOptionsJson, rest.apiMode),
         videoResolutionOptions: parseVideoResolutionOptions(videoResolutionOptionsJson, rest.videoMaxResolution),
         videoDurationOptions: parseVideoDurationOptions(videoDurationOptionsJson, rest.videoMaxDuration),
       }
@@ -966,6 +1023,7 @@ export class AppDatabase {
           venice_generate_enabled as veniceGenerateEnabled,
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
+          venice_skip_resolution as veniceSkipResolution,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -980,7 +1038,7 @@ export class AppDatabase {
     if (!row) return undefined
     return {
       ...row,
-      modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+      modelOptions: parseProviderModelOptions(row.modelOptionsJson, row.apiMode),
       videoResolutionOptions: parseVideoResolutionOptions(row.videoResolutionOptionsJson, row.videoMaxResolution),
       videoDurationOptions: parseVideoDurationOptions(row.videoDurationOptionsJson, row.videoMaxDuration),
     }
@@ -1007,6 +1065,7 @@ export class AppDatabase {
           venice_generate_enabled as veniceGenerateEnabled,
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
+          venice_skip_resolution as veniceSkipResolution,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -1022,7 +1081,7 @@ export class AppDatabase {
     if (!row) return undefined
     return {
       ...row,
-      modelOptions: parseProviderModelOptions(row.modelOptionsJson),
+      modelOptions: parseProviderModelOptions(row.modelOptionsJson, row.apiMode),
       videoResolutionOptions: parseVideoResolutionOptions(row.videoResolutionOptionsJson, row.videoMaxResolution),
       videoDurationOptions: parseVideoDurationOptions(row.videoDurationOptionsJson, row.videoMaxDuration),
     }
@@ -1046,6 +1105,7 @@ export class AppDatabase {
     veniceGenerateEnabled?: boolean
     veniceEditEnabled?: boolean
     veniceMultiEditEnabled?: boolean
+    veniceSkipResolution?: boolean
     videoMaxResolution?: '480p' | '720p'
     videoResolutionOptions?: Array<'480p' | '720p'>
     videoMaxDuration?: 6 | 10 | 15
@@ -1081,6 +1141,7 @@ export class AppDatabase {
           venice_generate_enabled,
           venice_edit_enabled,
           venice_multi_edit_enabled,
+          venice_skip_resolution,
           video_max_resolution,
           video_resolution_options_json,
           video_max_duration,
@@ -1107,6 +1168,7 @@ export class AppDatabase {
           @veniceGenerateEnabled,
           @veniceEditEnabled,
           @veniceMultiEditEnabled,
+          @veniceSkipResolution,
           @videoMaxResolution,
           @videoResolutionOptionsJson,
           @videoMaxDuration,
@@ -1132,6 +1194,7 @@ export class AppDatabase {
           venice_generate_enabled = excluded.venice_generate_enabled,
           venice_edit_enabled = excluded.venice_edit_enabled,
           venice_multi_edit_enabled = excluded.venice_multi_edit_enabled,
+          venice_skip_resolution = excluded.venice_skip_resolution,
           video_max_resolution = excluded.video_max_resolution,
           video_resolution_options_json = excluded.video_resolution_options_json,
           video_max_duration = excluded.video_max_duration,
@@ -1142,13 +1205,7 @@ export class AppDatabase {
         ...input,
         remarkName: input.remarkName?.trim() || null,
         tagColor: this.resolveProviderTagColor(input.tagColor, input.id),
-        modelOptionsJson: JSON.stringify(
-          Array.from(new Set(
-            [input.model, ...(input.modelOptions ?? [])]
-              .map((item) => String(item ?? '').trim())
-              .filter(Boolean),
-          )),
-        ),
+        modelOptionsJson: serializeProviderModelOptions(input.model, input.modelOptions, input.apiMode),
         codexCli: input.codexCli ? 1 : 0,
         grokApiCompat: input.grokApiCompat ? 1 : 0,
         xaiImage2kEnabled: input.xaiImage2kEnabled ? 1 : 0,
@@ -1156,6 +1213,7 @@ export class AppDatabase {
         veniceGenerateEnabled: input.veniceGenerateEnabled === false ? 0 : 1,
         veniceEditEnabled: input.veniceEditEnabled === false ? 0 : 1,
         veniceMultiEditEnabled: input.veniceMultiEditEnabled === false ? 0 : 1,
+        veniceSkipResolution: input.veniceSkipResolution ? 1 : 0,
         videoMaxResolution,
         videoResolutionOptionsJson: JSON.stringify(videoResolutionOptions),
         videoMaxDuration,
@@ -1628,7 +1686,14 @@ ${selectUsageCodeFields()}
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
           COUNT(DISTINCT tasks.id) as taskCount,
-          usage_codes.output_image_count as currentOutputImageCount
+          usage_codes.output_image_count as currentOutputImageCount,
+          COALESCE((
+            SELECT SUM(task_images.bytes)
+            FROM tasks usage_code_tasks
+            INNER JOIN task_images ON task_images.task_id = usage_code_tasks.id
+            WHERE usage_code_tasks.owner_usage_code_id = usage_codes.id
+              AND usage_code_tasks.owner_kind = 'usage_code'
+          ), 0) as taskMediaBytes
         FROM usage_codes
         LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
         LEFT JOIN task_images ON task_images.task_id = tasks.id AND task_images.kind = 'output'
@@ -2365,6 +2430,7 @@ ${selectUsageCodeFields()}
     paramsJson: string
     taskType?: 'image' | 'video'
     providerProfileId: string | null
+    providerProfileModel?: string | null
     ownerUsageCodeId?: string | null
     ownerKind?: 'admin' | 'usage_code' | 'legacy'
     reservedImageCredits?: number
@@ -2381,6 +2447,7 @@ ${selectUsageCodeFields()}
         params_json,
         error_message,
         provider_profile_id,
+        provider_profile_model,
         owner_usage_code_id,
         owner_kind,
         reserved_image_credits,
@@ -2388,13 +2455,14 @@ ${selectUsageCodeFields()}
         updated_at,
         finished_at
       )
-      VALUES (?, ?, ?, 'queued', 5, 'queued', ?, NULL, ?, ?, ?, ?, ?, ?, NULL)
+      VALUES (?, ?, ?, 'queued', 5, 'queued', ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)
     `).run(
       input.id,
       input.prompt,
       input.taskType ?? 'image',
       input.paramsJson,
       input.providerProfileId,
+      input.providerProfileModel?.trim() || null,
       input.ownerUsageCodeId ?? null,
       input.ownerKind ?? 'legacy',
       input.reservedImageCredits ?? 0,
@@ -2418,6 +2486,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2455,6 +2524,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2541,6 +2611,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2640,6 +2711,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2677,6 +2749,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2712,6 +2785,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -2732,12 +2806,64 @@ ${selectUsageCodeFields()}
       .all() as TaskRecord[]
   }
 
-  listUsageCodeTaskMediaCleanupRecords() {
-    return this.listTaskMediaCleanupRecords('usage_code')
+  listUsageCodeTaskMediaCleanupRecords(usageCodeIds?: string[]) {
+    return this.listTaskMediaCleanupRecords({
+      ownerKind: 'usage_code',
+      usageCodeIds,
+    })
   }
 
-  listTaskMediaCleanupRecords(ownerKind?: 'usage_code' | 'admin' | 'legacy') {
-    const whereClause = ownerKind ? 'WHERE tasks.owner_kind = ?' : ''
+  listAdminTaskMediaCleanupRecords(taskIds?: string[]) {
+    return this.listTaskMediaCleanupRecords({
+      ownerKind: 'admin',
+      taskIds,
+    })
+  }
+
+  listAdminTaskCleanupCandidates(limit = 1000) {
+    return this.sqlite
+      .prepare(`
+        SELECT
+          tasks.id,
+          tasks.prompt,
+          tasks.task_type as taskType,
+          tasks.provider_profile_id as providerProfileId,
+          COALESCE(NULLIF(provider_profiles.remark_name, ''), NULLIF(provider_profiles.name, ''), '未关联 API') as providerProfileLabel,
+          COALESCE(SUM(CASE WHEN task_images.kind = 'output' THEN 1 ELSE 0 END), 0) as outputImageCount,
+          COALESCE(SUM(CASE WHEN task_images.kind = 'video_output' THEN 1 ELSE 0 END), 0) as outputVideoCount,
+          COALESCE(SUM(task_images.bytes), 0) as taskMediaBytes,
+          tasks.created_at as createdAt
+        FROM tasks
+        LEFT JOIN provider_profiles ON provider_profiles.id = tasks.provider_profile_id
+        LEFT JOIN task_images ON task_images.task_id = tasks.id
+        WHERE tasks.owner_kind = 'admin'
+        GROUP BY tasks.id
+        ORDER BY tasks.created_at DESC
+        LIMIT ?
+      `)
+      .all(limit) as AdminTaskCleanupCandidateRecord[]
+  }
+
+  listTaskMediaCleanupRecords(input?: {
+    ownerKind?: 'usage_code' | 'admin' | 'legacy'
+    usageCodeIds?: string[]
+    taskIds?: string[]
+  }) {
+    const where: string[] = []
+    const params: Array<string> = []
+    if (input?.ownerKind) {
+      where.push('tasks.owner_kind = ?')
+      params.push(input.ownerKind)
+    }
+    if (input?.usageCodeIds?.length) {
+      where.push(`tasks.owner_usage_code_id IN (${input.usageCodeIds.map(() => '?').join(', ')})`)
+      params.push(...input.usageCodeIds)
+    }
+    if (input?.taskIds?.length) {
+      where.push(`tasks.id IN (${input.taskIds.map(() => '?').join(', ')})`)
+      params.push(...input.taskIds)
+    }
+    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : ''
     return this.sqlite
       .prepare(`
         SELECT
@@ -2752,7 +2878,7 @@ ${selectUsageCodeFields()}
         ${whereClause}
         ORDER BY tasks.created_at DESC, task_images.created_at ASC, task_images.id ASC
       `)
-      .all(...(ownerKind ? [ownerKind] : [])) as UsageCodeTaskMediaCleanupRecord[]
+      .all(...params) as UsageCodeTaskMediaCleanupRecord[]
   }
 
   getTask(id: string) {
@@ -2768,6 +2894,7 @@ ${selectUsageCodeFields()}
           tasks.params_json as paramsJson,
           tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
+          tasks.provider_profile_model as providerProfileModel,
           tasks.upstream_request_id as upstreamRequestId,
           tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
@@ -3009,6 +3136,7 @@ ${selectUsageCodeFields()}
       paramsJson: string
       errorMessage: string | null
       providerProfileId: string | null
+      providerProfileModel?: string | null
       upstreamRequestId?: string | null
       upstreamUsageJson?: string | null
       ownerUsageCodeId?: string | null
@@ -3050,6 +3178,7 @@ ${selectUsageCodeFields()}
           params_json,
           error_message,
           provider_profile_id,
+          provider_profile_model,
           upstream_request_id,
           upstream_usage_json,
           owner_usage_code_id,
@@ -3071,6 +3200,7 @@ ${selectUsageCodeFields()}
           @paramsJson,
           @errorMessage,
           @providerProfileId,
+          @providerProfileModel,
           @upstreamRequestId,
           @upstreamUsageJson,
           @ownerUsageCodeId,
@@ -3117,6 +3247,7 @@ ${selectUsageCodeFields()}
         insertTask.run({
           ...task,
           taskType: task.taskType ?? 'image',
+          providerProfileModel: task.providerProfileModel?.trim() || null,
           upstreamRequestId: task.upstreamRequestId ?? null,
           upstreamUsageJson: task.upstreamUsageJson ?? null,
           ownerUsageCodeId: task.ownerUsageCodeId ?? null,
@@ -3153,6 +3284,7 @@ ${selectUsageCodeFields()}
       paramsJson: string
       errorMessage: string | null
       providerProfileId: string | null
+      providerProfileModel?: string | null
       upstreamRequestId?: string | null
       upstreamUsageJson?: string | null
       ownerUsageCodeId?: string | null
@@ -3302,6 +3434,7 @@ ${selectUsageCodeFields()}
           params_json,
           error_message,
           provider_profile_id,
+          provider_profile_model,
           upstream_request_id,
           upstream_usage_json,
           owner_usage_code_id,
@@ -3323,6 +3456,7 @@ ${selectUsageCodeFields()}
           @paramsJson,
           @errorMessage,
           @providerProfileId,
+          @providerProfileModel,
           @upstreamRequestId,
           @upstreamUsageJson,
           @ownerUsageCodeId,
@@ -3457,6 +3591,7 @@ ${selectUsageCodeFields()}
         insertTask.run({
           ...task,
           taskType: task.taskType ?? 'image',
+          providerProfileModel: task.providerProfileModel?.trim() || null,
           upstreamRequestId: task.upstreamRequestId ?? null,
           upstreamUsageJson: task.upstreamUsageJson ?? null,
           ownerUsageCodeId: task.ownerUsageCodeId ?? null,
@@ -3511,28 +3646,71 @@ ${selectUsageCodeFields()}
     tx()
   }
 
-  clearUsageCodeTaskData() {
+  clearUsageCodeTaskData(usageCodeIds?: string[]) {
+    const normalizedUsageCodeIds = Array.from(new Set(
+      (usageCodeIds ?? [])
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean),
+    ))
+    const taskFilter = normalizedUsageCodeIds.length
+      ? `owner_kind = 'usage_code' AND owner_usage_code_id IN (${normalizedUsageCodeIds.map(() => '?').join(', ')})`
+      : `owner_kind = 'usage_code'`
     const tx = this.sqlite.transaction(() => {
       this.sqlite.prepare(`
         DELETE FROM task_events
         WHERE task_id IN (
           SELECT id
           FROM tasks
-          WHERE owner_kind = 'usage_code'
+          WHERE ${taskFilter}
         )
-      `).run()
+      `).run(...normalizedUsageCodeIds)
       this.sqlite.prepare(`
         DELETE FROM task_images
         WHERE task_id IN (
           SELECT id
           FROM tasks
-          WHERE owner_kind = 'usage_code'
+          WHERE ${taskFilter}
         )
-      `).run()
+      `).run(...normalizedUsageCodeIds)
       this.sqlite.prepare(`
         DELETE FROM tasks
-        WHERE owner_kind = 'usage_code'
-      `).run()
+        WHERE ${taskFilter}
+      `).run(...normalizedUsageCodeIds)
+    })
+
+    tx()
+  }
+
+  clearAdminTaskData(taskIds?: string[]) {
+    const normalizedTaskIds = Array.from(new Set(
+      (taskIds ?? [])
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean),
+    ))
+    const taskFilter = normalizedTaskIds.length
+      ? `owner_kind = 'admin' AND id IN (${normalizedTaskIds.map(() => '?').join(', ')})`
+      : `owner_kind = 'admin'`
+    const tx = this.sqlite.transaction(() => {
+      this.sqlite.prepare(`
+        DELETE FROM task_events
+        WHERE task_id IN (
+          SELECT id
+          FROM tasks
+          WHERE ${taskFilter}
+        )
+      `).run(...normalizedTaskIds)
+      this.sqlite.prepare(`
+        DELETE FROM task_images
+        WHERE task_id IN (
+          SELECT id
+          FROM tasks
+          WHERE ${taskFilter}
+        )
+      `).run(...normalizedTaskIds)
+      this.sqlite.prepare(`
+        DELETE FROM tasks
+        WHERE ${taskFilter}
+      `).run(...normalizedTaskIds)
     })
 
     tx()

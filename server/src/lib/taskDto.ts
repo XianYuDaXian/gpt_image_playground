@@ -141,12 +141,13 @@ function getTaskErrorForViewer(task: TaskRecord, exposeDetailedError?: boolean) 
   return '生成失败，请联系管理员'
 }
 
-function resolveDisplayedProviderModel(
-  task: TaskRecord,
-  inputImages: TaskImageRecord[],
-  providerProfile?: Pick<ProviderProfileRecord, 'model' | 'modelOptions' | 'apiMode'> | null,
+export function resolveProviderModelLabel(
+  providerProfile: Pick<ProviderProfileRecord, 'model' | 'modelOptions' | 'apiMode'>,
+  options: {
+    taskType: 'image' | 'video'
+    inputImageCount: number
+  },
 ) {
-  if (!providerProfile) return null
   if (providerProfile.apiMode !== 'venice_images') {
     return providerProfile.model ?? null
   }
@@ -156,16 +157,28 @@ function resolveDisplayedProviderModel(
   const editModel = modelOptions[2] ?? providerProfile.model
   const multiEditModel = modelOptions[3] ?? modelOptions[2] ?? providerProfile.model
 
-  if (task.taskType === 'video') {
+  if (options.taskType === 'video') {
     return providerProfile.model ?? null
   }
-  if (inputImages.length <= 0) {
+  if (options.inputImageCount <= 0) {
     return generateModel ?? null
   }
-  if (inputImages.length === 1) {
+  if (options.inputImageCount === 1) {
     return editModel ?? null
   }
   return multiEditModel ?? null
+}
+
+function resolveDisplayedProviderModel(
+  task: TaskRecord,
+  inputImages: TaskImageRecord[],
+  providerProfile?: Pick<ProviderProfileRecord, 'model' | 'modelOptions' | 'apiMode'> | null,
+) {
+  if (!providerProfile) return null
+  return resolveProviderModelLabel(providerProfile, {
+    taskType: task.taskType ?? 'image',
+    inputImageCount: inputImages.length,
+  })
 }
 
 export function serializeTaskRecord(
@@ -224,7 +237,8 @@ export function serializeTaskRecord(
       ? (options.providerProfile?.remarkName ?? options.providerProfile?.name ?? null)
       : (options.providerProfile?.name ?? null),
     providerProfileTagColor: options.providerProfile?.tagColor ?? null,
-    providerProfileModel: resolveDisplayedProviderModel(task, inputImages, options.providerProfile),
+    providerProfileModel: task.providerProfileModel
+      ?? resolveDisplayedProviderModel(task, inputImages, options.providerProfile),
     providerProfileApiMode: options.providerProfile?.apiMode ?? null,
     providerProfileBaseUrl: options.providerProfile?.baseUrl ?? null,
     inputImageIds: inputImages.map((image) => image.id),

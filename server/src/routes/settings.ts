@@ -98,6 +98,7 @@ const providerProfileSchema = z.object({
   veniceGenerateEnabled: z.boolean().default(true),
   veniceEditEnabled: z.boolean().default(true),
   veniceMultiEditEnabled: z.boolean().default(true),
+  veniceSkipResolution: z.boolean().default(false),
   apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
@@ -225,6 +226,7 @@ const fullBackupProviderProfileSchema = z.object({
   veniceGenerateEnabled: z.boolean().default(true),
   veniceEditEnabled: z.boolean().default(true),
   veniceMultiEditEnabled: z.boolean().default(true),
+  veniceSkipResolution: z.boolean().default(false),
   videoMaxResolution: videoResolutionOptionSchema,
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema,
@@ -272,6 +274,7 @@ const fullBackupTaskSchema = z.object({
   paramsJson: z.string(),
   errorMessage: z.string().nullable(),
   providerProfileId: z.string().nullable(),
+  providerProfileModel: z.string().nullable().optional(),
   upstreamRequestId: z.string().nullable(),
   upstreamUsageJson: z.string().nullable(),
   ownerUsageCodeId: z.string().nullable(),
@@ -389,7 +392,15 @@ const usageCodeMediaExportIndexSchema = z.object({
 })
 
 const resetRemoteDataSchema = z.object({
-  mode: z.enum(['tasks', 'all', 'usage_code_tasks_only']),
+  mode: z.enum(['tasks', 'all', 'usage_code_tasks_only', 'admin_tasks_only']),
+  usageCodeIds: z.array(z.string().min(1)).min(1).optional(),
+  taskIds: z.array(z.string().min(1)).min(1).optional(),
+}).refine((value) => !value.usageCodeIds?.length || value.mode === 'usage_code_tasks_only', {
+  message: '仅清理使用码任务时才能指定分发码',
+  path: ['usageCodeIds'],
+}).refine((value) => !value.taskIds?.length || value.mode === 'admin_tasks_only', {
+  message: '仅清理管理员任务时才能指定任务',
+  path: ['taskIds'],
 })
 
 const distributionSettingsSchema = z.object({
@@ -997,6 +1008,7 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
     veniceGenerateEnabled: Boolean(profile.veniceGenerateEnabled),
     veniceEditEnabled: Boolean(profile.veniceEditEnabled),
     veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
+    veniceSkipResolution: Boolean(profile.veniceSkipResolution),
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
@@ -1029,6 +1041,7 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     veniceGenerateEnabled: Boolean(profile.veniceGenerateEnabled),
     veniceEditEnabled: Boolean(profile.veniceEditEnabled),
     veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
+    veniceSkipResolution: Boolean(profile.veniceSkipResolution),
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
@@ -1116,6 +1129,7 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
     outputVideoCount: code.outputVideoCount,
+    taskMediaBytes: code.taskMediaBytes ?? 0,
     quotaEvents: quotaEvents.map((event) => ({
       ...event,
       label: formatQuotaEventLabel(event),
@@ -1491,6 +1505,7 @@ type ParsedAdminBackupPayload = {
     paramsJson: string
     errorMessage: string | null
     providerProfileId: string | null
+    providerProfileModel?: string | null
     upstreamRequestId?: string | null
     upstreamUsageJson?: string | null
     ownerUsageCodeId?: string | null
@@ -1632,6 +1647,7 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
     paramsJson: task.paramsJson,
     errorMessage: task.errorMessage,
     providerProfileId: task.providerProfileId,
+    providerProfileModel: task.providerProfileModel,
     upstreamRequestId: task.upstreamRequestId,
     upstreamUsageJson: task.upstreamUsageJson,
     ownerUsageCodeId: task.ownerUsageCodeId,
@@ -1675,39 +1691,59 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
   }
 }
 
-type RemoteResetMode = 'tasks' | 'all' | 'usage_code_tasks_only'
+type RemoteResetMode = 'tasks' | 'all' | 'usage_code_tasks_only' | 'admin_tasks_only'
 
 function getRemoteResetOperation(mode: RemoteResetMode) {
   if (mode === 'usage_code_tasks_only') return 'remote_reset_usage_code' as const
+  if (mode === 'admin_tasks_only') return 'remote_reset_admin' as const
   if (mode === 'all') return 'remote_reset_all' as const
   return 'remote_reset_tasks' as const
 }
 
 function getRemoteResetStartMessage(mode: RemoteResetMode) {
   if (mode === 'usage_code_tasks_only') return '等待现有任务完成后开始清理使用码任务与产物'
+  if (mode === 'admin_tasks_only') return '等待现有任务完成后开始清理管理员任务与产物'
   if (mode === 'all') return '等待现有任务完成后开始清空远端全部数据'
   return '等待现有任务完成后开始清空远端记录'
 }
 
 function getRemoteResetRunningMessage(mode: RemoteResetMode) {
   if (mode === 'usage_code_tasks_only') return '正在清理使用码任务与产物'
+  if (mode === 'admin_tasks_only') return '正在清理管理员任务与产物'
   if (mode === 'all') return '正在清空远端全部数据'
   return '正在清空远端记录'
 }
 
 function getRemoteResetCompletedMessage(mode: RemoteResetMode) {
   if (mode === 'usage_code_tasks_only') return '使用码任务与产物已清理完成'
+  if (mode === 'admin_tasks_only') return '管理员任务与产物已清理完成'
   if (mode === 'all') return '远端全部数据已清空'
   return '远端记录已清空'
 }
 
 function getRemoteResetFailedMessage(mode: RemoteResetMode) {
   if (mode === 'usage_code_tasks_only') return '清理使用码任务与产物失败'
+  if (mode === 'admin_tasks_only') return '清理管理员任务与产物失败'
   if (mode === 'all') return '清空远端全部数据失败'
   return '清空远端记录失败'
 }
 
-async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: RemoteResetMode) {
+async function runRemoteResetJob(
+  app: Parameters<FastifyPluginAsync>[0],
+  mode: RemoteResetMode,
+  usageCodeIds?: string[],
+  taskIds?: string[],
+) {
+  const normalizedUsageCodeIds = Array.from(new Set(
+    (usageCodeIds ?? [])
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean),
+  ))
+  const normalizedTaskIds = Array.from(new Set(
+    (taskIds ?? [])
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean),
+  ))
   const startedAt = new Date().toISOString()
   const operation = getRemoteResetOperation(mode)
   setBackupJobState(app, {
@@ -1735,8 +1771,10 @@ async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: R
     }
 
     const cleanupRecords = mode === 'usage_code_tasks_only'
-      ? app.db.listUsageCodeTaskMediaCleanupRecords()
-      : app.db.listTaskMediaCleanupRecords()
+      ? app.db.listUsageCodeTaskMediaCleanupRecords(normalizedUsageCodeIds.length ? normalizedUsageCodeIds : undefined)
+      : mode === 'admin_tasks_only'
+        ? app.db.listAdminTaskMediaCleanupRecords(normalizedTaskIds.length ? normalizedTaskIds : undefined)
+        : app.db.listTaskMediaCleanupRecords()
     const taskMap = new Map<string, { ownerUsageCodeId: string | null; ownerKind: string }>()
     const usageCodeSummaryMap = new Map<string, { outputImageCount: number; outputVideoCount: number }>()
     const directoryStats = new Map<string, { fileCount: number; bytes: number }>()
@@ -1824,7 +1862,7 @@ async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: R
     })
 
     if (mode === 'usage_code_tasks_only') {
-      app.db.clearUsageCodeTaskData()
+      app.db.clearUsageCodeTaskData(normalizedUsageCodeIds.length ? normalizedUsageCodeIds : undefined)
       for (const [usageCodeId, summary] of usageCodeSummaryMap) {
         app.db.insertUsageCodeActivityLog({
           usageCodeId,
@@ -1833,6 +1871,15 @@ async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: R
           message: `管理员批量清理使用码任务，删除图片 ${summary.outputImageCount} 张，视频 ${summary.outputVideoCount} 个`,
         })
       }
+      for (const [taskId, task] of taskMap) {
+        app.taskWorker.cancel(taskId)
+        app.taskEvents.emitDeleted(taskId, {
+          ownerUsageCodeId: task.ownerUsageCodeId,
+          ownerKind: task.ownerKind,
+        })
+      }
+    } else if (mode === 'admin_tasks_only') {
+      app.db.clearAdminTaskData(normalizedTaskIds.length ? normalizedTaskIds : undefined)
       for (const [taskId, task] of taskMap) {
         app.taskWorker.cancel(taskId)
         app.taskEvents.emitDeleted(taskId, {
@@ -1885,7 +1932,13 @@ async function runRemoteResetJob(app: Parameters<FastifyPluginAsync>[0], mode: R
       status: 'completed',
       title: getRemoteResetCompletedMessage(mode),
       detail: mode === 'usage_code_tasks_only'
-        ? `已清理 ${taskMap.size} 条使用码任务与对应媒体产物`
+        ? normalizedUsageCodeIds.length
+          ? `已清理 ${taskMap.size} 条指定分发码任务与对应媒体产物（${normalizedUsageCodeIds.length} 个分发码）`
+          : `已清理 ${taskMap.size} 条使用码任务与对应媒体产物`
+        : mode === 'admin_tasks_only'
+          ? normalizedTaskIds.length
+            ? `已清理 ${taskMap.size} 条指定管理员任务与对应媒体产物`
+            : `已清理 ${taskMap.size} 条管理员任务与对应媒体产物`
         : mode === 'all'
           ? '后端任务、媒体与运行配置已清空'
           : '后端任务记录与媒体产物已清空',
@@ -3009,6 +3062,7 @@ function buildParsedPayloadFromFullManifest(
       veniceGenerateEnabled: profile.veniceGenerateEnabled === false ? 0 : 1,
       veniceEditEnabled: profile.veniceEditEnabled === false ? 0 : 1,
       veniceMultiEditEnabled: profile.veniceMultiEditEnabled === false ? 0 : 1,
+      veniceSkipResolution: profile.veniceSkipResolution ? 1 : 0,
       videoMaxResolution: profile.videoMaxResolution,
       videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
@@ -3577,6 +3631,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceGenerateEnabled: payload.veniceGenerateEnabled,
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
+      veniceSkipResolution: payload.veniceSkipResolution,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3724,6 +3779,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceGenerateEnabled: payload.veniceGenerateEnabled,
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
+      veniceSkipResolution: payload.veniceSkipResolution,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3762,6 +3818,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceGenerateEnabled: payload.veniceGenerateEnabled,
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
+      veniceSkipResolution: payload.veniceSkipResolution,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3817,6 +3874,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceGenerateEnabled: payload.veniceGenerateEnabled,
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
+      veniceSkipResolution: payload.veniceSkipResolution,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -4121,6 +4179,15 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return app.db.summarizeMediaStats()
   })
 
+  app.get('/api/admin/data/admin-task-cleanup-candidates', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    requireLanForDataManagement(request, reply)
+    reply.header('Cache-Control', 'no-store')
+    return {
+      items: app.db.listAdminTaskCleanupCandidates(),
+    }
+  })
+
   app.post('/api/admin/data/export/start', async (request, reply) => {
     await requireAdmin(app, request, reply)
     requireLanForDataManagement(request, reply)
@@ -4306,8 +4373,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: '当前已有维护任务正在执行，请稍后再试' }
     }
 
-    remoteResetRunner = runRemoteResetJob(app, payload.mode).catch((error) => {
-      app.log.error({ err: error, mode: payload.mode }, '远端清理任务失败')
+    remoteResetRunner = runRemoteResetJob(app, payload.mode, payload.usageCodeIds, payload.taskIds).catch((error) => {
+      app.log.error({
+        err: error,
+        mode: payload.mode,
+        usageCodeIds: payload.usageCodeIds,
+        taskIds: payload.taskIds,
+      }, '远端清理任务失败')
     })
     reply.header('Cache-Control', 'no-store')
     return getBackupJobState(app)

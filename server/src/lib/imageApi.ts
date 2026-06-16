@@ -215,6 +215,7 @@ function getVeniceResolution(
   kind: 'generate' | 'edit' | 'multi-edit',
   fallback?: GrokResolution,
 ) {
+  if (payload.provider.veniceSkipResolution) return undefined
   if (!fallback) return undefined
   return fallback === '2k' ? '2K' : '1K'
 }

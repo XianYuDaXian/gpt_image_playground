@@ -7,6 +7,7 @@ export type MaintenanceOperation =
   | 'backup_import'
   | 'usage_code_media_export'
   | 'remote_reset_usage_code'
+  | 'remote_reset_admin'
   | 'remote_reset_tasks'
   | 'remote_reset_all'
   | null

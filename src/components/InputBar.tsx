@@ -408,6 +408,7 @@ export default function InputBar() {
   const searchQuery = useStore((s) => s.searchQuery)
   const searchTags = useStore((s) => s.searchTags)
   const authStatus = useStore((s) => s.authStatus)
+  const detailTaskId = useStore((s) => s.detailTaskId)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
@@ -2069,7 +2070,7 @@ export default function InputBar() {
 
       {renderMobileActionSheet()}
 
-      <div data-input-bar className="safe-bottom-floating sm:safe-bottom-floating-sm fixed left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300">
+      <div data-input-bar className={`safe-bottom-floating sm:safe-bottom-floating-sm fixed left-1/2 -translate-x-1/2 z-30 w-full max-w-4xl px-3 sm:px-4 transition-all duration-300 ${detailTaskId ? 'max-md:hidden' : ''}`}>
         {selectedTaskIds.length > 0 && (
           <div className="flex justify-center mb-3">
             <div className="bg-gray-800/90 dark:bg-gray-800/90 backdrop-blur shadow-lg rounded-full flex items-center p-1 border border-white/10 pointer-events-auto">

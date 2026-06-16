@@ -87,7 +87,7 @@ function OutputImageSlide({
           src={displaySrc}
           data-image-id={imageId}
           data-original-src={originalSrc}
-          className={`saveable-image max-h-[calc(100%-3.25rem)] max-w-full object-contain transition duration-200 md:max-h-[calc(100%-2rem)] md:max-w-[calc(100%-2rem)] ${
+          className={`saveable-image max-h-[calc(100%-var(--detail-mobile-top-chrome,3.5rem)-var(--detail-mobile-bottom-chrome,4.75rem))] max-w-full object-contain transition duration-200 md:max-h-[calc(100%-2rem)] md:max-w-[calc(100%-2rem)] ${
             isActive ? 'cursor-pointer' : ''
           } ${showLoadingOverlay && isActive ? 'opacity-0' : 'opacity-100'} ${
             isTaskBlurred ? 'scale-[1.02] blur-md' : ''

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
 import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import DetailOutputImageCarousel from './DetailOutputImageCarousel'
 import type { ImageCarouselHandle } from '../lib/touchGesture'
 import { formatImageRatio } from '../lib/size'
@@ -59,6 +60,7 @@ export default function DetailModal() {
   const [maskPreviewSrc, setMaskPreviewSrc] = useState('')
   const [now, setNow] = useState(Date.now())
   const [isTaskIdPopoverOpen, setIsTaskIdPopoverOpen] = useState(false)
+  const detailPanelRef = useRef<HTMLDivElement>(null)
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<ImageCarouselHandle>(null)
   const taskIdPopoverRef = useRef<HTMLDivElement>(null)
@@ -79,6 +81,7 @@ export default function DetailModal() {
   const isUsageCodeUser = authStatus?.role === 'user'
 
   useCloseOnEscape(Boolean(task), () => setDetailTaskId(null))
+  usePreventBackgroundScroll(Boolean(task), detailPanelRef)
 
   // Reset index when task changes
   useEffect(() => {
@@ -384,18 +387,19 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="fixed inset-0 z-50 flex items-end justify-center p-1 md:items-center md:p-4"
+      className="detail-modal-shell fixed inset-0 z-50 flex items-end justify-center p-1 max-md:p-0 md:items-center md:p-4"
       onClick={() => setDetailTaskId(null)}
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
       <div
-        className="detail-modal-panel glass-surface-strong relative z-10 flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 animate-modal-in max-md:h-[min(96dvh,100%)] max-md:max-h-[96dvh] max-md:overflow-y-auto max-md:overscroll-contain md:max-h-[90vh] md:flex-row"
+        ref={detailPanelRef}
+        className="detail-modal-panel glass-surface-strong relative z-10 flex w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.12)] ring-1 ring-black/5 dark:border-white/[0.08] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] dark:ring-white/10 animate-modal-in max-md:min-h-0 max-md:flex-1 max-md:overflow-x-hidden max-md:overflow-y-auto max-md:overscroll-contain md:max-h-[90vh] md:flex-row"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 左侧：图片 */}
         <div
           ref={imagePanelRef}
-          className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 max-md:h-[70dvh] max-md:min-h-[70dvh] md:w-1/2 md:min-h-[16rem] md:self-stretch"
+          className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 md:w-1/2 md:min-h-[16rem] md:self-stretch"
         >
           {hasRenderedOutput && (
             <>
@@ -423,7 +427,7 @@ export default function DetailModal() {
               <button
                 type="button"
                 onClick={() => setDetailTaskId(null)}
-                className="absolute right-3 top-3 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white/90 backdrop-blur transition hover:bg-black/60 md:hidden"
+                className="detail-modal-control-top detail-modal-control-top-right absolute z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white/90 backdrop-blur transition hover:bg-black/60 md:hidden"
                 aria-label="关闭"
               >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -433,10 +437,10 @@ export default function DetailModal() {
               <button
                 type="button"
                 onClick={() => toggleTaskImageBlur(task.id)}
-                className={`absolute top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur transition md:right-4 md:top-4 ${
+                className={`detail-modal-control-top detail-modal-control-top-right-secondary absolute z-10 flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur transition md:right-4 md:top-4 ${
                   isTaskBlurred
-                    ? 'right-14 border-blue-300/70 bg-blue-500/80 text-white'
-                    : 'right-14 border-white/30 bg-black/40 text-white/80 hover:bg-black/55 md:right-4'
+                    ? 'border-blue-300/70 bg-blue-500/80 text-white'
+                    : 'border-white/30 bg-black/40 text-white/80 hover:bg-black/55 md:right-4'
                 }`}
                 title={isTaskBlurred ? '解除当前任务模糊' : '模糊当前任务'}
               >
@@ -454,7 +458,10 @@ export default function DetailModal() {
                   </svg>
                 )}
               </button>
-              <div className="absolute top-[15px] flex items-center gap-1.5" style={{ left: imageLabelLeft }}>
+              <div
+                className="detail-modal-control-top detail-modal-control-top-left absolute flex items-center gap-1.5 max-md:!left-[max(0.75rem,calc(env(safe-area-inset-left,0px)+0.5rem))]"
+                style={{ left: imageLabelLeft }}
+              >
                 {isVideoTask ? (
                   <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                     {videoParams?.aspect_ratio ?? 'auto'}
@@ -504,7 +511,7 @@ export default function DetailModal() {
                     </svg>
                   </button>
                   <div
-                    className="absolute bottom-1.5 left-1/2 z-10 flex max-w-[min(88%,26rem)] -translate-x-1/2 flex-col items-center gap-0.5 rounded-xl bg-black/50 px-1.5 py-1 text-white shadow-lg backdrop-blur-sm sm:bottom-2 sm:max-w-[min(70%,28rem)] sm:gap-1 sm:rounded-2xl sm:px-2 sm:py-1.5"
+                    className="detail-modal-carousel-bottom absolute left-1/2 z-10 flex max-w-[min(88%,26rem)] -translate-x-1/2 flex-col items-center gap-0.5 rounded-xl bg-black/50 px-1.5 py-1 text-white shadow-lg backdrop-blur-sm sm:max-w-[min(70%,28rem)] sm:gap-1 sm:rounded-2xl sm:px-2 sm:py-1.5"
                     onClick={stopThumbnailGesture}
                     onMouseDown={stopThumbnailGesture}
                     onTouchStart={stopThumbnailGesture}

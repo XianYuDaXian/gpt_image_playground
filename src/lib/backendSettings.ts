@@ -45,6 +45,7 @@ export interface BackendProviderProfile {
   veniceGenerateEnabled?: boolean
   veniceEditEnabled?: boolean
   veniceMultiEditEnabled?: boolean
+  veniceSkipResolution?: boolean
   apiMode: AppSettings['apiMode']
   timeoutSeconds: number
   codexCli: boolean
@@ -74,6 +75,7 @@ export interface BackendProviderOption {
   veniceGenerateEnabled?: boolean
   veniceEditEnabled?: boolean
   veniceMultiEditEnabled?: boolean
+  veniceSkipResolution?: boolean
   timeoutSeconds: number
   codexCli: boolean
   grokApiCompat: boolean
@@ -97,11 +99,24 @@ export interface BackendManagementOperationLog {
     | 'backup_export'
     | 'backup_import'
     | 'remote_reset_usage_code'
+    | 'remote_reset_admin'
     | 'remote_reset_tasks'
     | 'remote_reset_all'
   status: 'completed' | 'failed'
   title: string
   detail: string
+  createdAt: string
+}
+
+export interface BackendAdminTaskCleanupCandidate {
+  id: string
+  prompt: string
+  taskType: string
+  providerProfileId: string | null
+  providerProfileLabel: string
+  outputImageCount: number
+  outputVideoCount: number
+  taskMediaBytes: number
   createdAt: string
 }
 
@@ -153,6 +168,7 @@ export interface BackendUsageCode {
   taskCount: number
   outputImageCount: number
   outputVideoCount: number
+  taskMediaBytes?: number
   quotaEvents: Array<{
     id: number
     usageCodeId: string
@@ -410,16 +426,32 @@ export async function deleteBackendProviderProfile(profileId: string): Promise<v
   await readResponseJson<{ ok: true }>(response)
 }
 
-export async function resetBackendRemoteData(mode: 'tasks' | 'all' | 'usage_code_tasks_only') {
+export async function resetBackendRemoteData(
+  mode: 'tasks' | 'all' | 'usage_code_tasks_only' | 'admin_tasks_only',
+  options?: {
+    usageCodeIds?: string[]
+    taskIds?: string[]
+  },
+) {
   const response = await fetch('/api/admin/data/reset', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify({
+      mode,
+      ...(options?.usageCodeIds?.length ? { usageCodeIds: options.usageCodeIds } : {}),
+      ...(options?.taskIds?.length ? { taskIds: options.taskIds } : {}),
+    }),
   })
 
   return readResponseJson<MaintenanceStatus>(response)
+}
+
+export async function fetchBackendAdminTaskCleanupCandidates(): Promise<BackendAdminTaskCleanupCandidate[]> {
+  const response = await fetch('/api/admin/data/admin-task-cleanup-candidates', { cache: 'no-store' })
+  const payload = await readResponseJson<{ items: BackendAdminTaskCleanupCandidate[] }>(response)
+  return payload.items
 }
 
 export async function fetchBackendManagementLogs() {

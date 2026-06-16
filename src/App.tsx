@@ -40,6 +40,7 @@ function getMaintenanceTitle(isAdmin: boolean, operation: MaintenanceStatus['ope
   if (operation === 'backup_export') return phase === 'failed' ? '服务器备份失败' : phase === 'completed' ? '服务器备份已完成' : '服务器备份进行中'
   if (operation === 'usage_code_media_export') return phase === 'failed' ? '导出失败' : phase === 'completed' ? '导出已完成' : '导出进行中'
   if (operation === 'remote_reset_usage_code') return phase === 'failed' ? '使用码任务清理失败' : phase === 'completed' ? '使用码任务清理已完成' : '正在清理使用码任务'
+  if (operation === 'remote_reset_admin') return phase === 'failed' ? '管理员任务清理失败' : phase === 'completed' ? '管理员任务清理已完成' : '正在清理管理员任务'
   if (operation === 'remote_reset_all') return phase === 'failed' ? '远端全部清空失败' : phase === 'completed' ? '远端全部已清空' : '正在清空远端全部'
   if (operation === 'remote_reset_tasks') return phase === 'failed' ? '远端记录清空失败' : phase === 'completed' ? '远端记录已清空' : '正在清空远端记录'
   return '服务器维护进行中'
@@ -51,6 +52,7 @@ function getMaintenanceStage(operation: MaintenanceStatus['operation'], phase: s
   if (operation === 'backup_import') return '正在恢复备份'
   if (operation === 'backup_export') return '正在生成备份包'
   if (operation === 'remote_reset_usage_code') return '正在清理使用码任务'
+  if (operation === 'remote_reset_admin') return '正在清理管理员任务'
   if (operation === 'remote_reset_all') return '正在清空远端全部'
   if (operation === 'remote_reset_tasks') return '正在清空远端记录'
   return '正在处理中'
@@ -254,12 +256,18 @@ export default function App() {
     if (previous.active && !maintenance.active && maintenance.phase === 'completed') {
       if (maintenance.operation === 'remote_reset_all') {
         void clearAllData({ silent: true })
-      } else if (maintenance.operation === 'remote_reset_tasks' || maintenance.operation === 'remote_reset_usage_code') {
+      } else if (
+        maintenance.operation === 'remote_reset_tasks'
+        || maintenance.operation === 'remote_reset_usage_code'
+        || maintenance.operation === 'remote_reset_admin'
+      ) {
         void clearLocalTaskCache({ silent: true }).then(() => refreshTasksFromServer({ silent: true }))
       }
       const showToast = useStore.getState().showToast
       if (maintenance.operation === 'remote_reset_usage_code') {
         showToast('使用码任务与产物已清理完成', 'success')
+      } else if (maintenance.operation === 'remote_reset_admin') {
+        showToast('管理员任务与产物已清理完成', 'success')
       } else if (maintenance.operation === 'remote_reset_tasks') {
         showToast('远端记录已清空', 'success')
       } else if (maintenance.operation === 'remote_reset_all') {
