@@ -41,8 +41,79 @@ export function isCarouselSwipeTarget(target: EventTarget | null) {
 }
 
 export function isDetailCarouselSwipeTarget(target: EventTarget | null) {
-  return target instanceof Element && Boolean(
-    target.closest('img.saveable-image') || target.closest('[data-detail-carousel]'),
+  return target instanceof Element && Boolean(target.closest('img.saveable-image'))
+}
+
+/** 大图模式图片显示区域（与 max-h 90dvh / max-w 92vw + 居中一致，不受入场动画 transform 影响） */
+export function resolveLightboxDisplayRect(image: HTMLImageElement) {
+  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return null
+
+  const maxWidth = Math.min(window.innerWidth * 0.92, window.innerWidth)
+  const maxHeight = window.innerHeight * 0.9
+  const naturalRatio = image.naturalWidth / image.naturalHeight
+
+  let width = maxWidth
+  let height = width / naturalRatio
+  if (height > maxHeight) {
+    height = maxHeight
+    width = height * naturalRatio
+  }
+
+  const left = (window.innerWidth - width) / 2
+  const top = (window.innerHeight - height) / 2
+
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    centerY: top + height / 2,
+  }
+}
+
+/** 判断点击是否落在 object-contain 实际绘制的图片区域内 */
+export function isPointInsideObjectContainImage(
+  image: HTMLImageElement,
+  localX: number,
+  localY: number,
+) {
+  const { width: containerWidth, height: containerHeight } = image.getBoundingClientRect()
+  if (
+    containerWidth <= 0
+    || containerHeight <= 0
+    || image.naturalWidth <= 0
+    || image.naturalHeight <= 0
+  ) {
+    return false
+  }
+
+  const naturalRatio = image.naturalWidth / image.naturalHeight
+  const containerRatio = containerWidth / containerHeight
+
+  let renderedWidth: number
+  let renderedHeight: number
+  let offsetX: number
+  let offsetY: number
+
+  if (naturalRatio > containerRatio) {
+    renderedWidth = containerWidth
+    renderedHeight = containerWidth / naturalRatio
+    offsetX = 0
+    offsetY = (containerHeight - renderedHeight) / 2
+  } else {
+    renderedHeight = containerHeight
+    renderedWidth = containerHeight * naturalRatio
+    offsetX = (containerWidth - renderedWidth) / 2
+    offsetY = 0
+  }
+
+  return (
+    localX >= offsetX
+    && localX <= offsetX + renderedWidth
+    && localY >= offsetY
+    && localY <= offsetY + renderedHeight
   )
 }
 

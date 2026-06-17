@@ -9,6 +9,7 @@ import {
   resolveTouchAxisLock,
   resolveTouchSwipeThreshold,
   commitCarouselPendingSlide,
+  isPointInsideObjectContainImage,
   type ImageCarouselHandle,
   type TouchAxisLock,
 } from '../lib/touchGesture'
@@ -87,7 +88,7 @@ function OutputImageSlide({
           src={displaySrc}
           data-image-id={imageId}
           data-original-src={originalSrc}
-          className={`saveable-image max-h-[calc(100%-var(--detail-mobile-top-chrome,3.5rem)-var(--detail-mobile-bottom-chrome,4.75rem))] max-w-full object-contain transition duration-200 md:max-h-[calc(100%-2rem)] md:max-w-[calc(100%-2rem)] ${
+          className={`saveable-image max-h-full max-w-full object-contain transition duration-200 ${
             isActive ? 'cursor-pointer' : ''
           } ${showLoadingOverlay && isActive ? 'opacity-0' : 'opacity-100'} ${
             isTaskBlurred ? 'scale-[1.02] blur-md' : ''
@@ -99,8 +100,17 @@ function OutputImageSlide({
               void cacheTaskImageForEditing(imageId, originalSrc, event.currentTarget)
             }
           }}
-          onClick={() => {
+          onClick={(event) => {
             if (!isActive || isLoading) return
+            const image = event.currentTarget
+            const rect = image.getBoundingClientRect()
+            if (!isPointInsideObjectContainImage(
+              image,
+              event.clientX - rect.left,
+              event.clientY - rect.top,
+            )) {
+              return
+            }
             onImageTap()
           }}
           alt=""
@@ -154,15 +164,30 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   const suppressImageTapRef = useRef(false)
   const pendingIndexRef = useRef<number | null>(null)
   const imageIndexRef = useRef(imageIndex)
+  // 轮播内部 goToIndex 触发的 imageIndex 变化不应打断补间
+  const skipExternalSyncRef = useRef(false)
+  const animationGenRef = useRef(0)
 
   const outputLen = task.outputImages.length
   const slideWidth = panelWidth > 0 ? panelWidth : 0
 
   useEffect(() => {
     imageIndexRef.current = imageIndex
-    if (!isAnimatingRef.current && !isDraggingRef.current) {
-      setVisualIndex(imageIndex)
+    if (skipExternalSyncRef.current) {
+      skipExternalSyncRef.current = false
+      return
     }
+    if (isDraggingRef.current) return
+    if (isAnimatingRef.current) {
+      // 缩略图点选时立即跳切，打断进行中的补间
+      animationGenRef.current += 1
+      pendingIndexRef.current = null
+      isAnimatingRef.current = false
+      setIsAnimating(false)
+      dragOffsetRef.current = 0
+      setDragOffset(0)
+    }
+    setVisualIndex(imageIndex)
   }, [imageIndex])
 
   useEffect(() => {
@@ -238,17 +263,28 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
   }, [goToIndex, updateDragOffset])
 
   const runSlideAnimation = useCallback((targetOffset: number, pendingIndex: number | null) => {
+    const gen = animationGenRef.current + 1
+    animationGenRef.current = gen
     pendingIndexRef.current = pendingIndex
     setIsDragging(false)
     isAnimatingRef.current = true
     setIsAnimating(true)
 
+    // 动画开始即提交 index，缩略图与页码即时切换
+    if (pendingIndex != null) {
+      imageIndexRef.current = pendingIndex
+      skipExternalSyncRef.current = true
+      goToIndex(pendingIndex)
+    }
+
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        if (animationGenRef.current !== gen) return
+        if (!isAnimatingRef.current) return
         updateDragOffset(targetOffset)
       })
     })
-  }, [updateDragOffset])
+  }, [goToIndex, updateDragOffset])
 
   const finalizeSlideAnimation = useCallback(() => {
     const pendingIndex = pendingIndexRef.current
@@ -258,10 +294,9 @@ const DetailOutputImageCarousel = forwardRef<ImageCarouselHandle, DetailOutputIm
     if (pendingIndex != null) {
       imageIndexRef.current = pendingIndex
       setVisualIndex(pendingIndex)
-      goToIndex(pendingIndex)
     }
     updateDragOffset(0)
-  }, [goToIndex, updateDragOffset])
+  }, [updateDragOffset])
 
   const handleTrackTransitionEnd = useCallback((event: React.TransitionEvent<HTMLDivElement>) => {
     if (event.propertyName !== 'transform') return

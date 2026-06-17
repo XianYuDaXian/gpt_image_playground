@@ -53,40 +53,44 @@ function LightboxSlide({
 
   return (
     <div className="relative flex h-full w-full flex-shrink-0 items-center justify-center px-2 sm:px-4">
-      {isActive && (showLoadingOverlay || (!displaySrc && isLoading)) && (
-        <ImageLoadingOverlay
-          progress={progress}
-          imageIndex={imageIndex}
-          imageTotal={imageTotal}
-          variant="dark"
-        />
-      )}
-      {displaySrc ? (
-        <img
-          src={displaySrc}
-          data-image-id={imageId}
-          data-original-src={matchedTask?.imageUrlsById?.[imageId]}
-          className={`saveable-image max-h-[90dvh] max-w-[min(92vw,100%)] object-contain rounded-lg shadow-2xl transition-opacity duration-200 ${
-            showLoadingOverlay && isActive ? 'opacity-0' : 'opacity-100'
-          }`}
-          onLoad={(event) => {
-            if (!isActive) return
-            const remoteUrl = matchedTask?.imageUrlsById?.[imageId]
-            if (!remoteUrl) return
-            void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
-          }}
-          onDragStart={(event) => event.preventDefault()}
-          alt=""
-          draggable={false}
-        />
-      ) : null}
-      {isActive && maskPreviewSrc && !showLoadingOverlay && displaySrc ? (
-        <img
-          src={maskPreviewSrc}
-          className="pointer-events-none absolute inset-0 m-auto max-h-[90dvh] max-w-[min(92vw,100%)] rounded-lg object-contain"
-          alt=""
-        />
-      ) : null}
+      <div className="relative inline-flex max-h-[90dvh] max-w-[min(92vw,100%)] items-center justify-center">
+        {isActive && (showLoadingOverlay || (!displaySrc && isLoading)) && (
+          <ImageLoadingOverlay
+            progress={progress}
+            imageIndex={imageIndex}
+            imageTotal={imageTotal}
+            variant="dark"
+          />
+        )}
+        {displaySrc ? (
+          <img
+            src={displaySrc}
+            data-image-id={imageId}
+            data-lightbox-active={isActive ? 'true' : undefined}
+            data-original-src={matchedTask?.imageUrlsById?.[imageId]}
+            className={`saveable-image max-h-[90dvh] max-w-[min(92vw,100%)] object-contain rounded-lg shadow-2xl transition-opacity duration-200 ${
+              showLoadingOverlay && isActive ? 'opacity-0' : 'opacity-100'
+            }`}
+            onLoad={(event) => {
+              if (!isActive) return
+              const remoteUrl = matchedTask?.imageUrlsById?.[imageId]
+              if (!remoteUrl) return
+              void cacheTaskImageForEditing(imageId, remoteUrl, event.currentTarget)
+            }}
+
+            onDragStart={(event) => event.preventDefault()}
+            alt=""
+            draggable={false}
+          />
+        ) : null}
+        {isActive && maskPreviewSrc && !showLoadingOverlay && displaySrc ? (
+          <img
+            src={maskPreviewSrc}
+            className="pointer-events-none absolute inset-0 m-auto max-h-[90dvh] max-w-[min(92vw,100%)] rounded-lg object-contain"
+            alt=""
+          />
+        ) : null}
+      </div>
     </div>
   )
 }

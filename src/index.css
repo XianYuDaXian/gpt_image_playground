@@ -606,8 +606,6 @@ input[type="number"] {
   }
 
   .detail-modal-image-panel {
-    --detail-mobile-top-chrome: 3.5rem;
-    --detail-mobile-bottom-chrome: 4.75rem;
     touch-action: manipulation;
     flex-shrink: 0;
     height: 40dvh;
@@ -632,12 +630,32 @@ input[type="number"] {
   }
 
   .detail-modal-carousel-bottom {
-    bottom: 0.75rem;
+    bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
   }
 
   .detail-modal-info-panel {
     padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
   }
+}
+
+.detail-modal-carousel-bottom {
+  bottom: 0.75rem;
+}
+
+.detail-modal-control-top {
+  top: 0.75rem;
+}
+
+.detail-modal-control-top-left {
+  left: 0.75rem;
+}
+
+.detail-modal-control-top-right {
+  right: 0.75rem;
+}
+
+.detail-modal-control-top-right-secondary {
+  right: 3.5rem;
 }
 
 @media (min-width: 768px) {

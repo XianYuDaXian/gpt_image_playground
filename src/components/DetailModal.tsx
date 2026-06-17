@@ -64,7 +64,7 @@ export default function DetailModal() {
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<ImageCarouselHandle>(null)
   const taskIdPopoverRef = useRef<HTMLDivElement>(null)
-  const [imageLabelLeft, setImageLabelLeft] = useState(8)
+
   const useNativeVideoControls = useMemo(() => {
     if (typeof navigator === 'undefined') return false
     const ua = navigator.userAgent || ''
@@ -200,13 +200,6 @@ export default function DetailModal() {
 
   const handleActiveImageReady = useCallback((imageId: string, image: HTMLImageElement) => {
     if (imageId !== currentOutputImageId) return
-    const panel = imagePanelRef.current
-    if (!panel) return
-
-    const panelRect = panel.getBoundingClientRect()
-    const imageRect = image.getBoundingClientRect()
-    setImageLabelLeft(Math.max(8, imageRect.left - panelRect.left))
-
     if (image.naturalWidth > 0 && image.naturalHeight > 0) {
       setImageRatios((prev) => ({
         ...prev,
@@ -218,18 +211,6 @@ export default function DetailModal() {
       }))
     }
   }, [currentOutputImageId])
-
-  useEffect(() => {
-    const updateImageLabelLeft = () => {
-      const panel = imagePanelRef.current
-      if (!panel) return
-      setImageLabelLeft(8)
-    }
-
-    updateImageLabelLeft()
-    window.addEventListener('resize', updateImageLabelLeft)
-    return () => window.removeEventListener('resize', updateImageLabelLeft)
-  }, [imageIndex, currentOutputImageSrc])
 
   useEffect(() => {
     let cancelled = false
@@ -458,58 +439,65 @@ export default function DetailModal() {
                   </svg>
                 )}
               </button>
-              <div
-                className="detail-modal-control-top detail-modal-control-top-left absolute flex items-center gap-1.5 max-md:!left-[max(0.75rem,calc(env(safe-area-inset-left,0px)+0.5rem))]"
-                style={{ left: imageLabelLeft }}
-              >
-                {isVideoTask ? (
-                  <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+              {(() => {
+                const ratioLabels = isVideoTask ? (
+                  <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">
                     {videoParams?.aspect_ratio ?? 'auto'}
                   </span>
                 ) : currentImageRatio && currentImageSize ? (
                   <>
-                    <span className="bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+                    <span className="rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">
                       {currentImageRatio}
                     </span>
-                    <span className="bg-black/50 text-white/90 text-xs px-2 py-0.5 rounded backdrop-blur-sm font-medium">
+                    <span className="rounded bg-black/50 px-2 py-0.5 text-xs font-medium text-white/90 backdrop-blur-sm">
                       {currentImageSize}
                     </span>
                   </>
                 ) : (
                   formatDuration() && (
-                    <span className="flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <span className="flex items-center gap-1 rounded bg-black/50 px-2 py-0.5 font-mono text-xs text-white backdrop-blur-sm">
+                      <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                       {formatDuration()}
                     </span>
                   )
-                )}
-              </div>
+                )
+                if (!ratioLabels) return null
+                return (
+                  <div className="detail-modal-control-top detail-modal-control-top-left absolute left-3 top-3 z-10 flex items-center gap-1.5">
+                    {ratioLabels}
+                  </div>
+                )
+              })()}
               {!isVideoTask && outputLen > 1 && (
                 <>
-                  <button
-                    type="button"
-                    data-no-carousel-swipe
-                    onClick={() => carouselRef.current?.animatePrev()}
-                    className="absolute left-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:left-2"
-                    aria-label="上一张"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    data-no-carousel-swipe
-                    onClick={() => carouselRef.current?.animateNext()}
-                    className="absolute right-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:right-2"
-                    aria-label="下一张"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
+                  {imageIndex > 0 ? (
+                    <button
+                      type="button"
+                      data-no-carousel-swipe
+                      onClick={() => carouselRef.current?.animatePrev()}
+                      className="absolute left-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:left-2"
+                      aria-label="上一张"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                  ) : null}
+                  {imageIndex < outputLen - 1 ? (
+                    <button
+                      type="button"
+                      data-no-carousel-swipe
+                      onClick={() => carouselRef.current?.animateNext()}
+                      className="absolute right-1.5 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60 sm:right-2"
+                      aria-label="下一张"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                      </svg>
+                    </button>
+                  ) : null}
                   <div
                     className="detail-modal-carousel-bottom absolute left-1/2 z-10 flex max-w-[min(88%,26rem)] -translate-x-1/2 flex-col items-center gap-0.5 rounded-xl bg-black/50 px-1.5 py-1 text-white shadow-lg backdrop-blur-sm sm:max-w-[min(70%,28rem)] sm:gap-1 sm:rounded-2xl sm:px-2 sm:py-1.5"
                     onClick={stopThumbnailGesture}
