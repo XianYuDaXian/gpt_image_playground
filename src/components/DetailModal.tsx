@@ -368,7 +368,7 @@ export default function DetailModal() {
   return (
     <div
       data-no-drag-select
-      className="detail-modal-shell fixed inset-0 z-50 flex items-end justify-center p-1 max-md:p-0 md:items-center md:p-4"
+      className="detail-modal-shell fixed inset-0 z-50 flex items-end justify-center md:items-center md:p-4"
       onClick={() => setDetailTaskId(null)}
     >
       <div className="glass-overlay absolute inset-0 animate-overlay-in" />
@@ -465,7 +465,7 @@ export default function DetailModal() {
                 )
                 if (!ratioLabels) return null
                 return (
-                  <div className="detail-modal-control-top detail-modal-control-top-left absolute left-3 top-3 z-10 flex items-center gap-1.5">
+                  <div className="detail-modal-control-top detail-modal-control-top-left absolute z-10 flex items-center gap-1.5">
                     {ratioLabels}
                   </div>
                 )

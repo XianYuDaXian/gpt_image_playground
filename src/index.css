@@ -591,7 +591,7 @@ input[type="number"] {
     flex-direction: column;
     align-items: stretch;
     justify-content: stretch;
-    padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+    padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
   }
 
   .detail-modal-panel {
@@ -613,28 +613,29 @@ input[type="number"] {
     max-height: 40dvh;
   }
 
+  /* 壳层已做 safe-area 避让，内部控件不再叠加 inset */
   .detail-modal-control-top {
-    top: max(0.75rem, calc(env(safe-area-inset-top, 0px) + 0.5rem));
+    top: 0.75rem;
   }
 
   .detail-modal-control-top-left {
-    left: max(0.75rem, calc(env(safe-area-inset-left, 0px) + 0.5rem));
+    left: 0.75rem;
   }
 
   .detail-modal-control-top-right {
-    right: max(0.75rem, calc(env(safe-area-inset-right, 0px) + 0.5rem));
+    right: 0.75rem;
   }
 
   .detail-modal-control-top-right-secondary {
-    right: max(3.75rem, calc(env(safe-area-inset-right, 0px) + 3.5rem));
+    right: 3.5rem;
   }
 
   .detail-modal-carousel-bottom {
-    bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+    bottom: 0.5rem;
   }
 
   .detail-modal-info-panel {
-    padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+    padding-bottom: 1rem;
   }
 }
 
@@ -642,23 +643,28 @@ input[type="number"] {
   bottom: 0.75rem;
 }
 
-.detail-modal-control-top {
-  top: 0.75rem;
-}
-
-.detail-modal-control-top-left {
-  left: 0.75rem;
-}
-
-.detail-modal-control-top-right {
-  right: 0.75rem;
-}
-
-.detail-modal-control-top-right-secondary {
-  right: 3.5rem;
+.lightbox-control-top-right {
+  top: max(1.25rem, calc(var(--safe-area-top) + 0.75rem));
+  right: max(1.25rem, calc(var(--safe-area-right) + 0.75rem));
 }
 
 @media (min-width: 768px) {
+  .detail-modal-control-top {
+    top: 0.75rem;
+  }
+
+  .detail-modal-control-top-left {
+    left: 0.75rem;
+  }
+
+  .detail-modal-control-top-right {
+    right: 0.75rem;
+  }
+
+  .detail-modal-control-top-right-secondary {
+    right: 3.5rem;
+  }
+
   .detail-modal-panel {
     min-height: min(90vh, 36rem);
   }

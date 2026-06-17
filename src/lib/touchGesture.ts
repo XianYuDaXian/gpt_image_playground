@@ -44,12 +44,47 @@ export function isDetailCarouselSwipeTarget(target: EventTarget | null) {
   return target instanceof Element && Boolean(target.closest('img.saveable-image'))
 }
 
+export const LIGHTBOX_NAV_BUTTON_SIZE = 44
+
+export function readSafeAreaInsets() {
+  if (typeof document === 'undefined') {
+    return { top: 0, right: 0, bottom: 0, left: 0 }
+  }
+  const style = getComputedStyle(document.documentElement)
+  const read = (name: string) => {
+    const raw = style.getPropertyValue(name).trim()
+    const value = parseFloat(raw)
+    return Number.isFinite(value) ? value : 0
+  }
+  return {
+    top: read('--safe-area-top'),
+    right: read('--safe-area-right'),
+    bottom: read('--safe-area-bottom'),
+    left: read('--safe-area-left'),
+  }
+}
+
+export interface LightboxDisplayRect {
+  left: number
+  top: number
+  width: number
+  height: number
+  right: number
+  bottom: number
+  centerY: number
+}
+
 /** 大图模式图片显示区域（与 max-h 90dvh / max-w 92vw + 居中一致，不受入场动画 transform 影响） */
-export function resolveLightboxDisplayRect(image: HTMLImageElement) {
+export function resolveLightboxDisplayRect(image: HTMLImageElement): LightboxDisplayRect | null {
   if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return null
 
-  const maxWidth = Math.min(window.innerWidth * 0.92, window.innerWidth)
-  const maxHeight = window.innerHeight * 0.9
+  const safe = readSafeAreaInsets()
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const availableWidth = viewportWidth - safe.left - safe.right
+  const availableHeight = viewportHeight - safe.top - safe.bottom
+  const maxWidth = Math.min(availableWidth * 0.92, availableWidth)
+  const maxHeight = availableHeight * 0.9
   const naturalRatio = image.naturalWidth / image.naturalHeight
 
   let width = maxWidth
@@ -59,8 +94,8 @@ export function resolveLightboxDisplayRect(image: HTMLImageElement) {
     width = height * naturalRatio
   }
 
-  const left = (window.innerWidth - width) / 2
-  const top = (window.innerHeight - height) / 2
+  const left = safe.left + (availableWidth - width) / 2
+  const top = safe.top + (availableHeight - height) / 2
 
   return {
     left,
@@ -70,6 +105,41 @@ export function resolveLightboxDisplayRect(image: HTMLImageElement) {
     right: left + width,
     bottom: top + height,
     centerY: top + height / 2,
+  }
+}
+
+/** 大图翻页按钮位置：贴在图片两侧，并限制在安全可视区内 */
+export function resolveLightboxNavButtonPositions(
+  displayRect: LightboxDisplayRect,
+  options?: { gap?: number; buttonSize?: number },
+) {
+  const gap = options?.gap ?? 12
+  const buttonSize = options?.buttonSize ?? LIGHTBOX_NAV_BUTTON_SIZE
+  const safe = readSafeAreaInsets()
+  const edgePadding = 8
+  const minLeft = safe.left + edgePadding
+  const maxLeft = window.innerWidth - safe.right - edgePadding - buttonSize
+  const minCenterY = safe.top + edgePadding + buttonSize / 2
+  const maxCenterY = window.innerHeight - safe.bottom - edgePadding - buttonSize / 2
+  const centerY = Math.max(minCenterY, Math.min(maxCenterY, displayRect.centerY))
+
+  let prevLeft = displayRect.left - gap - buttonSize
+  prevLeft = Math.max(minLeft, Math.min(prevLeft, maxLeft))
+
+  let nextLeft = displayRect.right + gap
+  nextLeft = Math.max(minLeft, Math.min(nextLeft, maxLeft))
+
+  if (prevLeft + buttonSize + gap > nextLeft) {
+    const split = (minLeft + maxLeft) / 2
+    prevLeft = Math.max(minLeft, split - buttonSize - gap / 2)
+    nextLeft = Math.min(maxLeft, split + gap / 2)
+  }
+
+  return {
+    prevLeft,
+    prevTop: centerY,
+    nextLeft,
+    nextTop: centerY,
   }
 }
 

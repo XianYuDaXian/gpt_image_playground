@@ -7,13 +7,13 @@ import {
   isLightboxSwipeTarget,
   isTouchTapLike,
   resolveLightboxDisplayRect,
+  resolveLightboxNavButtonPositions,
   type ImageCarouselHandle,
 } from '../lib/touchGesture'
 import LightboxImageCarousel, { type LightboxCarouselNavState } from './LightboxImageCarousel'
 
-const LIGHTBOX_NAV_GAP = 12
 const lightboxNavBtnClass =
-  'fixed z-[70] rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60'
+  'fixed z-[70] -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60'
 
 const ReferenceImageEditorModal = lazy(() => import('./ReferenceImageEditorModal'))
 
@@ -676,11 +676,12 @@ function LightboxInner({
       return
     }
 
+    const nav = resolveLightboxNavButtonPositions(computed)
     setLightboxNavAnchor({
-      prevX: computed.left,
-      prevY: computed.centerY,
-      nextX: computed.right,
-      nextY: computed.centerY,
+      prevX: nav.prevLeft,
+      prevY: nav.prevTop,
+      nextX: nav.nextLeft,
+      nextY: nav.nextTop,
     })
   }, [carouselNavState.isDragging, isZoomed, showNav])
 
@@ -736,7 +737,7 @@ function LightboxInner({
       <div className="glass-overlay absolute inset-0 animate-fade-in" />
       <button
         data-lightbox-control
-        className="absolute right-5 top-5 z-20 rounded-full bg-black/45 px-4 py-2 text-sm text-white backdrop-blur-sm transition hover:bg-black/65"
+        className="lightbox-control-top-right absolute z-20 rounded-full bg-black/45 px-4 py-2 text-sm text-white backdrop-blur-sm transition hover:bg-black/65"
         onPointerDown={(e) => e.stopPropagation()}
         onTouchStart={(e) => e.stopPropagation()}
         onTouchEnd={(e) => e.stopPropagation()}
@@ -777,7 +778,6 @@ function LightboxInner({
               style={{
                 left: lightboxNavAnchor.prevX,
                 top: lightboxNavAnchor.prevY,
-                transform: `translate(calc(-100% - ${LIGHTBOX_NAV_GAP}px), -50%)`,
               }}
               aria-label="上一张"
               onPointerDown={(event) => event.stopPropagation()}
@@ -802,7 +802,6 @@ function LightboxInner({
               style={{
                 left: lightboxNavAnchor.nextX,
                 top: lightboxNavAnchor.nextY,
-                transform: `translate(${LIGHTBOX_NAV_GAP}px, -50%)`,
               }}
               aria-label="下一张"
               onPointerDown={(event) => event.stopPropagation()}
