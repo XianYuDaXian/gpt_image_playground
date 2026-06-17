@@ -51,17 +51,19 @@ function LightboxSlide({
     enabled: Boolean(imageId && loadSrc),
   })
 
+  const showOverlay = isActive && (showLoadingOverlay || (!displaySrc && isLoading))
+
   return (
     <div className="relative flex h-full w-full flex-shrink-0 items-center justify-center px-2 sm:px-4">
+      {showOverlay && (
+        <ImageLoadingOverlay
+          progress={progress}
+          imageIndex={imageIndex}
+          imageTotal={imageTotal}
+          variant="dark"
+        />
+      )}
       <div className="relative inline-flex max-h-[90dvh] max-w-[min(92vw,100%)] items-center justify-center">
-        {isActive && (showLoadingOverlay || (!displaySrc && isLoading)) && (
-          <ImageLoadingOverlay
-            progress={progress}
-            imageIndex={imageIndex}
-            imageTotal={imageTotal}
-            variant="dark"
-          />
-        )}
         {displaySrc ? (
           <img
             src={displaySrc}
