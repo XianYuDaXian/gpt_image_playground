@@ -382,6 +382,16 @@ export default function DetailModal() {
           ref={imagePanelRef}
           className="detail-modal-image-panel relative flex w-full flex-shrink-0 items-center justify-center bg-gray-100 dark:bg-black/20 md:w-1/2 md:min-h-[16rem] md:self-stretch"
         >
+          <button
+            type="button"
+            onClick={() => setDetailTaskId(null)}
+            className="detail-modal-control-top detail-modal-control-top-right absolute z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white/90 backdrop-blur transition hover:bg-black/60 md:hidden"
+            aria-label="关闭"
+          >
+            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
           {hasRenderedOutput && (
             <>
               {isVideoTask ? (
@@ -405,16 +415,6 @@ export default function DetailModal() {
                   />
                 </div>
               )}
-              <button
-                type="button"
-                onClick={() => setDetailTaskId(null)}
-                className="detail-modal-control-top detail-modal-control-top-right absolute z-20 flex h-9 w-9 items-center justify-center rounded-full border border-white/30 bg-black/45 text-white/90 backdrop-blur transition hover:bg-black/60 md:hidden"
-                aria-label="关闭"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
               <button
                 type="button"
                 onClick={() => toggleTaskImageBlur(task.id)}
