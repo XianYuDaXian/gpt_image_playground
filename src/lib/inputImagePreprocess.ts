@@ -1,16 +1,19 @@
 import { formatByteSize } from './imageLoadProgress'
 import { canvasToBlob, loadImage } from './canvasImage'
 
-/** 4K 像素上限：不超过此像素数时只压体积，不缩分辨率 */
-export const INPUT_IMAGE_MAX_PIXELS = 3840 * 2160
+/** 参考图长边上限，与模型最大边长一致 */
+export const INPUT_IMAGE_MAX_EDGE = 3840
+/** 总像素上限：按 3840 方图计，避免方图被 16:9 4K 像素上限过度缩小 */
+export const INPUT_IMAGE_MAX_PIXELS = INPUT_IMAGE_MAX_EDGE * INPUT_IMAGE_MAX_EDGE
 /** 参考图提交体积上限，优先通过重新编码压缩 */
-export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 /** 分辨率逐步收缩的下限长边 */
-const MIN_INPUT_IMAGE_EDGE = 512
+const MIN_INPUT_IMAGE_EDGE = 1536
 
-const WEBP_QUALITY_START = 0.88
-const WEBP_QUALITY_MIN = 0.55
-const RESIZE_STEP = 0.85
+const WEBP_QUALITY_START = 0.96
+const WEBP_QUALITY_MIN = 0.88
+const WEBP_QUALITY_STEP = 0.02
+const RESIZE_STEP = 0.95
 
 export interface PreparedInputImage {
   dataUrl: string
@@ -24,31 +27,51 @@ export interface PreparedInputImage {
   wasReencoded: boolean
 }
 
-export function exceedsInputImagePixelLimit(width: number, height: number, maxPixels = INPUT_IMAGE_MAX_PIXELS): boolean {
-  return width * height > maxPixels
+export function exceedsInputImagePixelLimit(
+  width: number,
+  height: number,
+  maxEdge = INPUT_IMAGE_MAX_EDGE,
+  maxPixels = INPUT_IMAGE_MAX_PIXELS,
+): boolean {
+  return Math.max(width, height) > maxEdge || width * height > maxPixels
 }
 
 export function calculateInputImagePixelFitSize(
   width: number,
   height: number,
+  maxEdge = INPUT_IMAGE_MAX_EDGE,
   maxPixels = INPUT_IMAGE_MAX_PIXELS,
 ) {
-  const pixels = width * height
-  if (pixels <= maxPixels) {
-    return { width, height, wasResized: false }
+  let fittedWidth = width
+  let fittedHeight = height
+  let wasResized = false
+
+  const longestEdge = Math.max(fittedWidth, fittedHeight)
+  if (longestEdge > maxEdge) {
+    const edgeScale = maxEdge / longestEdge
+    fittedWidth = Math.max(1, Math.floor(fittedWidth * edgeScale))
+    fittedHeight = Math.max(1, Math.floor(fittedHeight * edgeScale))
+    wasResized = true
   }
 
-  const scale = Math.sqrt(maxPixels / pixels)
-  let fittedWidth = Math.max(1, Math.floor(width * scale))
-  let fittedHeight = Math.max(1, Math.floor(height * scale))
+  let pixels = fittedWidth * fittedHeight
+  if (pixels > maxPixels) {
+    const pixelScale = Math.sqrt(maxPixels / pixels)
+    fittedWidth = Math.max(1, Math.floor(fittedWidth * pixelScale))
+    fittedHeight = Math.max(1, Math.floor(fittedHeight * pixelScale))
+    wasResized = true
+  }
+
   while (fittedWidth * fittedHeight > maxPixels && (fittedWidth > 1 || fittedHeight > 1)) {
     if (fittedWidth >= fittedHeight) fittedWidth -= 1
     else fittedHeight -= 1
+    wasResized = true
   }
+
   return {
     width: fittedWidth,
     height: fittedHeight,
-    wasResized: true,
+    wasResized,
   }
 }
 
@@ -103,7 +126,7 @@ async function encodeCanvasDataUrl(
     const encoded = await tryEncode(quality)
     last = encoded
     if (encoded.bytes <= maxBytes) return encoded
-    quality -= 0.08
+    quality -= WEBP_QUALITY_STEP
   }
   if (last) return last
   return await tryEncode(WEBP_QUALITY_MIN)
@@ -149,7 +172,7 @@ export async function prepareInputImageDataUrl(
     }
   }
 
-  // ≤ 4K 像素：只压体积，不缩分辨率
+  // 未超分辨率上限：只压体积，不缩分辨率
   if (!overPixelLimit) {
     const encoded = await encodeImageAtSize(image, originalWidth, originalHeight, maxBytes)
     return {
@@ -165,7 +188,7 @@ export async function prepareInputImageDataUrl(
     }
   }
 
-  // > 4K 像素：先收到像素上限内，再压体积；仍超限则继续缩分辨率
+  // 超分辨率上限：先收到长边/像素上限内，再压体积；仍超限则继续缩分辨率
   const pixelFit = calculateInputImagePixelFitSize(originalWidth, originalHeight)
   let width = pixelFit.width
   let height = pixelFit.height
