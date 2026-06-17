@@ -29,6 +29,7 @@ import { createBackendTask, deleteBackendTask, fetchBackendTaskPage, updateBacke
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask, validateMaskTarget } from './lib/mask'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi, replaceImageMentionsForVideoApi } from './lib/promptImageMentions'
+import { formatInputImageCompressionMessage, prepareInputImageDataUrl } from './lib/inputImagePreprocess'
 import { normalizeImageSize } from './lib/size'
 import { clearAnnouncementLocalState } from './lib/announcement'
 import { matchesTaskFilters } from './lib/taskSearch'
@@ -995,7 +996,8 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
   try {
     const inputDataUrls: string[] = []
     for (const img of orderedInputImages) {
-      inputDataUrls.push(img.dataUrl)
+      const prepared = await prepareInputImageDataUrl(img.dataUrl)
+      inputDataUrls.push(prepared.dataUrl)
     }
     const result = await createBackendTask({
       prompt: taskMode === 'video'
@@ -1264,32 +1266,43 @@ export async function clearLocalTaskCache(options: { silent?: boolean } = {}) {
   }
 }
 
+async function storePreparedInputImage(
+  dataUrl: string,
+  options?: { notifyCompression?: boolean },
+): Promise<{ id: string; dataUrl: string }> {
+  const prepared = await prepareInputImageDataUrl(dataUrl)
+  const id = await storeImage(prepared.dataUrl)
+  cacheImage(id, prepared.dataUrl)
+  if (options?.notifyCompression !== false) {
+    const message = formatInputImageCompressionMessage(prepared)
+    if (message) useStore.getState().showToast(message, 'info')
+  }
+  return { id, dataUrl: prepared.dataUrl }
+}
+
 /** 添加图片到输入（文件上传）—— 仅放入内存缓存，不写 IndexedDB */
 export async function addImageFromFile(file: File): Promise<void> {
   if (!file.type.startsWith('image/')) return
   const dataUrl = await fileToDataUrl(file)
-  const id = await storeImage(dataUrl)
-  cacheImage(id, dataUrl)
-  useStore.getState().addInputImage({ id, dataUrl })
+  const { id, dataUrl: preparedDataUrl } = await storePreparedInputImage(dataUrl)
+  useStore.getState().addInputImage({ id, dataUrl: preparedDataUrl })
 }
 
 export async function replaceInputImageWithDataUrl(currentId: string, dataUrl: string): Promise<string> {
-  const id = await storeImage(dataUrl)
-  cacheImage(id, dataUrl)
+  const { id, dataUrl: preparedDataUrl } = await storePreparedInputImage(dataUrl, { notifyCompression: false })
   useStore.getState().replaceInputImage(
     currentId,
-    { id, dataUrl },
+    { id, dataUrl: preparedDataUrl },
     { equivalentImageIds: { [currentId]: id } },
   )
   return id
 }
 
 export async function addInputImageWithDataUrl(dataUrl: string): Promise<string> {
-  const id = await storeImage(dataUrl)
-  cacheImage(id, dataUrl)
+  const { id, dataUrl: preparedDataUrl } = await storePreparedInputImage(dataUrl, { notifyCompression: false })
   const state = useStore.getState()
   if (!state.inputImages.some((image) => image.id === id)) {
-    state.addInputImage({ id, dataUrl })
+    state.addInputImage({ id, dataUrl: preparedDataUrl })
   }
   return id
 }
@@ -1300,9 +1313,8 @@ export async function addImageFromUrl(src: string): Promise<void> {
   const blob = await res.blob()
   if (!blob.type.startsWith('image/')) throw new Error('不是有效的图片')
   const dataUrl = await blobToDataUrl(blob)
-  const id = await storeImage(dataUrl)
-  cacheImage(id, dataUrl)
-  useStore.getState().addInputImage({ id, dataUrl })
+  const { id, dataUrl: preparedDataUrl } = await storePreparedInputImage(dataUrl)
+  useStore.getState().addInputImage({ id, dataUrl: preparedDataUrl })
 }
 
 async function loadTaskImageDataUrl(task: TaskRecord, imageId: string): Promise<string | undefined> {

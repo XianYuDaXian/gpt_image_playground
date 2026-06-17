@@ -643,7 +643,7 @@ input[type="number"] {
   bottom: 0.75rem;
 }
 
-.lightbox-control-top-right {
+.lightbox-control-top-actions {
   top: max(1.25rem, calc(var(--safe-area-top) + 0.75rem));
   right: max(1.25rem, calc(var(--safe-area-right) + 0.75rem));
 }

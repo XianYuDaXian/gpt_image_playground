@@ -10,7 +10,9 @@ import {
   resolveLightboxNavButtonPositions,
   type ImageCarouselHandle,
 } from '../lib/touchGesture'
+import { resolveLightboxCompareTarget } from '../lib/lightboxCompare'
 import LightboxImageCarousel, { type LightboxCarouselNavState } from './LightboxImageCarousel'
+import LightboxImageCompare from './LightboxImageCompare'
 
 const lightboxNavBtnClass =
   'fixed z-[70] -translate-y-1/2 rounded-full bg-black/45 p-1.5 text-white backdrop-blur-sm transition hover:bg-black/60'
@@ -36,6 +38,7 @@ export default function Lightbox() {
   const setLightboxStartEditor = useStore((s) => s.setLightboxStartEditor)
   const inputImages = useStore((s) => s.inputImages)
   const [asyncSrc, setAsyncSrc] = useState('')
+  const [compareAsyncSrc, setCompareAsyncSrc] = useState('')
   const [showEditor, setShowEditor] = useState(false)
   const maskDraft = useStore((s) => s.maskDraft)
   const tasks = useStore((s) => s.tasks)
@@ -85,6 +88,44 @@ export default function Lightbox() {
   }, [lightboxImageId, syncSrc, setLightboxStartEditor])
 
   const isReferenceImage = Boolean(lightboxImageId && inputImages.some((image) => image.id === lightboxImageId))
+  const compareTarget = useMemo(
+    () => (lightboxImageId ? resolveLightboxCompareTarget(lightboxImageId, tasks) : null),
+    [lightboxImageId, tasks],
+  )
+  const compareSyncSrc = useMemo(
+    () => (compareTarget ? resolveTaskImageDisplaySrc(compareTarget.compareImageId, tasks) : ''),
+    [compareTarget, tasks],
+  )
+  const compareSrc = compareSyncSrc || compareAsyncSrc
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (!compareTarget?.compareImageId) {
+      setCompareAsyncSrc('')
+      return
+    }
+
+    if (compareSyncSrc) {
+      setCompareAsyncSrc('')
+      return
+    }
+
+    const compareImageId = compareTarget.compareImageId
+    const cached = getCachedImage(compareImageId)
+    if (cached) {
+      setCompareAsyncSrc(cached)
+      return
+    }
+
+    ensureTaskImageAvailable(compareImageId).then((url) => {
+      if (!cancelled && url) setCompareAsyncSrc(url)
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [compareSyncSrc, compareTarget?.compareImageId])
 
   useEffect(() => {
     if (!lightboxImageId || !src || !lightboxStartEditor) return
@@ -178,6 +219,9 @@ export default function Lightbox() {
         total={total}
         onGoToIndex={goToIndex}
         isReferenceImage={isReferenceImage}
+        primarySrc={src}
+        compareTarget={compareTarget}
+        compareSrc={compareSrc}
         onEdit={() => setShowEditor(true)}
       />
       {showEditor && lightboxImageId && src ? (
@@ -212,6 +256,9 @@ interface LightboxInnerProps {
   total: number
   onGoToIndex: (index: number) => void
   isReferenceImage: boolean
+  primarySrc: string
+  compareTarget: ReturnType<typeof resolveLightboxCompareTarget>
+  compareSrc: string
   onEdit: () => void
 }
 
@@ -228,8 +275,13 @@ function LightboxInner({
   total,
   onGoToIndex,
   isReferenceImage,
+  primarySrc,
+  compareTarget,
+  compareSrc,
   onEdit,
 }: LightboxInnerProps) {
+  const [compareMode, setCompareMode] = useState(false)
+  const canCompare = Boolean(compareTarget && compareSrc && primarySrc)
   const containerRef = useRef<HTMLDivElement>(null)
   const carouselPanelRef = useRef<HTMLDivElement>(null)
   const carouselWrapRef = useRef<HTMLDivElement>(null)
@@ -324,14 +376,31 @@ function LightboxInner({
     }
   }, [])
 
-  // 切换图片时重置缩放
+  // 切换图片时重置缩放与对比模式
   useEffect(() => {
     scaleRef.current = 1
     txRef.current = 0
     tyRef.current = 0
     didNavSwipeRef.current = false
+    setCompareMode(false)
     rerender()
   }, [imageId, rerender])
+
+  useEffect(() => {
+    if (!canCompare) setCompareMode(false)
+  }, [canCompare])
+
+  useEffect(() => {
+    if (!compareMode) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setCompareMode(false)
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [compareMode])
 
   useEffect(() => {
     const suppressClick = () => {
@@ -373,6 +442,7 @@ function LightboxInner({
     if (!el) return
 
     const onWheel = (e: WheelEvent) => {
+      if (compareMode) return
       e.preventDefault()
       const s = scaleRef.current
       const tx = txRef.current
@@ -389,7 +459,7 @@ function LightboxInner({
 
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [apply])
+  }, [apply, compareMode])
 
   // ====== 鼠标拖拽 + 点击关闭 ======
   useEffect(() => {
@@ -435,6 +505,7 @@ function LightboxInner({
 
   // ====== 单击关闭（仅未缩放且非拖拽） ======
   const onClick = useCallback((e: React.MouseEvent) => {
+    if (compareMode) return
     if (isLightboxControl(e.target)) return
     if (suppressNextClickRef.current) {
       suppressNextClickRef.current = false
@@ -444,10 +515,11 @@ function LightboxInner({
     if (didDragRef.current) return
     if (scaleRef.current > 1 && e.target instanceof HTMLImageElement) return
     onClose()
-  }, [onClose])
+  }, [compareMode, onClose])
 
   // ====== 鼠标双击缩放 ======
   const onDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (compareMode) return
     if (isLightboxControl(e.target)) {
       e.preventDefault()
       e.stopPropagation()
@@ -467,12 +539,12 @@ function LightboxInner({
       const my = e.clientY - cy
       apply(3, -mx * 2, -my * 2)
     }
-  }, [apply, getCenter])
+  }, [apply, compareMode, getCenter])
 
   // ====== 触控事件 ======
   useEffect(() => {
     const el = containerRef.current
-    if (!el) return
+    if (!el || compareMode) return
 
     const clearCloseTapTimer = () => {
       if (closeTapTimerRef.current) {
@@ -627,11 +699,11 @@ function LightboxInner({
       el.removeEventListener('touchend', onTouchEnd)
       el.removeEventListener('touchcancel', onTouchEnd)
     }
-  }, [apply, getCenter, onClose])
+  }, [apply, compareMode, getCenter, onClose])
 
   // 键盘左右切换（与箭头共用轮播补间动画）
   useEffect(() => {
-    if (!showNav) return
+    if (!showNav || compareMode) return
     const onKey = (e: KeyboardEvent) => {
       if (scaleRef.current > 1) return
       if (e.key === 'ArrowLeft' && canGoPrev) {
@@ -645,7 +717,7 @@ function LightboxInner({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [canGoNext, canGoPrev, handleNavNext, handleNavPrev, showNav])
+  }, [canGoNext, canGoPrev, compareMode, handleNavNext, handleNavPrev, showNav])
 
   const s = scaleRef.current
   const tx = txRef.current
@@ -717,7 +789,7 @@ function LightboxInner({
     return () => wrap.removeEventListener('animationend', onAnimationEnd)
   }, [updateLightboxNavAnchor, imageId])
 
-  const showLightboxNav = showNav && !isZoomed && lightboxNavAnchor
+  const showLightboxNav = showNav && !isZoomed && !compareMode && lightboxNavAnchor
   const zoomTransform = `translate(${tx}px, ${ty}px) scale(${s})`
   const zoomTransition = isDragging ? 'none' : 'transform 0.2s ease-out'
   const zoomPercent = Math.round(s * 100)
@@ -735,37 +807,70 @@ function LightboxInner({
       onDoubleClick={onDoubleClick}
     >
       <div className="glass-overlay absolute inset-0 animate-fade-in" />
-      <button
-        data-lightbox-control
-        className="lightbox-control-top-right absolute z-20 rounded-full bg-black/45 px-4 py-2 text-sm text-white backdrop-blur-sm transition hover:bg-black/65"
-        onPointerDown={(e) => e.stopPropagation()}
-        onTouchStart={(e) => e.stopPropagation()}
-        onTouchEnd={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation()
-          onEdit()
-        }}
-        onDoubleClick={stopControlDoubleClick}
-      >
-        {isReferenceImage ? '高级编辑' : '高级编辑并加入参考图'}
-      </button>
+      <div className="lightbox-control-top-actions absolute z-20 flex items-center gap-2">
+        {canCompare ? (
+          <button
+            type="button"
+            data-lightbox-control
+            className={`rounded-full px-4 py-2 text-sm text-white backdrop-blur-sm transition ${
+              compareMode
+                ? 'bg-white/25 ring-1 ring-white/40 hover:bg-white/30'
+                : 'bg-black/45 hover:bg-black/65'
+            }`}
+            onPointerDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchEnd={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              setCompareMode((value) => !value)
+            }}
+            onDoubleClick={stopControlDoubleClick}
+          >
+            {compareMode ? '退出对比' : '对比'}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          data-lightbox-control
+          className="rounded-full bg-black/45 px-4 py-2 text-sm text-white backdrop-blur-sm transition hover:bg-black/65"
+          onPointerDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchEnd={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            onEdit()
+          }}
+          onDoubleClick={stopControlDoubleClick}
+        >
+          {isReferenceImage ? '高级编辑' : '高级编辑并加入参考图'}
+        </button>
+      </div>
       <div
         ref={carouselWrapRef}
         className="pointer-events-auto relative flex h-[100dvh] w-[100vw] items-center justify-center animate-zoom-in"
       >
-        <LightboxImageCarousel
-          ref={carouselRef}
-          imageIds={imageIds.length > 0 ? imageIds : [imageId]}
-          currentIndex={currentIndex >= 0 ? currentIndex : 0}
-          maskPreviewSrc={maskPreviewSrc}
-          zoomTransform={zoomTransform}
-          zoomTransition={zoomTransition}
-          swipeEnabled={showNav && !isZoomed}
-          onIndexChangeRequest={onGoToIndex}
-          onNavStateChange={setCarouselNavState}
-          onSwipeGesture={handleCarouselSwipeGesture}
-          carouselPanelRef={carouselPanelRef}
-        />
+        {compareMode && compareTarget ? (
+          <LightboxImageCompare
+            primarySrc={primarySrc}
+            compareSrc={compareSrc}
+            primaryLabel={compareTarget.primaryLabel}
+            compareLabel={compareTarget.compareLabel}
+          />
+        ) : (
+          <LightboxImageCarousel
+            ref={carouselRef}
+            imageIds={imageIds.length > 0 ? imageIds : [imageId]}
+            currentIndex={currentIndex >= 0 ? currentIndex : 0}
+            maskPreviewSrc={maskPreviewSrc}
+            zoomTransform={zoomTransform}
+            zoomTransition={zoomTransition}
+            swipeEnabled={showNav && !isZoomed}
+            onIndexChangeRequest={onGoToIndex}
+            onNavStateChange={setCarouselNavState}
+            onSwipeGesture={handleCarouselSwipeGesture}
+            carouselPanelRef={carouselPanelRef}
+          />
+        )}
       </div>
 
       {showLightboxNav ? (
@@ -829,7 +934,7 @@ function LightboxInner({
           </span>
         </div>
       )}
-      {showNav && !isZoomed && (
+      {showNav && !isZoomed && !compareMode && (
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
           <span className="px-3 py-1.5 bg-black/50 text-white/80 text-xs rounded-full backdrop-blur-sm">
             {currentIndex + 1} / {total}
