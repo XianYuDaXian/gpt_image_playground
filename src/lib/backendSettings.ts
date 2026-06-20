@@ -168,6 +168,8 @@ export interface BackendUsageCode {
   taskCount: number
   outputImageCount: number
   outputVideoCount: number
+  artifactImageCount?: number
+  artifactVideoCount?: number
   taskMediaBytes?: number
   quotaEvents: Array<{
     id: number

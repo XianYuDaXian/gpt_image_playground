@@ -133,6 +133,8 @@ export interface UsageCodeStatsRecord extends UsageCodeRecord {
   taskCount: number
   outputImageCount: number
   outputVideoCount: number
+  artifactImageCount: number
+  artifactVideoCount: number
   taskMediaBytes: number
   quotaEvents?: UsageQuotaEventRecord[]
 }
@@ -1685,8 +1687,28 @@ ${selectUsageCodeFields()}
           usage_codes.created_at as createdAt,
           usage_codes.updated_at as updatedAt,
           usage_codes.last_used_at as lastUsedAt,
-          COUNT(DISTINCT tasks.id) as taskCount,
-          usage_codes.output_image_count as currentOutputImageCount,
+          COALESCE((
+            SELECT COUNT(DISTINCT usage_code_tasks.id)
+            FROM tasks usage_code_tasks
+            WHERE usage_code_tasks.owner_usage_code_id = usage_codes.id
+              AND usage_code_tasks.owner_kind = 'usage_code'
+          ), 0) as taskCount,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM tasks usage_code_tasks
+            INNER JOIN task_images ON task_images.task_id = usage_code_tasks.id
+            WHERE usage_code_tasks.owner_usage_code_id = usage_codes.id
+              AND usage_code_tasks.owner_kind = 'usage_code'
+              AND task_images.kind = 'output'
+          ), 0) as artifactImageCount,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM tasks usage_code_tasks
+            INNER JOIN task_images ON task_images.task_id = usage_code_tasks.id
+            WHERE usage_code_tasks.owner_usage_code_id = usage_codes.id
+              AND usage_code_tasks.owner_kind = 'usage_code'
+              AND task_images.kind = 'video_output'
+          ), 0) as artifactVideoCount,
           COALESCE((
             SELECT SUM(task_images.bytes)
             FROM tasks usage_code_tasks
@@ -1695,9 +1717,6 @@ ${selectUsageCodeFields()}
               AND usage_code_tasks.owner_kind = 'usage_code'
           ), 0) as taskMediaBytes
         FROM usage_codes
-        LEFT JOIN tasks ON tasks.owner_usage_code_id = usage_codes.id
-        LEFT JOIN task_images ON task_images.task_id = tasks.id AND task_images.kind = 'output'
-        GROUP BY usage_codes.id
         ORDER BY usage_codes.created_at DESC
       `)
       .all() as Array<{
@@ -1706,7 +1725,6 @@ ${selectUsageCodeFields()}
         providerUsedImageCreditsJson: string | null
         providerVideoQuotasJson: string | null
         providerUsedVideoCreditsJson: string | null
-        currentOutputImageCount: number
       } & Omit<UsageCodeStatsRecord, 'allowedProviderProfileIds' | 'providerImageQuotas' | 'providerUsedImageCredits' | 'providerVideoQuotas' | 'providerUsedVideoCredits'>>
     return rows.map((row) => normalizeUsageCodeRow(row))
   }

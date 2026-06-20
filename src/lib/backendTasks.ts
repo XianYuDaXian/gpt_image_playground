@@ -35,6 +35,7 @@ export async function fetchBackendTaskPage(input: {
   pageSize: number
   query?: string
   searchTags?: string[]
+  searchTagMode?: 'include' | 'exclude'
   status?: 'all' | 'running' | 'done' | 'error'
   taskType?: 'all' | 'image' | 'video'
   favorite?: boolean
@@ -49,6 +50,7 @@ export async function fetchBackendTaskPage(input: {
     const trimmedTag = tag.trim()
     if (trimmedTag) params.append('searchTag', trimmedTag)
   }
+  if (input.searchTagMode === 'exclude') params.set('searchTagMode', 'exclude')
   if (input.status && input.status !== 'all') params.set('status', input.status)
   if (input.taskType && input.taskType !== 'all') params.set('taskType', input.taskType)
   if (input.favorite) params.set('favorite', '1')

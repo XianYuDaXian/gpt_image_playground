@@ -405,14 +405,13 @@ export default function InputBar() {
   const filterFavorite = useStore((s) => s.filterFavorite)
   const filterArchived = useStore((s) => s.filterArchived)
   const showUsageCodeTasksForAdmin = useStore((s) => s.showUsageCodeTasksForAdmin)
-  const searchQuery = useStore((s) => s.searchQuery)
   const searchTags = useStore((s) => s.searchTags)
+  const searchTagMode = useStore((s) => s.searchTagMode)
   const authStatus = useStore((s) => s.authStatus)
   const detailTaskId = useStore((s) => s.detailTaskId)
 
   const filteredTasks = useMemo(() => {
     const sorted = [...tasks].sort((a, b) => b.createdAt - a.createdAt)
-    const q = searchQuery.trim().toLowerCase()
     return sorted.filter((t) =>
       matchesTaskFilters(t, {
         filterStatus,
@@ -421,11 +420,12 @@ export default function InputBar() {
         filterArchived,
         role: authStatus?.role,
         showUsageCodeTasksForAdmin,
-        query: q,
+        query: '',
         tags: searchTags,
+        tagMode: searchTagMode,
       }),
     )
-  }, [authStatus?.role, tasks, searchQuery, searchTags, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  }, [authStatus?.role, tasks, searchTags, searchTagMode, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
   const visibleTasks = useMemo(
     () => filteredTasks.filter((task) => visibleTaskIds.includes(task.id)),
     [filteredTasks, visibleTaskIds],

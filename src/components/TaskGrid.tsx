@@ -70,8 +70,8 @@ function buildPageOptions(totalPages: number, currentPage: number, visibleCount:
 
 export default function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
-  const searchQuery = useStore((s) => s.searchQuery)
   const searchTags = useStore((s) => s.searchTags)
+  const searchTagMode = useStore((s) => s.searchTagMode)
   const filterStatus = useStore((s) => s.filterStatus)
   const filterTaskType = useStore((s) => s.filterTaskType)
   const filterFavorite = useStore((s) => s.filterFavorite)
@@ -120,7 +120,7 @@ export default function TaskGrid() {
 
   useEffect(() => {
     setTaskPage(1)
-  }, [searchQuery, searchTags, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin, setTaskPage])
+  }, [searchTags, searchTagMode, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin, setTaskPage])
 
   useEffect(() => {
     if (taskPage > totalPages) {
@@ -156,7 +156,7 @@ export default function TaskGrid() {
 
   useEffect(() => {
     void refreshTasksFromServer({ silent: true })
-  }, [taskPage, taskPageSize, searchQuery, searchTags, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
+  }, [taskPage, taskPageSize, searchTags, searchTagMode, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin])
 
   useEffect(() => {
     setVisibleTaskIds(tasks.map((task) => task.id))
@@ -362,7 +362,7 @@ export default function TaskGrid() {
   if (!tasks.length) {
     return (
       <div className="text-center py-20 text-gray-400 dark:text-gray-500">
-        {searchQuery || searchTags.length > 0 || filterFavorite || filterArchived || filterTaskType !== 'all' ? (
+        {searchTags.length > 0 || filterFavorite || filterArchived || filterTaskType !== 'all' ? (
           <p className="text-sm">没有找到匹配的记录</p>
         ) : (
           <>

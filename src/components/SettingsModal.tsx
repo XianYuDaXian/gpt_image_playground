@@ -661,12 +661,16 @@ export default function SettingsModal() {
     )
   }, [cleanupUsageCodeSearchQuery, usageCodes])
 
+  const getUsageCodeArtifactImageCount = (code: BackendUsageCode) => code.artifactImageCount ?? 0
+  const getUsageCodeArtifactVideoCount = (code: BackendUsageCode) => code.artifactVideoCount ?? 0
+
   const selectedCleanupUsageCodeSummary = useMemo(() => {
     const selectedCodes = usageCodes.filter((code) => selectedCleanupUsageCodeIds.includes(code.id))
     return {
       count: selectedCodes.length,
-      imageCount: selectedCodes.reduce((sum, code) => sum + (code.outputImageCount ?? 0), 0),
-      videoCount: selectedCodes.reduce((sum, code) => sum + (code.outputVideoCount ?? 0), 0),
+      taskCount: selectedCodes.reduce((sum, code) => sum + (code.taskCount ?? 0), 0),
+      imageCount: selectedCodes.reduce((sum, code) => sum + getUsageCodeArtifactImageCount(code), 0),
+      videoCount: selectedCodes.reduce((sum, code) => sum + getUsageCodeArtifactVideoCount(code), 0),
       totalBytes: selectedCodes.reduce((sum, code) => sum + (code.taskMediaBytes ?? 0), 0),
     }
   }, [selectedCleanupUsageCodeIds, usageCodes])
@@ -4007,6 +4011,7 @@ export default function SettingsModal() {
                       {selectedCleanupUsageCodeSummary.count > 0 ? (
                         <>
                           <span>{`已选 ${selectedCleanupUsageCodeSummary.count} 个分发码`}</span>
+                          <span>{` · 任务 ${selectedCleanupUsageCodeSummary.taskCount}`}</span>
                           <span>{` · 图片 ${selectedCleanupUsageCodeSummary.imageCount}`}</span>
                           <span>{` · 视频 ${selectedCleanupUsageCodeSummary.videoCount}`}</span>
                           <span>{` · 占用 ${formatBytes(selectedCleanupUsageCodeSummary.totalBytes)}`}</span>
@@ -4042,7 +4047,7 @@ export default function SettingsModal() {
                               <span className="min-w-0 flex-1">
                                 <span className="block font-medium text-gray-800 dark:text-gray-100">{code.name || '未命名使用码'}</span>
                                 <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
-                                  {`任务 ${code.taskCount} · 图片 ${code.outputImageCount} · 视频 ${code.outputVideoCount}`}
+                                  {`任务 ${code.taskCount} · 图片 ${getUsageCodeArtifactImageCount(code)} · 视频 ${getUsageCodeArtifactVideoCount(code)} · 占用 ${formatBytes(code.taskMediaBytes ?? 0)}`}
                                 </span>
                               </span>
                             </label>
@@ -4103,7 +4108,7 @@ export default function SettingsModal() {
                     const label = selectedCodes.map((code) => code.name || '未命名使用码').join('、')
                     setConfirmDialog({
                       title: '清理所选分发码产物',
-                      message: `这会删除以下分发码提交的全部任务卡片与媒体产物：\n\n${label}\n\n不会删除分发码、配额记录、活动日志、API 配置或其他分发码任务。`,
+                      message: `这会删除以下分发码提交的全部任务卡片与媒体产物：\n\n${label}\n\n已选 ${selectedCleanupUsageCodeSummary.count} 个分发码\n任务 ${selectedCleanupUsageCodeSummary.taskCount} · 图片 ${selectedCleanupUsageCodeSummary.imageCount} · 视频 ${selectedCleanupUsageCodeSummary.videoCount} · 占用 ${formatBytes(selectedCleanupUsageCodeSummary.totalBytes)}\n\n不会删除分发码、配额记录、活动日志、API 配置或其他分发码任务。`,
                       confirmText: '确认清理',
                       tone: 'danger',
                       action: () => {

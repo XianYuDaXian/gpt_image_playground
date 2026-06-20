@@ -32,7 +32,7 @@ import { remapImageMentionsForOrder, replaceImageMentionsForApi, replaceImageMen
 import { formatInputImageCompressionMessage, prepareInputImageDataUrl } from './lib/inputImagePreprocess'
 import { normalizeImageSize } from './lib/size'
 import { clearAnnouncementLocalState } from './lib/announcement'
-import { matchesTaskFilters } from './lib/taskSearch'
+import { matchesTaskFilters, type SearchTagMode } from './lib/taskSearch'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -365,9 +365,11 @@ interface AppState {
   searchQuery: string
   setSearchQuery: (q: string) => void
   searchTags: string[]
+  searchTagMode: SearchTagMode
   addSearchTag: (tag: string) => void
   removeSearchTag: (tag: string) => void
   clearSearchTags: () => void
+  setSearchTagMode: (mode: SearchTagMode) => void
   filterStatus: 'all' | 'running' | 'done' | 'error'
   setFilterStatus: (status: AppState['filterStatus']) => void
   filterTaskType: 'all' | 'image' | 'video'
@@ -641,6 +643,7 @@ export const useStore = create<AppState>()(
       searchQuery: '',
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       searchTags: [],
+      searchTagMode: 'include',
       addSearchTag: (tag) =>
         set((state) => {
           const nextTag = tag.trim()
@@ -652,6 +655,14 @@ export const useStore = create<AppState>()(
       removeSearchTag: (tag) =>
         set((state) => ({ searchTags: state.searchTags.filter((item) => item !== tag) })),
       clearSearchTags: () => set({ searchTags: [] }),
+      setSearchTagMode: (searchTagMode) =>
+        set((state) => {
+          if (state.searchTagMode === searchTagMode) return state
+          return {
+            searchTagMode,
+            searchTags: state.searchTags,
+          }
+        }),
       filterStatus: 'all',
       setFilterStatus: (filterStatus) => set({ filterStatus }),
       filterTaskType: 'all',
@@ -1543,8 +1554,9 @@ function upsertTaskFromServer(task: TaskRecord) {
     filterArchived: state.filterArchived,
     role: state.authStatus?.role,
     showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
-    query: state.searchQuery.trim().toLowerCase(),
+    query: '',
     tags: state.searchTags,
+    tagMode: state.searchTagMode,
   })
 
   if (!shouldDisplay) {
@@ -1620,8 +1632,8 @@ export async function refreshTasksFromServer(options: { silent?: boolean } = {})
     const taskPageResult = await fetchBackendTaskPage({
       page: state.taskPage,
       pageSize: state.taskPageSize,
-      query: state.searchQuery,
       searchTags: state.searchTags,
+      searchTagMode: state.searchTagMode,
       status: state.filterStatus,
       taskType: state.filterTaskType,
       favorite: state.filterFavorite,

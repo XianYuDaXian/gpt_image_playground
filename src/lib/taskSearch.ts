@@ -2,6 +2,8 @@ import type { AuthRole } from './backendAuth'
 import { formatImageRatio } from './size'
 import type { TaskParams, TaskRecord, VideoTaskParams } from '../types'
 
+export type SearchTagMode = 'include' | 'exclude'
+
 export function matchesTaskFilters(
   task: TaskRecord,
   options: {
@@ -13,10 +15,12 @@ export function matchesTaskFilters(
     showUsageCodeTasksForAdmin: boolean
     query: string
     tags?: string[]
+    tagMode?: SearchTagMode
   },
 ) {
   const queryText = options.query.trim()
   const tags = options.tags?.map((tag) => tag.trim()).filter(Boolean) ?? []
+  const tagMode = options.tagMode ?? 'include'
   if (options.filterFavorite && !task.isFavorite) return false
   if (options.filterArchived ? !task.isArchived : task.isArchived) return false
   if (options.filterStatus !== 'all' && task.status !== options.filterStatus) return false
@@ -31,6 +35,10 @@ export function matchesTaskFilters(
     return false
   }
   if (!matchesTaskSearch(task, queryText, options.role)) return false
+  if (tags.length === 0) return true
+  if (tagMode === 'exclude') {
+    return !tags.some((tag) => matchesTaskSearch(task, tag, options.role))
+  }
   return tags.every((tag) => matchesTaskSearch(task, tag, options.role))
 }
 

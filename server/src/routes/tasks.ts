@@ -67,6 +67,7 @@ const taskListQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
   query: z.string().optional(),
   searchTag: z.union([z.string(), z.array(z.string())]).optional(),
+  searchTagMode: z.enum(['include', 'exclude']).default('include'),
   status: z.enum(['all', 'running', 'done', 'error']).default('all'),
   taskType: z.enum(['all', 'image', 'video']).default('all'),
   favorite: z.union([z.literal('1'), z.literal('true')]).optional(),
@@ -504,6 +505,10 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       const filteredTasks = serializeTaskList(rawTasks, auth.role === 'admin', auth.role === 'admin')
         .filter((task) => {
           if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
+          if (searchTags.length === 0) return true
+          if (query.searchTagMode === 'exclude') {
+            return !searchTags.some((tag) => matchesTaskSearch(task, tag, auth.role))
+          }
           return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
         })
       total = filteredTasks.length

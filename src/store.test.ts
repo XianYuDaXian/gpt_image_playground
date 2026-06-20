@@ -59,6 +59,19 @@ describe('mask draft lifecycle in store actions', () => {
     expect(useStore.getState().maskDraft).toBeNull()
   })
 
+  it('切换标签筛选模式时保留已提交标签', () => {
+    useStore.setState({
+      searchTags: ['猫', '狗'],
+      searchTagMode: 'include',
+    })
+
+    useStore.getState().setSearchTagMode('exclude')
+
+    const state = useStore.getState()
+    expect(state.searchTagMode).toBe('exclude')
+    expect(state.searchTags).toEqual(['猫', '狗'])
+  })
+
   it('clears an invalid mask draft when submit cannot find the mask target image', async () => {
     useStore.setState({
       inputImages: [imageA],

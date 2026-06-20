@@ -6,9 +6,11 @@ export default function SearchBar() {
   const searchQuery = useStore((s) => s.searchQuery)
   const setSearchQuery = useStore((s) => s.setSearchQuery)
   const searchTags = useStore((s) => s.searchTags)
+  const searchTagMode = useStore((s) => s.searchTagMode)
   const addSearchTag = useStore((s) => s.addSearchTag)
   const removeSearchTag = useStore((s) => s.removeSearchTag)
   const clearSearchTags = useStore((s) => s.clearSearchTags)
+  const setSearchTagMode = useStore((s) => s.setSearchTagMode)
   const filterStatus = useStore((s) => s.filterStatus)
   const setFilterStatus = useStore((s) => s.setFilterStatus)
   const filterTaskType = useStore((s) => s.filterTaskType)
@@ -23,6 +25,7 @@ export default function SearchBar() {
   const setBlurLoadedImages = useStore((s) => s.setBlurLoadedImages)
   const topButtonClass = 'flex h-11 w-11 items-center justify-center rounded-xl border transition-all'
   const hasSearchContent = Boolean(searchQuery.trim() || searchTags.length > 0)
+  const isExcludeMode = searchTagMode === 'exclude'
 
   const commitSearchTag = () => {
     const nextTag = searchQuery.trim()
@@ -31,7 +34,8 @@ export default function SearchBar() {
     setSearchQuery('')
   }
 
-  const commitSearchTagFromInput = (input: HTMLInputElement) => {
+  const commitSearchTagFromInput = (input: HTMLInputElement, relatedTarget: EventTarget | null = null) => {
+    if (relatedTarget instanceof Node && input.form?.contains(relatedTarget)) return
     const nextTag = input.value.trim()
     if (!nextTag) return
     addSearchTag(nextTag)
@@ -170,22 +174,64 @@ export default function SearchBar() {
           />
         </svg>
         <form
-          className="hide-scrollbar flex min-h-11 w-full items-center gap-2 overflow-x-auto rounded-xl border border-gray-200 bg-white py-1.5 pl-10 pr-10 text-sm transition focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-500/30 dark:border-white/[0.08] dark:bg-gray-900"
+          className={`hide-scrollbar flex min-h-11 w-full items-center gap-2 overflow-x-auto rounded-xl border border-gray-200 bg-white py-1.5 pl-10 pr-10 text-sm transition focus-within:ring-2 dark:border-white/[0.08] dark:bg-gray-900 ${
+            isExcludeMode
+              ? 'focus-within:border-rose-400 focus-within:ring-rose-500/30'
+              : 'focus-within:border-blue-400 focus-within:ring-blue-500/30'
+          }`}
           onSubmit={(event) => {
             event.preventDefault()
             commitSearchTag()
           }}
         >
+          <div
+            className="inline-flex shrink-0 items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5 dark:border-white/[0.08] dark:bg-white/[0.04]"
+            role="group"
+            aria-label="标签筛选模式"
+          >
+            {([
+              { value: 'include', label: '包含' },
+              { value: 'exclude', label: '排除' },
+            ] as const).map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onMouseDown={(event) => {
+                  event.preventDefault()
+                  setSearchTagMode(item.value)
+                }}
+                className={`rounded-md px-2 py-1 text-xs font-medium transition ${
+                  searchTagMode === item.value
+                    ? item.value === 'exclude'
+                      ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-200'
+                      : 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200'
+                    : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                }`}
+                title={item.value === 'exclude' ? '排除命中标签的任务' : '只显示命中全部标签的任务'}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           {searchTags.map((tag) => (
             <span
               key={tag}
-              className="inline-flex max-w-[10rem] shrink-0 items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-200"
+              className={`inline-flex max-w-[10rem] shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
+                isExcludeMode
+                  ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-200'
+                  : 'bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-200'
+              }`}
             >
+              {isExcludeMode && <span className="shrink-0">−</span>}
               <span className="truncate">{tag}</span>
               <button
                 type="button"
                 onClick={() => removeSearchTag(tag)}
-                className="rounded-full p-0.5 text-blue-500 transition hover:bg-blue-100 hover:text-blue-700 dark:text-blue-200 dark:hover:bg-blue-400/20"
+                className={`rounded-full p-0.5 transition ${
+                  isExcludeMode
+                    ? 'text-rose-500 hover:bg-rose-100 hover:text-rose-700 dark:text-rose-200 dark:hover:bg-rose-400/20'
+                    : 'text-blue-500 hover:bg-blue-100 hover:text-blue-700 dark:text-blue-200 dark:hover:bg-blue-400/20'
+                }`}
                 aria-label={`移除搜索标签 ${tag}`}
               >
                 <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -207,11 +253,19 @@ export default function SearchBar() {
               event.preventDefault()
               commitSearchTagFromInput(event.currentTarget)
             }}
-            onBlur={(event) => commitSearchTagFromInput(event.currentTarget)}
+            onBlur={(event) => commitSearchTagFromInput(event.currentTarget, event.relatedTarget)}
             type="search"
             enterKeyHint="done"
             autoComplete="off"
-            placeholder={searchTags.length >= 2 ? '' : searchTags.length > 0 ? '继续输入并回车添加标签' : '搜索提示词、使用码、别名、参数、比例、分辨率...'}
+            placeholder={
+              searchTags.length >= 2
+                ? ''
+                : searchTags.length > 0
+                  ? '继续输入并回车添加标签'
+                  : isExcludeMode
+                    ? '输入排除标签，回车添加；命中任一标签的任务将被隐藏'
+                    : '搜索提示词、使用码、别名、参数、比例、分辨率...'
+            }
             className="min-w-[10rem] flex-1 shrink-0 bg-transparent py-1.5 text-sm outline-none placeholder:text-gray-400 dark:text-gray-100 dark:placeholder:text-gray-500"
           />
         </form>

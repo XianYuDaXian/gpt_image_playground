@@ -1130,6 +1130,8 @@ function serializeUsageCode(app: Parameters<FastifyPluginAsync>[0], code: UsageC
     taskCount: code.taskCount,
     outputImageCount: code.outputImageCount,
     outputVideoCount: code.outputVideoCount,
+    artifactImageCount: code.artifactImageCount ?? 0,
+    artifactVideoCount: code.artifactVideoCount ?? 0,
     taskMediaBytes: code.taskMediaBytes ?? 0,
     quotaEvents: quotaEvents.map((event) => ({
       ...event,
@@ -4019,6 +4021,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         taskCount: 0,
         outputImageCount: 0,
         outputVideoCount: 0,
+        artifactImageCount: 0,
+        artifactVideoCount: 0,
+        taskMediaBytes: 0,
         quotaEvents: [],
         activityEvents: [],
       },
