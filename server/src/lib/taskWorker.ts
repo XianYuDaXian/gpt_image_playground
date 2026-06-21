@@ -2,7 +2,8 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
-import { executeImageTask, writeOutputImage, writeOutputImageThumbnail } from './imageApi.js'
+import { executeImageTask, writeOutputImage, writeOutputImageThumbnail, type GeneratedImageResult } from './imageApi.js'
+import { assertAllOutputImagesPersisted, createOutputImagePersistQueue } from './outputImagePersist.js'
 import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
 
@@ -185,14 +186,12 @@ export class TaskWorker {
       }
       const shouldPersistIncrementally = params.n > 1
       const outputDir = path.join(this.config.outputsDir, taskId)
-      let persistedImages = 0
-
-      const persistOutputImages = async (images: Awaited<ReturnType<typeof executeImageTask>>) => {
-        for (const image of images) {
-          if (this.isTaskInactive(taskId)) return false
-
-          const written = await writeOutputImage(outputDir, persistedImages, image)
+      const outputPersistQueue = createOutputImagePersistQueue<GeneratedImageResult>({
+        isInactive: () => this.isTaskInactive(taskId),
+        getItemKey: (image) => crypto.createHash('sha256').update(image.buffer).digest('hex'),
+        persistOne: async (image) => {
           const outputImageId = crypto.randomUUID()
+          const written = await writeOutputImage(outputDir, outputImageId, image)
           const saved = this.db.addTaskImage({
             id: outputImageId,
             taskId,
@@ -207,7 +206,7 @@ export class TaskWorker {
           if (!saved) return false
 
           const thumbnailDir = path.join(this.config.thumbsDir, taskId)
-          const thumbnail = await writeOutputImageThumbnail(thumbnailDir, persistedImages, image)
+          const thumbnail = await writeOutputImageThumbnail(thumbnailDir, outputImageId, image)
           const thumbnailSaved = this.db.addTaskImage({
             id: crypto.randomUUID(),
             taskId,
@@ -220,13 +219,12 @@ export class TaskWorker {
             height: thumbnail.height,
             metadataJson: JSON.stringify({ imageId: outputImageId }),
           })
-          if (!thumbnailSaved) return false
+          return thumbnailSaved
+        },
+      })
 
-          persistedImages += 1
-        }
-
-        return true
-      }
+      const persistOutputImages = (images: Awaited<ReturnType<typeof executeImageTask>>) =>
+        outputPersistQueue.enqueue(images)
 
       const images = await executeImageTask(
         this.db,
@@ -250,7 +248,7 @@ export class TaskWorker {
           onImagesReady: shouldPersistIncrementally
             ? async (readyImages, state) => {
                 const ok = await persistOutputImages(readyImages)
-                if (!ok) return
+                if (!ok) throw new Error('输出图片保存失败')
                 void this.emit(taskId, {
                   status: 'downloading',
                   step: 'downloading',
@@ -285,12 +283,22 @@ export class TaskWorker {
         )) return
 
         const ok = await persistOutputImages(images)
-        if (!ok) return
-      } else if (persistedImages < images.length) {
-        const remainingImages = images.slice(persistedImages)
-        const ok = await persistOutputImages(remainingImages)
-        if (!ok) return
+        if (!ok) throw new Error('输出图片保存失败')
+      } else {
+        const ok = await outputPersistQueue.waitForIdle()
+        if (!ok) throw new Error('输出图片保存失败')
+
+        const remainingImages = outputPersistQueue.getMissingItems(images)
+        if (remainingImages.length > 0) {
+          const remainingOk = await persistOutputImages(remainingImages)
+          if (!remainingOk) throw new Error('输出图片保存失败')
+          const finalOk = await outputPersistQueue.waitForIdle()
+          if (!finalOk) throw new Error('输出图片保存失败')
+        }
       }
+
+      await outputPersistQueue.waitForIdle()
+      assertAllOutputImagesPersisted(outputPersistQueue.getPersistedCount(), images.length)
 
       if (this.isTaskInactive(taskId)) return
       if (task.ownerKind === 'usage_code' && task.ownerUsageCodeId) {

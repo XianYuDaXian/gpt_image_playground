@@ -796,13 +796,13 @@ export async function executeImageTask(
     : callImagesApi(payload, apiKey, options)
 }
 
-export async function writeOutputImage(outputDir: string, index: number, image: GeneratedImageResult) {
+export async function writeOutputImage(outputDir: string, fileId: string, image: GeneratedImageResult) {
   const ext = image.mimeType.includes('jpeg')
     ? 'jpg'
     : image.mimeType.includes('webp')
       ? 'webp'
       : 'png'
-  const filename = `output-${index + 1}.${ext}`
+  const filename = `output-${fileId}.${ext}`
   const absolutePath = path.join(outputDir, filename)
   await fs.mkdir(outputDir, { recursive: true })
   await fs.writeFile(absolutePath, image.buffer)
@@ -824,10 +824,10 @@ const IMAGE_THUMBNAIL_QUALITY = 90
 
 export async function writeOutputImageThumbnail(
   thumbsDir: string,
-  index: number,
+  fileId: string,
   image: GeneratedImageResult,
 ) {
-  const filename = `output-${index + 1}.webp`
+  const filename = `output-${fileId}.webp`
   const absolutePath = path.join(thumbsDir, filename)
   await fs.mkdir(thumbsDir, { recursive: true })
 
