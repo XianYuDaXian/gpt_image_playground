@@ -6,14 +6,14 @@ export const INPUT_IMAGE_MAX_EDGE = 3840
 /** 总像素上限：按 3840 方图计，避免方图被 16:9 4K 像素上限过度缩小 */
 export const INPUT_IMAGE_MAX_PIXELS = INPUT_IMAGE_MAX_EDGE * INPUT_IMAGE_MAX_EDGE
 /** 参考图提交体积上限，优先通过重新编码压缩 */
-export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 2 * 1024 * 1024
 /** 分辨率逐步收缩的下限长边 */
-const MIN_INPUT_IMAGE_EDGE = 1536
+const MIN_INPUT_IMAGE_EDGE = 1024
 
-const WEBP_QUALITY_START = 0.96
-const WEBP_QUALITY_MIN = 0.88
-const WEBP_QUALITY_STEP = 0.02
-const RESIZE_STEP = 0.95
+const WEBP_QUALITY_START = 0.92
+const WEBP_QUALITY_MIN = 0.72
+const WEBP_QUALITY_STEP = 0.04
+const RESIZE_STEP = 0.9
 
 export interface PreparedInputImage {
   dataUrl: string
@@ -172,24 +172,10 @@ export async function prepareInputImageDataUrl(
     }
   }
 
-  // 未超分辨率上限：只压体积，不缩分辨率
-  if (!overPixelLimit) {
-    const encoded = await encodeImageAtSize(image, originalWidth, originalHeight, maxBytes)
-    return {
-      dataUrl: encoded.dataUrl,
-      originalWidth,
-      originalHeight,
-      width: originalWidth,
-      height: originalHeight,
-      originalBytes,
-      outputBytes: encoded.bytes,
-      wasResized: false,
-      wasReencoded: true,
-    }
-  }
-
-  // 超分辨率上限：先收到长边/像素上限内，再压体积；仍超限则继续缩分辨率
-  const pixelFit = calculateInputImagePixelFitSize(originalWidth, originalHeight)
+  // 先压体积；仍超限时再逐步缩分辨率
+  const pixelFit = overPixelLimit
+    ? calculateInputImagePixelFitSize(originalWidth, originalHeight)
+    : { width: originalWidth, height: originalHeight, wasResized: false }
   let width = pixelFit.width
   let height = pixelFit.height
   let wasResized = pixelFit.wasResized
@@ -209,6 +195,7 @@ export async function prepareInputImageDataUrl(
     }
   }
 
+  // 重编码仍超上限：继续等比缩小长边，直到压进上限或触及下限
   let targetMaxEdge = Math.max(width, height)
   while (encoded.bytes > maxBytes && targetMaxEdge > MIN_INPUT_IMAGE_EDGE) {
     targetMaxEdge = Math.max(MIN_INPUT_IMAGE_EDGE, Math.floor(targetMaxEdge * RESIZE_STEP))
