@@ -597,6 +597,9 @@ const unusedDetailTriggerRef = useRef<HTMLButtonElement | null>(null)
 const unusedDetailPanelRef = useRef<HTMLDivElement | null>(null)
 const [unusedDetailPosition, setUnusedDetailPosition] = useState({ left: 0, top: 0, width: 320, maxHeight: 360 })
 const [isMobileUnusedDetail, setIsMobileUnusedDetail] = useState(false)
+  // 关闭明细后短暂挡住穿透点击（移动端 ghost click）
+  const [unusedDetailClickShield, setUnusedDetailClickShield] = useState(false)
+  const unusedDetailClickShieldTimerRef = useRef<number | null>(null)
 
 const isMultiModelMode = (apiMode: AppSettings['apiMode']) => apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
 
@@ -732,6 +735,15 @@ const updateUnusedDetailPosition = () => {
 const closeUnusedDetail = () => {
   setUnusedDetailProfileId(null)
   unusedDetailTriggerRef.current = null
+  // 遮罩卸掉后仍拦截一段时间，避免点击落到后方下拉
+  setUnusedDetailClickShield(true)
+  if (unusedDetailClickShieldTimerRef.current != null) {
+    window.clearTimeout(unusedDetailClickShieldTimerRef.current)
+  }
+  unusedDetailClickShieldTimerRef.current = window.setTimeout(() => {
+    setUnusedDetailClickShield(false)
+    unusedDetailClickShieldTimerRef.current = null
+  }, 450)
 }
 
 const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
@@ -744,7 +756,7 @@ const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
 useEffect(() => {
   if (!unusedDetailProfileId) return
 
-  // 收起时吞掉本次点击后续事件，避免穿透到后方 API 下拉
+  // 收起时吞掉本次手势后续事件（含移动端延迟 click）
   const suppressClosingClickSequence = () => {
     const swallow = (event: Event) => {
       event.preventDefault()
@@ -752,16 +764,20 @@ useEffect(() => {
       event.stopImmediatePropagation()
     }
     const options: AddEventListenerOptions = { capture: true }
-    window.addEventListener('mousedown', swallow, options)
-    window.addEventListener('mouseup', swallow, options)
-    window.addEventListener('pointerup', swallow, options)
-    window.addEventListener('click', swallow, options)
+    const types = [
+      'pointerdown',
+      'pointerup',
+      'mousedown',
+      'mouseup',
+      'click',
+      'touchstart',
+      'touchend',
+      'touchcancel',
+    ] as const
+    for (const type of types) window.addEventListener(type, swallow, options)
     window.setTimeout(() => {
-      window.removeEventListener('mousedown', swallow, options)
-      window.removeEventListener('mouseup', swallow, options)
-      window.removeEventListener('pointerup', swallow, options)
-      window.removeEventListener('click', swallow, options)
-    }, 0)
+      for (const type of types) window.removeEventListener(type, swallow, options)
+    }, 450)
   }
 
   const onPointerDown = (event: PointerEvent) => {
@@ -803,6 +819,13 @@ useEffect(() => {
     window.removeEventListener('scroll', onScroll, true)
   }
 }, [unusedDetailProfileId])
+  useEffect(() => {
+    return () => {
+      if (unusedDetailClickShieldTimerRef.current != null) {
+        window.clearTimeout(unusedDetailClickShieldTimerRef.current)
+      }
+    }
+  }, [])
 const hasUnreadEndedReminders = useMemo(
     () => reminderDrafts.some((item) => isCompletedReminderUnread(item)),
     [reminderDrafts, expandedReminderIds],
@@ -5157,7 +5180,16 @@ const detailBody = (
                   type="button"
                   className="absolute inset-0 bg-black/40"
                   aria-label="关闭未使用明细"
-                  onClick={closeUnusedDetail}
+                  data-select-ignore-outside
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    closeUnusedDetail()
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                  }}
                 />
                 <div
                   ref={unusedDetailPanelRef}
@@ -5192,6 +5224,35 @@ const detailBody = (
             </div>
           )
         })(),
+        document.body,
+      )}
+      {unusedDetailClickShield && createPortal(
+        <div
+          className="fixed inset-0 z-[210]"
+          data-select-ignore-outside
+          aria-hidden="true"
+          style={{ touchAction: 'none' }}
+          onPointerDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onMouseDown={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onClick={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onTouchStart={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+          onTouchEnd={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+          }}
+        />,
         document.body,
       )}
 
