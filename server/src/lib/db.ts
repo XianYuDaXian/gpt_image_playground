@@ -13,7 +13,7 @@ export interface ProviderProfileRecord {
   apiKeyEncrypted: string
   model: string
   modelOptions: string[] | null
-  apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
+  apiMode: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie'
   timeoutSeconds: number
   codexCli: number
   grokApiCompat: number
@@ -23,6 +23,12 @@ export interface ProviderProfileRecord {
   veniceEditEnabled: number
   veniceMultiEditEnabled: number
   veniceSkipResolution: number
+  nsfwChecker: number
+  enableSyncMode: number
+  enableBase64Output: number
+  proxyEnabled: number
+  proxyUrl: string | null
+  autoAspectFromReference: number
   videoMaxResolution: '480p' | '720p'
   videoResolutionOptions?: Array<'480p' | '720p'>
   videoMaxDuration: 6 | 10 | 15
@@ -161,7 +167,7 @@ export interface UsageQuotaEventRecord {
   providerProfileId: string | null
   providerProfileName: string | null
   providerProfileTagColor: string | null
-  providerProfileApiMode: 'images' | 'responses' | 'videos' | 'venice_images' | null
+  providerProfileApiMode: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie' | null
   createdAt: string
 }
 
@@ -308,7 +314,7 @@ function parseProviderModelOptions(
       .map((item) => String(item ?? '').trim())
       .filter(Boolean)
     if (!items.length) return null
-    if (apiMode === 'venice_images') {
+    if (apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie') {
       return items
     }
     return Array.from(new Set(items))
@@ -326,7 +332,7 @@ function serializeProviderModelOptions(
   const trimmed = (modelOptions ?? [])
     .map((item) => String(item ?? '').trim())
 
-  if (apiMode === 'venice_images') {
+  if (apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie') {
     const slots = [
       trimmed[0] || base,
       trimmed[1] || base,
@@ -527,6 +533,12 @@ export class AppDatabase {
         venice_edit_enabled INTEGER NOT NULL DEFAULT 1,
         venice_multi_edit_enabled INTEGER NOT NULL DEFAULT 1,
         venice_skip_resolution INTEGER NOT NULL DEFAULT 0,
+        nsfw_checker INTEGER NOT NULL DEFAULT 1,
+        enable_sync_mode INTEGER NOT NULL DEFAULT 0,
+        enable_base64_output INTEGER NOT NULL DEFAULT 0,
+        proxy_enabled INTEGER NOT NULL DEFAULT 0,
+        proxy_url TEXT,
+        auto_aspect_from_reference INTEGER NOT NULL DEFAULT 1,
         video_max_resolution TEXT NOT NULL DEFAULT '480p',
         video_resolution_options_json TEXT,
         video_max_duration INTEGER NOT NULL DEFAULT 6,
@@ -730,6 +742,24 @@ export class AppDatabase {
     }
     if (!profileColumnNames.has('venice_skip_resolution')) {
       this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN venice_skip_resolution INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('nsfw_checker')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN nsfw_checker INTEGER NOT NULL DEFAULT 1')
+    }
+    if (!profileColumnNames.has('enable_sync_mode')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN enable_sync_mode INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('enable_base64_output')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN enable_base64_output INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('proxy_enabled')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN proxy_enabled INTEGER NOT NULL DEFAULT 0')
+    }
+    if (!profileColumnNames.has('proxy_url')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN proxy_url TEXT')
+    }
+    if (!profileColumnNames.has('auto_aspect_from_reference')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN auto_aspect_from_reference INTEGER NOT NULL DEFAULT 1')
     }
     if (!profileColumnNames.has('video_max_resolution')) {
       this.sqlite.exec("ALTER TABLE provider_profiles ADD COLUMN video_max_resolution TEXT NOT NULL DEFAULT '480p'")
@@ -982,6 +1012,12 @@ export class AppDatabase {
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
           venice_skip_resolution as veniceSkipResolution,
+          nsfw_checker as nsfwChecker,
+          enable_sync_mode as enableSyncMode,
+          enable_base64_output as enableBase64Output,
+          proxy_enabled as proxyEnabled,
+          proxy_url as proxyUrl,
+          auto_aspect_from_reference as autoAspectFromReference,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -1026,6 +1062,12 @@ export class AppDatabase {
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
           venice_skip_resolution as veniceSkipResolution,
+          nsfw_checker as nsfwChecker,
+          enable_sync_mode as enableSyncMode,
+          enable_base64_output as enableBase64Output,
+          proxy_enabled as proxyEnabled,
+          proxy_url as proxyUrl,
+          auto_aspect_from_reference as autoAspectFromReference,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -1068,6 +1110,12 @@ export class AppDatabase {
           venice_edit_enabled as veniceEditEnabled,
           venice_multi_edit_enabled as veniceMultiEditEnabled,
           venice_skip_resolution as veniceSkipResolution,
+          nsfw_checker as nsfwChecker,
+          enable_sync_mode as enableSyncMode,
+          enable_base64_output as enableBase64Output,
+          proxy_enabled as proxyEnabled,
+          proxy_url as proxyUrl,
+          auto_aspect_from_reference as autoAspectFromReference,
           CASE WHEN video_max_resolution = '720p' THEN '720p' ELSE '480p' END as videoMaxResolution,
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
@@ -1098,7 +1146,7 @@ export class AppDatabase {
     apiKeyEncrypted: string
     model: string
     modelOptions?: string[] | null
-    apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
+    apiMode: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie'
     timeoutSeconds: number
     codexCli?: boolean
     grokApiCompat?: boolean
@@ -1108,6 +1156,12 @@ export class AppDatabase {
     veniceEditEnabled?: boolean
     veniceMultiEditEnabled?: boolean
     veniceSkipResolution?: boolean
+    nsfwChecker?: boolean
+    enableSyncMode?: boolean
+    enableBase64Output?: boolean
+    proxyEnabled?: boolean
+    proxyUrl?: string | null
+    autoAspectFromReference?: boolean
     videoMaxResolution?: '480p' | '720p'
     videoResolutionOptions?: Array<'480p' | '720p'>
     videoMaxDuration?: 6 | 10 | 15
@@ -1144,6 +1198,12 @@ export class AppDatabase {
           venice_edit_enabled,
           venice_multi_edit_enabled,
           venice_skip_resolution,
+          nsfw_checker,
+          enable_sync_mode,
+          enable_base64_output,
+          proxy_enabled,
+          proxy_url,
+          auto_aspect_from_reference,
           video_max_resolution,
           video_resolution_options_json,
           video_max_duration,
@@ -1171,6 +1231,12 @@ export class AppDatabase {
           @veniceEditEnabled,
           @veniceMultiEditEnabled,
           @veniceSkipResolution,
+          @nsfwChecker,
+          @enableSyncMode,
+          @enableBase64Output,
+          @proxyEnabled,
+          @proxyUrl,
+          @autoAspectFromReference,
           @videoMaxResolution,
           @videoResolutionOptionsJson,
           @videoMaxDuration,
@@ -1197,6 +1263,12 @@ export class AppDatabase {
           venice_edit_enabled = excluded.venice_edit_enabled,
           venice_multi_edit_enabled = excluded.venice_multi_edit_enabled,
           venice_skip_resolution = excluded.venice_skip_resolution,
+          nsfw_checker = excluded.nsfw_checker,
+          enable_sync_mode = excluded.enable_sync_mode,
+          enable_base64_output = excluded.enable_base64_output,
+          proxy_enabled = excluded.proxy_enabled,
+          proxy_url = excluded.proxy_url,
+          auto_aspect_from_reference = excluded.auto_aspect_from_reference,
           video_max_resolution = excluded.video_max_resolution,
           video_resolution_options_json = excluded.video_resolution_options_json,
           video_max_duration = excluded.video_max_duration,
@@ -1216,6 +1288,12 @@ export class AppDatabase {
         veniceEditEnabled: input.veniceEditEnabled === false ? 0 : 1,
         veniceMultiEditEnabled: input.veniceMultiEditEnabled === false ? 0 : 1,
         veniceSkipResolution: input.veniceSkipResolution ? 1 : 0,
+        nsfwChecker: input.nsfwChecker === false ? 0 : 1,
+        enableSyncMode: input.enableSyncMode ? 1 : 0,
+        enableBase64Output: input.enableBase64Output ? 1 : 0,
+        proxyEnabled: input.proxyEnabled ? 1 : 0,
+        proxyUrl: input.proxyUrl?.trim() || null,
+        autoAspectFromReference: input.autoAspectFromReference === false ? 0 : 1,
         videoMaxResolution,
         videoResolutionOptionsJson: JSON.stringify(videoResolutionOptions),
         videoMaxDuration,
@@ -1588,7 +1666,7 @@ ${selectUsageCodeFields()}
 
   appendProviderQuotaOverrideForUsageCodes(input: {
     providerProfileId: string
-    apiMode: 'images' | 'responses' | 'videos' | 'venice_images'
+    apiMode: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie'
   }) {
     const now = new Date().toISOString()
     const isVideoMode = input.apiMode === 'videos'
@@ -3356,6 +3434,16 @@ ${selectUsageCodeFields()}
           grok_api_compat,
           xai_image_2k_enabled,
           response_format_b64_json,
+          venice_generate_enabled,
+          venice_edit_enabled,
+          venice_multi_edit_enabled,
+          venice_skip_resolution,
+          nsfw_checker,
+          enable_sync_mode,
+          enable_base64_output,
+          proxy_enabled,
+          proxy_url,
+          auto_aspect_from_reference,
           video_max_resolution,
           video_resolution_options_json,
           video_max_duration,
@@ -3379,6 +3467,16 @@ ${selectUsageCodeFields()}
           @grokApiCompat,
           @xaiImage2kEnabled,
           @responseFormatB64Json,
+          @veniceGenerateEnabled,
+          @veniceEditEnabled,
+          @veniceMultiEditEnabled,
+          @veniceSkipResolution,
+          @nsfwChecker,
+          @enableSyncMode,
+          @enableBase64Output,
+          @proxyEnabled,
+          @proxyUrl,
+          @autoAspectFromReference,
           @videoMaxResolution,
           @videoResolutionOptionsJson,
           @videoMaxDuration,

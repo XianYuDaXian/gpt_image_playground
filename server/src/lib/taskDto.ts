@@ -148,7 +148,10 @@ export function resolveProviderModelLabel(
     inputImageCount: number
   },
 ) {
-  if (providerProfile.apiMode !== 'venice_images') {
+  const isMultiModel = providerProfile.apiMode === 'venice_images'
+    || providerProfile.apiMode === 'wavespeed'
+    || providerProfile.apiMode === 'kie'
+  if (!isMultiModel) {
     return providerProfile.model ?? null
   }
 
@@ -167,6 +170,36 @@ export function resolveProviderModelLabel(
     return editModel ?? null
   }
   return multiEditModel ?? null
+}
+
+export function getMultiModelImageCapabilityError(
+  providerProfile: Pick<ProviderProfileRecord, 'apiMode' | 'veniceGenerateEnabled' | 'veniceEditEnabled' | 'veniceMultiEditEnabled' | 'name'>,
+  inputImageCount: number,
+) {
+  if (
+    providerProfile.apiMode !== 'venice_images'
+    && providerProfile.apiMode !== 'wavespeed'
+    && providerProfile.apiMode !== 'kie'
+  ) {
+    return null
+  }
+
+  const label = providerProfile.apiMode === 'wavespeed'
+    ? 'WaveSpeed'
+    : providerProfile.apiMode === 'kie'
+      ? 'Kie'
+      : 'Venice'
+
+  if (inputImageCount <= 0) {
+    return providerProfile.veniceGenerateEnabled === 0 ? `当前 ${label} 配置已禁用文生图` : null
+  }
+  if (inputImageCount === 1) {
+    return providerProfile.veniceEditEnabled === 0 ? `当前 ${label} 配置已禁用单图编辑` : null
+  }
+  if (inputImageCount <= 3) {
+    return providerProfile.veniceMultiEditEnabled === 0 ? `当前 ${label} 配置已禁用多图编辑` : null
+  }
+  return `当前 ${label} 最多支持 3 张参考图`
 }
 
 function resolveDisplayedProviderModel(

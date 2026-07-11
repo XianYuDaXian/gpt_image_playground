@@ -334,22 +334,34 @@ const API_MAX_IMAGES = 16
 const API_MAX_OUTPUT_COUNT = 16
 type MobileParamSheet = 'quality' | 'format' | 'moderation' | 'count' | 'videoResolution' | 'videoDuration'
 
+function getProviderLabel(apiMode: BackendProviderOption['apiMode']) {
+  if (apiMode === 'wavespeed') return 'WaveSpeed'
+  if (apiMode === 'kie') return 'Kie'
+  if (apiMode === 'venice_images') return 'Venice'
+  return '当前接口'
+}
+
+function isMultiModelImageMode(apiMode?: BackendProviderOption['apiMode'] | null) {
+  return apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
+}
+
 function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
-  if (!option || option.apiMode !== 'venice_images') return null
+  if (!option || !isMultiModelImageMode(option.apiMode)) return null
+  const label = getProviderLabel(option.apiMode)
   if (imageCount <= 0) {
-    return option.veniceGenerateEnabled === false ? '当前 Venice 配置已禁用文生图' : null
+    return option.veniceGenerateEnabled === false ? `当前 ${label} 配置已禁用文生图` : null
   }
   if (imageCount === 1) {
-    return option.veniceEditEnabled === false ? '当前 Venice 配置已禁用单图编辑' : null
+    return option.veniceEditEnabled === false ? `当前 ${label} 配置已禁用单图编辑` : null
   }
   if (imageCount <= 3) {
-    return option.veniceMultiEditEnabled === false ? '当前 Venice 配置已禁用多图编辑' : null
+    return option.veniceMultiEditEnabled === false ? `当前 ${label} 配置已禁用多图编辑` : null
   }
-  return '当前 Venice 最多支持 3 张参考图'
+  return `当前 ${label} 最多支持 3 张参考图`
 }
 
 function getVeniceImageLimit(option: BackendProviderOption | null) {
-  if (!option || option.apiMode !== 'venice_images') return API_MAX_IMAGES
+  if (!option || !isMultiModelImageMode(option.apiMode)) return API_MAX_IMAGES
   if (option.veniceEditEnabled === false && option.veniceMultiEditEnabled === false) return 0
   if (option.veniceMultiEditEnabled === false) return 1
   return 3
@@ -598,7 +610,6 @@ export default function InputBar() {
     [providerOptions, taskMode],
   )
   const hasConfiguredProvider = modeProviderOptions.length > 0
-  const canSubmit = Boolean(prompt.trim() && hasConfiguredProvider && !isSubmitting)
   const quotaCost = taskMode === 'video' ? 1 : params.n
   const userUsageCodes = authStatus?.role === 'user' ? authStatus.usageCodes : []
   const activeProviderProfileId = modeProviderOptions.some((option) => option.id === settings.providerProfileId)
@@ -607,6 +618,15 @@ export default function InputBar() {
       ?? modeProviderOptions[0]?.id
       ?? null
   const activeProviderOption = modeProviderOptions.find((option) => option.id === activeProviderProfileId) ?? null
+  const imageCapabilityError = taskMode === 'image'
+    ? getVeniceImageCapability(activeProviderOption, inputImages.length)
+    : null
+  const canSubmit = Boolean(
+    prompt.trim()
+    && hasConfiguredProvider
+    && !isSubmitting
+    && !imageCapabilityError
+  )
   const currentUsageCodesForProvider = useMemo(() => (
     authStatus?.role === 'user' && activeProviderProfileId
       ? userUsageCodes.filter((code) =>
@@ -1108,7 +1128,7 @@ export default function InputBar() {
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
 
-      if (taskMode === 'image' && currentProvider?.apiMode === 'venice_images') {
+      if (taskMode === 'image' && isMultiModelImageMode(currentProvider?.apiMode)) {
         const nextCount = currentCount + toAdd.length
         const capabilityError = getVeniceImageCapability(currentProvider, nextCount)
         if (capabilityError) {
@@ -1997,9 +2017,9 @@ export default function InputBar() {
         <div className="fixed inset-0 z-[100] bg-white/60 dark:bg-gray-900/60 backdrop-blur-md flex flex-col items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-4 p-8 rounded-3xl">
             <div className={`w-20 h-20 rounded-full border-2 border-dashed flex items-center justify-center ${
-              atImageLimit ? 'bg-red-50 dark:bg-red-500/10 border-red-300' : 'bg-blue-50 dark:bg-blue-500/10 border-blue-400'
+              atEffectiveImageLimit ? 'bg-red-50 dark:bg-red-500/10 border-red-300' : 'bg-blue-50 dark:bg-blue-500/10 border-blue-400'
             }`}>
-              {atImageLimit ? (
+              {atEffectiveImageLimit ? (
                 <svg className="w-10 h-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                 </svg>
@@ -2010,9 +2030,9 @@ export default function InputBar() {
               )}
             </div>
             <div className="text-center">
-              {atImageLimit ? (
+              {atEffectiveImageLimit ? (
                 <>
-                  <p className="text-lg font-semibold text-red-500">已达上限 {API_MAX_IMAGES} 张</p>
+                  <p className="text-lg font-semibold text-red-500">已达上限 {veniceImageLimit} 张</p>
                   <p className="text-sm text-gray-400 mt-1">请先移除部分参考图后再添加</p>
                 </>
               ) : (
@@ -2305,8 +2325,8 @@ export default function InputBar() {
               }}
               data-placeholder={taskMode === 'video'
                 ? '描述你想生成的视频。可添加参考图。'
-                : activeProviderOption?.apiMode === 'venice_images' && activeProviderOption.veniceGenerateEnabled === false
-                  ? '当前 Venice 已禁用文生图。请先添加参考图。'
+                : (activeProviderOption?.apiMode === 'venice_images' || activeProviderOption?.apiMode === 'wavespeed' || activeProviderOption?.apiMode === 'kie') && activeProviderOption.veniceGenerateEnabled === false
+                  ? `当前 ${getProviderLabel(activeProviderOption.apiMode)} 已禁用文生图。请先添加参考图。`
                   : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
               className="w-full min-h-[42px] px-4 py-3 pr-11 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />

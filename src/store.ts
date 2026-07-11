@@ -437,7 +437,7 @@ export const useStore = create<AppState>()(
           ...st.settings,
           ...s,
           apiMode:
-            s.apiMode === 'images' || s.apiMode === 'responses' || s.apiMode === 'videos' || s.apiMode === 'venice_images'
+            s.apiMode === 'images' || s.apiMode === 'responses' || s.apiMode === 'videos' || s.apiMode === 'venice_images' || s.apiMode === 'wavespeed' || s.apiMode === 'kie'
               ? s.apiMode
               : st.settings.apiMode ?? DEFAULT_SETTINGS.apiMode,
           codexCli: s.codexCli ?? st.settings.codexCli ?? DEFAULT_SETTINGS.codexCli,
@@ -953,8 +953,9 @@ export async function submitTask(options: { allowFullMask?: boolean; usageCodeId
     return
   }
 
-  if (taskMode === 'image' && settings.apiMode === 'venice_images' && inputImages.length > 3) {
-    showToast('当前 Venice 最多支持 3 张参考图', 'error')
+  if (taskMode === 'image' && (settings.apiMode === 'venice_images' || settings.apiMode === 'wavespeed' || settings.apiMode === 'kie') && inputImages.length > 3) {
+    const providerLabel = settings.apiMode === 'wavespeed' ? 'WaveSpeed' : settings.apiMode === 'kie' ? 'Kie' : 'Venice'
+    showToast(`当前 ${providerLabel} 最多支持 3 张参考图`, 'error')
     return
   }
 

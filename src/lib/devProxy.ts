@@ -6,7 +6,7 @@ export interface DevProxyConfig {
   secure: boolean
 }
 
-export function normalizeBaseUrl(baseUrl: string): string {
+export function normalizeBaseUrl(baseUrl: string, options?: { preservePath?: boolean }): string {
   const trimmed = baseUrl.trim()
   if (!trimmed) return ''
 
@@ -16,6 +16,10 @@ export function normalizeBaseUrl(baseUrl: string): string {
 
   try {
     const url = new URL(input)
+    if (options?.preservePath) {
+      const pathname = url.pathname.replace(/\/+$/, '')
+      return `${url.origin}${pathname}`
+    }
     const pathSegments = url.pathname.split('/').filter(Boolean)
     const v1Index = pathSegments.indexOf('v1')
     const normalizedSegments = v1Index >= 0

@@ -4,7 +4,7 @@ import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth } from '../lib/auth.js'
-import { serializeTaskRecord, loadSerializedTask, resolveProviderModelLabel } from '../lib/taskDto.js'
+import { serializeTaskRecord, loadSerializedTask, resolveProviderModelLabel, getMultiModelImageCapabilityError } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
 
 const ADMIN_TASK_LIST_LIMIT = 2000
@@ -378,6 +378,13 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const inputImageCount = pendingFiles.filter((file) => file.fieldname !== 'mask').length
+    if (taskType === 'image') {
+      const capabilityError = getMultiModelImageCapabilityError(providerProfile, inputImageCount)
+      if (capabilityError) {
+        reply.code(400)
+        return { message: capabilityError }
+      }
+    }
     const providerProfileModel = resolveProviderModelLabel(providerProfile, {
       taskType,
       inputImageCount,

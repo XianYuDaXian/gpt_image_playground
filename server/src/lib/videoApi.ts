@@ -1,3 +1,4 @@
+import { fetchWithProviderProxy } from './upstreamFetch.js'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -58,7 +59,10 @@ async function readErrorMessage(response: Response) {
   return message
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutSeconds: number) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutSeconds: number, provider?: { timeoutSeconds: number; proxyEnabled?: number | boolean | null; proxyUrl?: string | null }) {
+  if (provider) {
+    return fetchWithProviderProxy(provider, url, init, timeoutSeconds)
+  }
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
   try {
@@ -106,7 +110,8 @@ export async function submitVideoGeneration(payload: VideoGenerationPayload, api
       body: JSON.stringify(body),
     },
     payload.provider.timeoutSeconds,
-  )
+        payload.provider,
+      )
 
   if (!response.ok) throw new Error(await readErrorMessage(response))
   const result = await response.json() as { request_id?: string }
@@ -122,6 +127,7 @@ export async function pollVideoGeneration(provider: ProviderProfileRecord, apiKe
       headers: buildHeaders(apiKey),
     },
     provider.timeoutSeconds,
+    provider,
   )
   if (!response.ok) throw new Error(await readErrorMessage(response))
   return response.json() as Promise<VideoPollResult>

@@ -13,6 +13,8 @@ function formatTaskEndpointLabel(apiMode?: TaskRecord['providerProfileApiMode'] 
   if (apiMode === 'videos') return 'Videos'
   if (apiMode === 'responses') return 'Responses'
   if (apiMode === 'venice_images') return 'Venice'
+  if (apiMode === 'wavespeed') return 'WaveSpeed'
+  if (apiMode === 'kie') return 'Kie'
   return 'Images'
 }
 

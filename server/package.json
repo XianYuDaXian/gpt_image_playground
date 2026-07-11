@@ -16,6 +16,8 @@
     "fastify": "^5.6.1",
     "fflate": "^0.8.2",
     "sharp": "^0.34.5",
+    "socks-proxy-agent": "^10.1.0",
+    "undici": "^8.7.0",
     "unzipper": "^0.12.3",
     "zod": "^4.1.12"
   },

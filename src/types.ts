@@ -1,6 +1,6 @@
 // ===== 设置 =====
 
-export type ApiMode = 'images' | 'responses' | 'videos' | 'venice_images'
+export type ApiMode = 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie'
 export type ThemeMode = 'system' | 'light' | 'dark'
 export type VideoResolutionOption = '480p' | '720p'
 export type VideoDurationOption = 6 | 10 | 15
@@ -45,6 +45,12 @@ export interface AppSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  nsfwChecker: boolean
+  enableSyncMode: boolean
+  enableBase64Output: boolean
+  proxyEnabled: boolean
+  proxyUrl: string
+  autoAspectFromReference: boolean
   videoMaxResolution?: VideoResolutionOption
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
@@ -58,8 +64,16 @@ export interface AppSettings {
 }
 
 const DEFAULT_BASE_URL = import.meta.env.VITE_DEFAULT_API_URL?.trim() || 'https://api.openai.com/v1'
+export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
+export const DEFAULT_VENICE_BASE_URL = 'https://api.venice.ai/api/v1'
+export const DEFAULT_WAVESPEED_BASE_URL = 'https://api.wavespeed.ai/api/v3'
+export const DEFAULT_KIE_BASE_URL = 'https://api.kie.ai/api/v1'
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
+export const DEFAULT_WAVESPEED_MODEL = 'bytedance/seedream-v5.0-pro'
+export const DEFAULT_KIE_MODEL = 'seedream/5-pro-text-to-image'
+export const DEFAULT_WAVESPEED_EDIT_MODEL = 'bytedance/seedream-v5.0-pro/edit'
+export const DEFAULT_KIE_EDIT_MODEL = 'seedream/5-pro-image-to-image'
 
 export const DEFAULT_SETTINGS: AppSettings = {
   baseUrl: DEFAULT_BASE_URL,
@@ -74,6 +88,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   grokApiCompat: false,
   xaiImage2kEnabled: false,
   responseFormatB64Json: false,
+  nsfwChecker: true,
+  enableSyncMode: false,
+  enableBase64Output: false,
+  proxyEnabled: false,
+  proxyUrl: '',
+  autoAspectFromReference: true,
   videoMaxResolution: '480p',
   videoResolutionOptions: ['480p'],
   videoMaxDuration: 6,

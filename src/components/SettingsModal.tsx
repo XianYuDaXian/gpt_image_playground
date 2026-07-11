@@ -64,7 +64,15 @@ import {
   ALL_VIDEO_DURATION_OPTIONS,
   DEFAULT_IMAGES_MODEL,
   DEFAULT_RESPONSES_MODEL,
+  DEFAULT_WAVESPEED_MODEL,
+  DEFAULT_KIE_MODEL,
   DEFAULT_SETTINGS,
+  DEFAULT_OPENAI_BASE_URL,
+  DEFAULT_VENICE_BASE_URL,
+  DEFAULT_WAVESPEED_BASE_URL,
+  DEFAULT_KIE_BASE_URL,
+  DEFAULT_WAVESPEED_EDIT_MODEL,
+  DEFAULT_KIE_EDIT_MODEL,
   normalizeVideoDurationOptions,
   normalizeVideoResolutionOptions,
   type AppSettings,
@@ -189,6 +197,12 @@ function createEmptyProfile(): BackendProviderProfile {
     grokApiCompat: false,
     xaiImage2kEnabled: false,
     responseFormatB64Json: false,
+    nsfwChecker: true,
+    enableSyncMode: false,
+    enableBase64Output: false,
+    proxyEnabled: false,
+    proxyUrl: '',
+    autoAspectFromReference: true,
     videoMaxResolution: '480p',
     videoResolutionOptions: ['480p'],
     videoMaxDuration: 6,
@@ -571,8 +585,63 @@ export default function SettingsModal() {
   const usageCodeDownloadAbortControllersRef = useRef<Record<string, AbortController>>({})
   const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel' | null>>({})
 
+  const isMultiModelMode = (apiMode: AppSettings['apiMode']) => apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
+
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
-    apiMode === 'videos' ? 'grok-imagine-video' : apiMode === 'responses' ? DEFAULT_RESPONSES_MODEL : DEFAULT_IMAGES_MODEL
+    apiMode === 'videos'
+      ? 'grok-imagine-video'
+      : apiMode === 'responses'
+        ? DEFAULT_RESPONSES_MODEL
+        : apiMode === 'wavespeed'
+          ? DEFAULT_WAVESPEED_MODEL
+          : apiMode === 'kie'
+            ? DEFAULT_KIE_MODEL
+            : DEFAULT_IMAGES_MODEL
+
+  const getDefaultEditModelForMode = (apiMode: AppSettings['apiMode']) =>
+    apiMode === 'wavespeed'
+      ? DEFAULT_WAVESPEED_EDIT_MODEL
+      : apiMode === 'kie'
+        ? DEFAULT_KIE_EDIT_MODEL
+        : ''
+
+  const isBuiltinDefaultModel = (model: string) => {
+    const normalized = model.trim()
+    if (!normalized) return true
+    return [
+      DEFAULT_IMAGES_MODEL,
+      DEFAULT_RESPONSES_MODEL,
+      DEFAULT_WAVESPEED_MODEL,
+      DEFAULT_WAVESPEED_EDIT_MODEL,
+      DEFAULT_KIE_MODEL,
+      DEFAULT_KIE_EDIT_MODEL,
+      'grok-imagine-video',
+    ].includes(normalized)
+  }
+
+  const getDefaultBaseUrlForMode = (apiMode: AppSettings['apiMode']) =>
+    apiMode === 'venice_images'
+      ? DEFAULT_VENICE_BASE_URL
+      : apiMode === 'wavespeed'
+        ? DEFAULT_WAVESPEED_BASE_URL
+        : apiMode === 'kie'
+          ? DEFAULT_KIE_BASE_URL
+          : (DEFAULT_SETTINGS.baseUrl || DEFAULT_OPENAI_BASE_URL)
+
+  const isBuiltinDefaultBaseUrl = (baseUrl: string) => {
+    const normalized = baseUrl.trim().replace(/\/+$/, '')
+    if (!normalized) return true
+    const defaults = [
+      DEFAULT_SETTINGS.baseUrl,
+      DEFAULT_OPENAI_BASE_URL,
+      DEFAULT_VENICE_BASE_URL,
+      DEFAULT_WAVESPEED_BASE_URL,
+      DEFAULT_KIE_BASE_URL,
+    ]
+      .map((item) => item.trim().replace(/\/+$/, ''))
+      .filter(Boolean)
+    return defaults.includes(normalized)
+  }
 
   const selectedProfileId = profileDraft.id || '__new__'
   const isAdmin = authStatus?.role === 'admin'
@@ -1447,30 +1516,32 @@ export default function SettingsModal() {
       ...profileDraft,
       name: profileDraft.name.trim() || '默认节点',
       remarkName: profileDraft.remarkName?.trim() || null,
-      baseUrl: normalizeBaseUrl(profileDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl),
-      model: profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode),
-      veniceGenerateModel: profileDraft.apiMode === 'venice_images'
+      baseUrl: normalizeBaseUrl(profileDraft.baseUrl.trim() || DEFAULT_SETTINGS.baseUrl, { preservePath: profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie' }),
+      model: isMultiModelMode(profileDraft.apiMode)
+        ? (profileDraft.veniceGenerateModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
+        : (profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode)),
+      veniceGenerateModel: isMultiModelMode(profileDraft.apiMode)
         ? (profileDraft.veniceGenerateModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
         : null,
-      veniceEditModel: profileDraft.apiMode === 'venice_images'
+      veniceEditModel: isMultiModelMode(profileDraft.apiMode)
         ? (profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
         : null,
-      veniceMultiEditModel: profileDraft.apiMode === 'venice_images'
+      veniceMultiEditModel: isMultiModelMode(profileDraft.apiMode)
         ? (profileDraft.veniceMultiEditModel?.trim() || profileDraft.veniceEditModel?.trim() || profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode))
         : null,
-      veniceGenerateEnabled: profileDraft.apiMode === 'venice_images'
+      veniceGenerateEnabled: isMultiModelMode(profileDraft.apiMode)
         ? profileDraft.veniceGenerateEnabled !== false
         : true,
-      veniceEditEnabled: profileDraft.apiMode === 'venice_images'
+      veniceEditEnabled: isMultiModelMode(profileDraft.apiMode)
         ? profileDraft.veniceEditEnabled !== false
         : true,
-      veniceMultiEditEnabled: profileDraft.apiMode === 'venice_images'
+      veniceMultiEditEnabled: isMultiModelMode(profileDraft.apiMode)
         ? profileDraft.veniceMultiEditEnabled !== false
         : true,
       veniceSkipResolution: profileDraft.apiMode === 'venice_images'
         ? profileDraft.veniceSkipResolution === true
         : false,
-      modelOptions: profileDraft.apiMode === 'venice_images'
+      modelOptions: isMultiModelMode(profileDraft.apiMode)
         ? (() => {
             const base = profileDraft.model.trim() || getDefaultModelForMode(profileDraft.apiMode)
             const generateModel = profileDraft.veniceGenerateModel?.trim() || base
@@ -1490,11 +1561,25 @@ export default function SettingsModal() {
           ? 'responses'
           : profileDraft.apiMode === 'venice_images'
             ? 'venice_images'
-            : 'images',
-      codexCli: profileDraft.apiMode === 'videos' ? false : profileDraft.codexCli,
-      grokApiCompat: profileDraft.grokApiCompat,
-      xaiImage2kEnabled: (profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images') && profileDraft.grokApiCompat ? profileDraft.xaiImage2kEnabled : false,
-      responseFormatB64Json: profileDraft.apiMode === 'videos' ? false : profileDraft.responseFormatB64Json,
+            : profileDraft.apiMode === 'wavespeed'
+              ? 'wavespeed'
+              : profileDraft.apiMode === 'kie'
+                ? 'kie'
+                : 'images',
+      codexCli: (profileDraft.apiMode === 'videos' || profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie') ? false : profileDraft.codexCli,
+      grokApiCompat: (profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie') ? false : profileDraft.grokApiCompat,
+      xaiImage2kEnabled: (
+        profileDraft.apiMode === 'wavespeed'
+        || profileDraft.apiMode === 'kie'
+        || ((profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images') && profileDraft.grokApiCompat)
+      ) ? profileDraft.xaiImage2kEnabled : false,
+      responseFormatB64Json: (profileDraft.apiMode === 'videos' || profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie') ? false : profileDraft.responseFormatB64Json,
+      nsfwChecker: profileDraft.apiMode === 'kie' ? profileDraft.nsfwChecker !== false : true,
+      enableSyncMode: profileDraft.apiMode === 'wavespeed' ? profileDraft.enableSyncMode === true : false,
+      enableBase64Output: profileDraft.apiMode === 'wavespeed' ? profileDraft.enableBase64Output === true : false,
+      proxyEnabled: profileDraft.proxyEnabled === true,
+      proxyUrl: profileDraft.proxyEnabled === true ? (profileDraft.proxyUrl?.trim() || '') : (profileDraft.proxyUrl?.trim() || ''),
+      autoAspectFromReference: profileDraft.autoAspectFromReference !== false,
       videoMaxResolution: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
         ? (() => {
             const videoResolutionOptions = normalizeVideoResolutionOptions(profileDraft.videoResolutionOptions ?? [profileDraft.videoMaxResolution ?? '480p'])
@@ -2603,7 +2688,7 @@ export default function SettingsModal() {
                   value={profileDraft.baseUrl}
                   onChange={(event) => updateProfileDraft({ baseUrl: event.target.value })}
                   onClear={() => updateProfileDraft({ baseUrl: '' })}
-                  placeholder={DEFAULT_SETTINGS.baseUrl}
+                  placeholder={getDefaultBaseUrlForMode(profileDraft.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
@@ -2645,19 +2730,46 @@ export default function SettingsModal() {
                   value={profileDraft.apiMode}
                   onChange={(value) => {
                     const apiMode = value as AppSettings['apiMode']
-                    const model =
-                      profileDraft.model === DEFAULT_IMAGES_MODEL
-                      || profileDraft.model === DEFAULT_RESPONSES_MODEL
-                      || profileDraft.model === 'grok-imagine-video'
-                        ? getDefaultModelForMode(apiMode)
-                        : profileDraft.model
-                    updateProfileDraft({ apiMode, model })
+                    const nextIsMulti = isMultiModelMode(apiMode)
+                    const defaultGenerate = getDefaultModelForMode(apiMode)
+                    const defaultEdit = getDefaultEditModelForMode(apiMode)
+                    const model = isBuiltinDefaultModel(profileDraft.model)
+                      ? defaultGenerate
+                      : profileDraft.model
+                    const baseUrl = isBuiltinDefaultBaseUrl(profileDraft.baseUrl)
+                      ? getDefaultBaseUrlForMode(apiMode)
+                      : profileDraft.baseUrl
+                    const generateModel = nextIsMulti
+                      ? (isBuiltinDefaultModel(profileDraft.veniceGenerateModel ?? '')
+                        ? defaultGenerate
+                        : (profileDraft.veniceGenerateModel ?? ''))
+                      : ''
+                    const editModel = nextIsMulti
+                      ? (isBuiltinDefaultModel(profileDraft.veniceEditModel ?? '')
+                        ? (defaultEdit || defaultGenerate)
+                        : (profileDraft.veniceEditModel ?? ''))
+                      : ''
+                    const multiEditModel = nextIsMulti
+                      ? (isBuiltinDefaultModel(profileDraft.veniceMultiEditModel ?? '')
+                        ? (defaultEdit || defaultGenerate)
+                        : (profileDraft.veniceMultiEditModel ?? ''))
+                      : ''
+                    updateProfileDraft({
+                      apiMode,
+                      model,
+                      baseUrl,
+                      veniceGenerateModel: generateModel,
+                      veniceEditModel: editModel,
+                      veniceMultiEditModel: multiEditModel,
+                    })
                   }}
                   options={[
                     { label: 'Images API (/v1/images)', value: 'images' },
-                    { label: 'Venice Images (/image/*)', value: 'venice_images' },
                     { label: 'Responses API (/v1/responses)', value: 'responses' },
                     { label: 'Videos API (/v1/videos)', value: 'videos' },
+                    { label: 'Venice Images (/image/*)', value: 'venice_images' },
+                    { label: 'WaveSpeed API (/api/v3)', value: 'wavespeed' },
+                    { label: 'Kie AI Jobs (/api/v1/jobs)', value: 'kie' },
                   ]}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
@@ -2666,9 +2778,19 @@ export default function SettingsModal() {
                     此模式需要分别填写 Venice 文生图、单图编辑、多图编辑三个模型。系统会自动分发：不上传图片时走文生图，上传 1 张图时走单图编辑，上传 2 到 3 张图时走多图编辑。
                   </div>
                 )}
+                {profileDraft.apiMode === 'wavespeed' && (
+                  <div className="mt-2 rounded-2xl border border-sky-200/70 bg-sky-50/80 px-3 py-2 text-xs leading-5 text-sky-700 dark:border-sky-400/20 dark:bg-sky-500/10 dark:text-sky-200">
+                    Base URL 建议填写 https://api.wavespeed.ai/api/v3。请分别填写文生图、单图编辑、多图编辑模型。系统会自动分发：无图走文生图，1 张图走单图编辑，2 到 3 张图走多图编辑。编辑请求会先上传文件。
+                  </div>
+                )}
+                {profileDraft.apiMode === 'kie' && (
+                  <div className="mt-2 rounded-2xl border border-violet-200/70 bg-violet-50/80 px-3 py-2 text-xs leading-5 text-violet-700 dark:border-violet-400/20 dark:bg-violet-500/10 dark:text-violet-200">
+                    Base URL 建议填写 https://api.kie.ai/api/v1。请分别填写文生图、单图编辑、多图编辑模型。无图走文生图；有参考图时会先上传到 Kie 文件服务，再按 image_urls 提交图生图。
+                  </div>
+                )}
               </label>
 
-              {profileDraft.apiMode !== 'venice_images' && (
+              {!isMultiModelMode(profileDraft.apiMode) && (
                 <label className="block">
                   <span className="mb-1 block text-xs text-gray-500 dark:text-gray-400">模型 ID</span>
                   <ClearableInput
@@ -2682,7 +2804,7 @@ export default function SettingsModal() {
                 </label>
               )}
 
-              {profileDraft.apiMode === 'venice_images' && (
+              {isMultiModelMode(profileDraft.apiMode) && (
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className={`rounded-2xl border px-3 py-3 transition ${
                     profileDraft.veniceGenerateEnabled !== false
@@ -2703,7 +2825,9 @@ export default function SettingsModal() {
                       value={profileDraft.veniceGenerateModel ?? ''}
                       onChange={(event) => updateProfileDraft({ veniceGenerateModel: event.target.value })}
                       onClear={() => updateProfileDraft({ veniceGenerateModel: '' })}
-                      placeholder={profileDraft.model || '例如：flux-dev'}
+                      placeholder={profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie'
+                        ? getDefaultModelForMode(profileDraft.apiMode)
+                        : (profileDraft.model || '例如：flux-dev')}
                       disabled={profileDraft.veniceGenerateEnabled === false}
                       className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                     />
@@ -2727,7 +2851,9 @@ export default function SettingsModal() {
                       value={profileDraft.veniceEditModel ?? ''}
                       onChange={(event) => updateProfileDraft({ veniceEditModel: event.target.value })}
                       onClear={() => updateProfileDraft({ veniceEditModel: '' })}
-                      placeholder={profileDraft.model || '例如：grok-imagine-edit'}
+                      placeholder={profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie'
+                        ? (getDefaultEditModelForMode(profileDraft.apiMode) || getDefaultModelForMode(profileDraft.apiMode))
+                        : (profileDraft.model || '例如：grok-imagine-edit')}
                       disabled={profileDraft.veniceEditEnabled === false}
                       className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                     />
@@ -2751,7 +2877,11 @@ export default function SettingsModal() {
                       value={profileDraft.veniceMultiEditModel ?? ''}
                       onChange={(event) => updateProfileDraft({ veniceMultiEditModel: event.target.value })}
                       onClear={() => updateProfileDraft({ veniceMultiEditModel: '' })}
-                      placeholder={profileDraft.veniceEditModel || profileDraft.model || '例如：grok-imagine-edit'}
+                      placeholder={profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie'
+                        ? (profileDraft.veniceEditModel
+                          || getDefaultEditModelForMode(profileDraft.apiMode)
+                          || getDefaultModelForMode(profileDraft.apiMode))
+                        : (profileDraft.veniceEditModel || profileDraft.model || '例如：grok-imagine-edit')}
                       disabled={profileDraft.veniceMultiEditEnabled === false}
                       className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                     />
@@ -2759,7 +2889,7 @@ export default function SettingsModal() {
                 </div>
               )}
 
-              {profileDraft.apiMode !== 'venice_images' && (
+              {!isMultiModelMode(profileDraft.apiMode) && (
                 <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="text-xs text-gray-500 dark:text-gray-400">已保存模型</span>
@@ -2823,20 +2953,54 @@ export default function SettingsModal() {
                 />
               </label>
 
+              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-100">上游代理</div>
+                    <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      仅作用于该 API 端点。支持 http、https、socks4、socks5。示例：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
+                    </div>
+                  </div>
+                  <Switch
+                    checked={profileDraft.proxyEnabled === true}
+                    onChange={(checked) => updateProfileDraft({ proxyEnabled: checked })}
+                  />
+                </div>
+                <ClearableInput
+                  value={profileDraft.proxyUrl ?? ''}
+                  onChange={(event) => updateProfileDraft({ proxyUrl: event.target.value })}
+                  onClear={() => updateProfileDraft({ proxyUrl: '' })}
+                  placeholder="http://127.0.0.1:7890"
+                  disabled={profileDraft.proxyEnabled !== true}
+                  className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                />
+              </div>
+
               <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <PreferenceRow
-                  title="Grok API 兼容"
-                  description={profileDraft.apiMode === 'videos'
-                    ? '启用后该视频配置会显示 Grok 相关能力设置。'
-                    : profileDraft.apiMode === 'venice_images'
-                      ? '启用后按 Grok 风格提交尺寸参数。尺寸会换算成接口支持的比例与分辨率。遮罩编辑不会提交到该接口。'
-                      : '启用后改用 xAI Images 接口的字段。尺寸会换算成 xAI 支持的比例与分辨率。遮罩编辑不会提交到该接口。'}
-                  checked={profileDraft.grokApiCompat}
-                  onChange={(checked) => updateProfileDraft({
-                    grokApiCompat: checked,
-                    ...(checked ? { codexCli: false } : { xaiImage2kEnabled: false }),
-                  })}
+                  title="auto 从参考图取比例"
+                  description="开启后，尺寸选择 auto 且存在参考图时，按第一张参考图比例映射。关闭后，auto 固定使用 1:1。"
+                  checked={profileDraft.autoAspectFromReference !== false}
+                  onChange={(checked) => updateProfileDraft({ autoAspectFromReference: checked })}
                 />
+              </div>
+
+                            <div className="divide-y divide-gray-100 rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
+                {(profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images' || profileDraft.apiMode === 'responses' || profileDraft.apiMode === 'videos') && (
+                  <PreferenceRow
+                    title="Grok API 兼容"
+                    description={profileDraft.apiMode === 'videos'
+                      ? '启用后该视频配置会显示 Grok 相关能力设置。'
+                      : profileDraft.apiMode === 'venice_images'
+                        ? '启用后按 Grok 风格提交尺寸参数。尺寸会换算成接口支持的比例与分辨率。遮罩编辑不会提交到该接口。'
+                        : '启用后改用 xAI Images 接口的字段。尺寸会换算成 xAI 支持的比例与分辨率。遮罩编辑不会提交到该接口。'}
+                    checked={profileDraft.grokApiCompat}
+                    onChange={(checked) => updateProfileDraft({
+                      grokApiCompat: checked,
+                      ...(checked ? { codexCli: false } : { xaiImage2kEnabled: false }),
+                    })}
+                  />
+                )}
                 {profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat && (
                   <div className="space-y-4 py-3">
                     <VideoResolutionOptionSelector
@@ -2855,26 +3019,26 @@ export default function SettingsModal() {
                     />
                   </div>
                 )}
-                {profileDraft.apiMode !== 'videos' && (
+                {profileDraft.apiMode === 'venice_images' && (
+                  <PreferenceRow
+                    title="不传递分辨率"
+                    description="开启后，威尼斯图片编辑请求不会附带 resolution 参数。"
+                    checked={profileDraft.veniceSkipResolution === true}
+                    onChange={(checked) => updateProfileDraft({ veniceSkipResolution: checked })}
+                  />
+                )}
+                {(profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images' || profileDraft.apiMode === 'responses') && profileDraft.grokApiCompat && (
+                  <PreferenceRow
+                    title="允许 xAI 2K 图片"
+                    description={profileDraft.apiMode === 'venice_images'
+                      ? '开启后会按请求尺寸尽量提交更高分辨率。关闭时固定提交 1K。'
+                      : '开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。'}
+                    checked={profileDraft.xaiImage2kEnabled}
+                    onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
+                  />
+                )}
+                {(profileDraft.apiMode === 'images' || profileDraft.apiMode === 'venice_images' || profileDraft.apiMode === 'responses') && (
                   <>
-                    {profileDraft.apiMode === 'venice_images' && (
-                      <PreferenceRow
-                        title="不传递分辨率"
-                        description="开启后，威尼斯图片编辑请求不会附带 resolution 参数。"
-                        checked={profileDraft.veniceSkipResolution === true}
-                        onChange={(checked) => updateProfileDraft({ veniceSkipResolution: checked })}
-                      />
-                    )}
-                    {profileDraft.grokApiCompat && (
-                      <PreferenceRow
-                        title="允许 xAI 2K 图片"
-                        description={profileDraft.apiMode === 'venice_images'
-                          ? '开启后会按请求尺寸尽量提交更高分辨率。关闭时固定提交 1K。'
-                          : '开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。'}
-                        checked={profileDraft.xaiImage2kEnabled}
-                        onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
-                      />
-                    )}
                     <PreferenceRow
                       title="Codex CLI 模式"
                       description="禁用该接口不支持的质量参数，并使用兼容的多图提交方式。"
@@ -2891,6 +3055,44 @@ export default function SettingsModal() {
                         : <>开启后在请求体中加入 <code className="rounded bg-gray-200 px-1 py-0.5 font-mono dark:bg-white/[0.08]">response_format: b64_json</code>，尝试让接口直接返回 Base64 图片。</>}
                       checked={profileDraft.responseFormatB64Json}
                       onChange={(checked) => updateProfileDraft({ responseFormatB64Json: checked })}
+                    />
+                  </>
+                )}
+                {profileDraft.apiMode === 'wavespeed' && (
+                  <>
+                    <PreferenceRow
+                      title="允许高分辨率 (2K/4K)"
+                      description="开启后按请求尺寸映射 resolution 为 2k 或 4k。关闭时固定提交 1k。"
+                      checked={profileDraft.xaiImage2kEnabled}
+                      onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
+                    />
+                    <PreferenceRow
+                      title="同步模式"
+                      description="开启后请求体附带 enable_sync_mode=true，尽量等待接口直接返回结果。"
+                      checked={profileDraft.enableSyncMode === true}
+                      onChange={(checked) => updateProfileDraft({ enableSyncMode: checked })}
+                    />
+                    <PreferenceRow
+                      title="Base64 输出"
+                      description="开启后请求体附带 enable_base64_output=true。结果若返回 base64 会直接解码落盘；若返回 URL 则继续下载。"
+                      checked={profileDraft.enableBase64Output === true}
+                      onChange={(checked) => updateProfileDraft({ enableBase64Output: checked })}
+                    />
+                  </>
+                )}
+                {profileDraft.apiMode === 'kie' && (
+                  <>
+                    <PreferenceRow
+                      title="NSFW 安全审核"
+                      description="开启后请求 input.nsfw_checker=true。关闭后提交 false。"
+                      checked={profileDraft.nsfwChecker !== false}
+                      onChange={(checked) => updateProfileDraft({ nsfwChecker: checked })}
+                    />
+                    <PreferenceRow
+                      title="高质量 (2K)"
+                      description="开启后 quality 使用 high（2K）。关闭时使用 basic（1K）。也可由尺寸与质量参数共同推断。"
+                      checked={profileDraft.xaiImage2kEnabled}
+                      onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
                     />
                   </>
                 )}

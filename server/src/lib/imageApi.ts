@@ -3,6 +3,9 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import sharp from 'sharp'
 import type { AppDatabase, ProviderProfileRecord } from './db.js'
+import { executeWaveSpeedImageTask } from './wavespeedApi.js'
+import { executeKieImageTask } from './kieApi.js'
+import { fetchWithProviderProxy } from './upstreamFetch.js'
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -210,6 +213,21 @@ function pickVeniceModel(
   return editModel || payload.provider.model
 }
 
+function assertVeniceCapability(
+  provider: ProviderProfileRecord,
+  kind: 'generate' | 'edit' | 'multi-edit',
+) {
+  if (kind === 'generate' && provider.veniceGenerateEnabled === 0) {
+    throw new Error('当前 Venice 配置已禁用文生图')
+  }
+  if (kind === 'edit' && provider.veniceEditEnabled === 0) {
+    throw new Error('当前 Venice 配置已禁用单图编辑')
+  }
+  if (kind === 'multi-edit' && provider.veniceMultiEditEnabled === 0) {
+    throw new Error('当前 Venice 配置已禁用多图编辑')
+  }
+}
+
 function getVeniceResolution(
   payload: TaskExecutionPayload,
   kind: 'generate' | 'edit' | 'multi-edit',
@@ -351,17 +369,22 @@ function pickGrokResolution(
 function mapSizeToGrokParams(
   size: string,
   xaiImage2kEnabled: boolean,
+  options?: {
+    autoAspectFromReference?: boolean
+    referenceSize?: { width: number; height: number } | null
+  },
 ): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
-  if (!size.trim() || size.trim() === 'auto') {
-    return { aspectRatio: 'auto', resolution: '1k' }
-  }
-
   const parsed = parseImageSize(size)
-  if (!parsed) {
+  const useReference = options?.autoAspectFromReference !== false
+  const dimensions = parsed
+    ?? (useReference ? (options?.referenceSize ?? null) : null)
+
+  if (!dimensions) {
+    // 无明确尺寸、且未从参考图取比例时，保留 auto
     return { aspectRatio: 'auto', resolution: '1k' }
   }
 
-  const actualRatio = parsed.width / parsed.height
+  const actualRatio = dimensions.width / dimensions.height
   const aspectRatio = GROK_ASPECT_RATIOS
     .map((item) => {
       const ratio = parseAspectRatioValue(item)
@@ -371,11 +394,21 @@ function mapSizeToGrokParams(
         delta: Math.abs(actualRatio - numericRatio) / numericRatio,
       }
     })
-    .sort((a, b) => a.delta - b.delta)[0]?.value ?? 'auto'
+    .sort((a, b) => a.delta - b.delta)[0]?.value ?? '1:1'
 
   return {
     aspectRatio,
-    resolution: pickGrokResolution(parsed, aspectRatio, xaiImage2kEnabled),
+    resolution: pickGrokResolution(dimensions, aspectRatio, xaiImage2kEnabled),
+  }
+}
+
+async function readLocalImageSize(filePath: string): Promise<{ width: number; height: number } | null> {
+  try {
+    const metadata = await sharp(filePath, { animated: false }).metadata()
+    if (!metadata.width || !metadata.height) return null
+    return { width: metadata.width, height: metadata.height }
+  } catch {
+    return null
   }
 }
 
@@ -383,10 +416,13 @@ async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutSeconds: number,
+  provider?: ProviderProfileRecord,
 ) {
+  if (provider) {
+    return fetchWithProviderProxy(provider, url, init, timeoutSeconds)
+  }
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutSeconds * 1000)
-
   try {
     return await fetch(url, {
       ...init,
@@ -450,7 +486,17 @@ async function callImagesApi(
 ): Promise<GeneratedImageResult[]> {
   const prompt = buildPrompt(payload.prompt, Boolean(payload.provider.codexCli))
   const shouldUseConcurrentSingles = payload.params.n > 1
-  const grokSize = mapSizeToGrokParams(payload.params.size, Boolean(payload.provider.xaiImage2kEnabled))
+  const referenceSize = payload.inputImages[0]?.filePath
+    ? await readLocalImageSize(payload.inputImages[0].filePath)
+    : null
+  const grokSize = mapSizeToGrokParams(
+    payload.params.size,
+    Boolean(payload.provider.xaiImage2kEnabled),
+    {
+      autoAspectFromReference: Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
+      referenceSize,
+    },
+  )
 
   const runSingleEdit = async () => {
     if (shouldUseVeniceCompat(payload) && isVeniceProvider(payload)) {
@@ -463,6 +509,7 @@ async function callImagesApi(
       )
 
       const usesMultipleImages = inputImageDataUrls.length > 1
+      assertVeniceCapability(payload.provider, usesMultipleImages ? 'multi-edit' : 'edit')
       const endpoint = usesMultipleImages ? 'image/multi-edit' : 'image/edit'
       const response = await fetchWithTimeout(
         buildApiUrl(payload.provider.baseUrl, endpoint),
@@ -485,6 +532,7 @@ async function callImagesApi(
           }),
         },
         payload.provider.timeoutSeconds,
+        payload.provider,
       )
 
       if (!response.ok) {
@@ -534,6 +582,7 @@ async function callImagesApi(
           }),
         },
         payload.provider.timeoutSeconds,
+        payload.provider,
       )
 
       if (!response.ok) {
@@ -587,7 +636,8 @@ async function callImagesApi(
         body: formData,
       },
       payload.provider.timeoutSeconds,
-    )
+        payload.provider,
+      )
 
     if (!response.ok) {
       throw new Error(await readErrorMessage(response))
@@ -602,6 +652,7 @@ async function callImagesApi(
 
   const runSingleGeneration = async () => {
     if (shouldUseVeniceCompat(payload) && isVeniceProvider(payload)) {
+      assertVeniceCapability(payload.provider, 'generate')
       const response = await fetchWithTimeout(
         buildApiUrl(payload.provider.baseUrl, 'images/generations'),
         {
@@ -618,6 +669,7 @@ async function callImagesApi(
           }),
         },
         payload.provider.timeoutSeconds,
+        payload.provider,
       )
 
       if (!response.ok) {
@@ -650,6 +702,7 @@ async function callImagesApi(
           }),
         },
         payload.provider.timeoutSeconds,
+        payload.provider,
       )
 
       if (!response.ok) {
@@ -687,7 +740,8 @@ async function callImagesApi(
         }),
       },
       payload.provider.timeoutSeconds,
-    )
+        payload.provider,
+      )
 
     if (!response.ok) {
       throw new Error(await readErrorMessage(response))
@@ -753,7 +807,8 @@ async function callResponsesApi(
         body: JSON.stringify(body),
       },
       payload.provider.timeoutSeconds,
-    )
+        payload.provider,
+      )
 
     if (!response.ok) {
       throw new Error(await readErrorMessage(response))
@@ -791,9 +846,16 @@ export async function executeImageTask(
   options: ExecuteImageTaskOptions = {},
 ) {
   void db
-  return payload.provider.apiMode === 'responses'
-    ? callResponsesApi(payload, apiKey, options)
-    : callImagesApi(payload, apiKey, options)
+  if (payload.provider.apiMode === 'responses') {
+    return callResponsesApi(payload, apiKey, options)
+  }
+  if (payload.provider.apiMode === 'wavespeed') {
+    return executeWaveSpeedImageTask(payload, apiKey, options)
+  }
+  if (payload.provider.apiMode === 'kie') {
+    return executeKieImageTask(payload, apiKey, options)
+  }
+  return callImagesApi(payload, apiKey, options)
 }
 
 export async function writeOutputImage(outputDir: string, fileId: string, image: GeneratedImageResult) {

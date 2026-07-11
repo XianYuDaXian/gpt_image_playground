@@ -54,7 +54,11 @@ export function formatProviderProfileTagText(input: {
           ? 'Responses'
           : input.apiMode === 'venice_images'
             ? 'Venice'
-            : '图片',
+            : input.apiMode === 'wavespeed'
+              ? 'WaveSpeed'
+              : input.apiMode === 'kie'
+                ? 'Kie'
+                : '图片',
     )
   }
   parts.push(input.preferRemarkName && input.remarkName ? input.remarkName : input.name)

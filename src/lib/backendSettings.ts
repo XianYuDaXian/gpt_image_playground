@@ -16,6 +16,12 @@ export interface BackendRuntimeSettings {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  nsfwChecker?: boolean
+  enableSyncMode?: boolean
+  enableBase64Output?: boolean
+  proxyEnabled?: boolean
+  proxyUrl?: string | null
+  autoAspectFromReference?: boolean
   videoMaxResolution?: VideoResolutionOption
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
@@ -52,6 +58,12 @@ export interface BackendProviderProfile {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  nsfwChecker?: boolean
+  enableSyncMode?: boolean
+  enableBase64Output?: boolean
+  proxyEnabled?: boolean
+  proxyUrl?: string | null
+  autoAspectFromReference?: boolean
   videoMaxResolution?: VideoResolutionOption
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
@@ -81,6 +93,12 @@ export interface BackendProviderOption {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  nsfwChecker?: boolean
+  enableSyncMode?: boolean
+  enableBase64Output?: boolean
+  proxyEnabled?: boolean
+  proxyUrl?: string | null
+  autoAspectFromReference?: boolean
   videoMaxResolution?: VideoResolutionOption
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
@@ -337,6 +355,12 @@ export async function saveBackendRuntimeSettings(settings: {
   grokApiCompat: boolean
   xaiImage2kEnabled: boolean
   responseFormatB64Json: boolean
+  nsfwChecker?: boolean
+  enableSyncMode?: boolean
+  enableBase64Output?: boolean
+  proxyEnabled?: boolean
+  proxyUrl?: string | null
+  autoAspectFromReference?: boolean
   videoMaxResolution?: VideoResolutionOption
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
@@ -354,7 +378,7 @@ export async function saveBackendRuntimeSettings(settings: {
     },
     body: JSON.stringify({
       ...settings,
-      baseUrl: normalizeBaseUrl(settings.baseUrl),
+      baseUrl: normalizeBaseUrl(settings.baseUrl, { preservePath: settings.apiMode === 'wavespeed' || settings.apiMode === 'kie' }),
     }),
   })
 
@@ -403,7 +427,7 @@ export async function createBackendProviderProfile(profile: Omit<BackendProvider
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...profile,
-      baseUrl: normalizeBaseUrl(profile.baseUrl),
+      baseUrl: normalizeBaseUrl(profile.baseUrl, { preservePath: profile.apiMode === 'wavespeed' || profile.apiMode === 'kie' }),
     }),
   })
   return readResponseJson<BackendProviderProfile>(response)
@@ -415,7 +439,7 @@ export async function updateBackendProviderProfile(profile: BackendProviderProfi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...profile,
-      baseUrl: normalizeBaseUrl(profile.baseUrl),
+      baseUrl: normalizeBaseUrl(profile.baseUrl, { preservePath: profile.apiMode === 'wavespeed' || profile.apiMode === 'kie' }),
     }),
   })
   return readResponseJson<BackendProviderProfile>(response)

@@ -42,6 +42,7 @@ import type {
   UsageQuotaEventRecord,
   UsageQuotaEventRowRecord,
 } from '../lib/db.js'
+import { validateProxyUrl } from '../lib/upstreamFetch.js'
 
 type UsageCodeEventCategory =
   | 'all'
@@ -73,7 +74,7 @@ interface UsageCodeEventItem {
   providerProfileId: string | null
   providerProfileName: string | null
   providerProfileTagColor: string | null
-  providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | null
+  providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie' | null
 }
 
 const videoDurationOptionSchema = z.union([z.literal(6), z.literal(10), z.literal(15)])
@@ -87,6 +88,20 @@ const videoDurationOptionsSchema = z.array(videoDurationOptionSchema)
   .max(3)
   .transform((value) => Array.from(new Set(value)).sort((a, b) => a - b) as Array<6 | 10 | 15>)
 
+
+function normalizeProviderProxyFields<T extends { proxyEnabled?: boolean; proxyUrl?: string | null }>(payload: T): T {
+  const enabled = Boolean(payload.proxyEnabled)
+  const proxyUrl = enabled ? (validateProxyUrl(payload.proxyUrl) ?? '') : (String(payload.proxyUrl ?? '').trim() || '')
+  if (enabled && !proxyUrl) {
+    throw new Error('启用代理时必须填写代理地址，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080')
+  }
+  return {
+    ...payload,
+    proxyEnabled: enabled,
+    proxyUrl,
+  }
+}
+
 const providerProfileSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
@@ -99,7 +114,13 @@ const providerProfileSchema = z.object({
   veniceEditEnabled: z.boolean().default(true),
   veniceMultiEditEnabled: z.boolean().default(true),
   veniceSkipResolution: z.boolean().default(false),
-  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
+  nsfwChecker: z.boolean().default(true),
+  enableSyncMode: z.boolean().default(false),
+  enableBase64Output: z.boolean().default(false),
+  proxyEnabled: z.boolean().default(false),
+  proxyUrl: z.string().trim().max(500).optional().nullable().default(''),
+  autoAspectFromReference: z.boolean().default(true),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images', 'wavespeed', 'kie']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
@@ -119,7 +140,7 @@ const runtimeSettingsSchemaBase = z.object({
   baseUrl: z.string().url(),
   apiKey: z.string().min(1),
   model: z.string().min(1),
-  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images', 'wavespeed', 'kie']),
   timeoutSeconds: z.coerce.number().int().positive().max(1800),
   codexCli: z.boolean().default(false),
   grokApiCompat: z.boolean().default(false),
@@ -129,6 +150,12 @@ const runtimeSettingsSchemaBase = z.object({
   veniceEditEnabled: z.boolean().default(true),
   veniceMultiEditEnabled: z.boolean().default(true),
   veniceSkipResolution: z.boolean().default(false),
+  nsfwChecker: z.boolean().default(true),
+  enableSyncMode: z.boolean().default(false),
+  enableBase64Output: z.boolean().default(false),
+  proxyEnabled: z.boolean().default(false),
+  proxyUrl: z.string().trim().max(500).optional().nullable().default(''),
+  autoAspectFromReference: z.boolean().default(true),
   videoMaxResolution: videoResolutionOptionSchema.default('480p'),
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema.default(6),
@@ -218,7 +245,7 @@ const fullBackupProviderProfileSchema = z.object({
   apiKey: z.string(),
   model: z.string().min(1),
   modelOptions: z.array(z.string().min(1)).nullable().optional(),
-  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images']),
+  apiMode: z.enum(['images', 'responses', 'videos', 'venice_images', 'wavespeed', 'kie']),
   timeoutSeconds: z.number().int().positive(),
   codexCli: z.boolean(),
   grokApiCompat: z.boolean(),
@@ -228,6 +255,12 @@ const fullBackupProviderProfileSchema = z.object({
   veniceEditEnabled: z.boolean().default(true),
   veniceMultiEditEnabled: z.boolean().default(true),
   veniceSkipResolution: z.boolean().default(false),
+  nsfwChecker: z.boolean().default(true),
+  enableSyncMode: z.boolean().default(false),
+  enableBase64Output: z.boolean().default(false),
+  proxyEnabled: z.boolean().default(false),
+  proxyUrl: z.string().trim().max(500).optional().nullable().default(''),
+  autoAspectFromReference: z.boolean().default(true),
   videoMaxResolution: videoResolutionOptionSchema,
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema,
@@ -549,7 +582,7 @@ const usageCodeMediaExportDownloadCompleteSchema = z.object({
   fileName: z.string().min(1),
 })
 
-function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | null }) {
+function formatQuotaEventLabel(event: { eventType: string; reason?: string | null; providerProfileApiMode?: 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie' | null }) {
   const isVideoProvider = event.providerProfileApiMode === 'videos'
   if (event.reason === 'admin_adjust_total') {
     if (event.eventType === 'video_admin_increase' || event.eventType === 'video_admin_decrease') {
@@ -1010,6 +1043,12 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
     veniceEditEnabled: Boolean(profile.veniceEditEnabled),
     veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
     veniceSkipResolution: Boolean(profile.veniceSkipResolution),
+    nsfwChecker: profile.nsfwChecker !== 0,
+    enableSyncMode: Boolean(profile.enableSyncMode),
+    enableBase64Output: Boolean(profile.enableBase64Output),
+    proxyEnabled: Boolean(profile.proxyEnabled),
+    proxyUrl: profile.proxyUrl ?? '',
+    autoAspectFromReference: profile.autoAspectFromReference !== 0,
     apiMode: profile.apiMode,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
@@ -1043,6 +1082,12 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     veniceEditEnabled: Boolean(profile.veniceEditEnabled),
     veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
     veniceSkipResolution: Boolean(profile.veniceSkipResolution),
+    nsfwChecker: profile.nsfwChecker !== 0,
+    enableSyncMode: Boolean(profile.enableSyncMode),
+    enableBase64Output: Boolean(profile.enableBase64Output),
+    proxyEnabled: Boolean(profile.proxyEnabled),
+    proxyUrl: profile.proxyUrl ?? '',
+    autoAspectFromReference: profile.autoAspectFromReference !== 0,
     timeoutSeconds: profile.timeoutSeconds,
     codexCli: Boolean(profile.codexCli),
     grokApiCompat: Boolean(profile.grokApiCompat),
@@ -2903,6 +2948,12 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
     veniceEditEnabled: payload.runtimeSettings.veniceEditEnabled === false ? 0 : 1,
     veniceMultiEditEnabled: payload.runtimeSettings.veniceMultiEditEnabled === false ? 0 : 1,
     veniceSkipResolution: payload.runtimeSettings.veniceSkipResolution === true ? 1 : 0,
+    nsfwChecker: payload.runtimeSettings.nsfwChecker === false ? 0 : 1,
+    enableSyncMode: payload.runtimeSettings.enableSyncMode ? 1 : 0,
+    enableBase64Output: payload.runtimeSettings.enableBase64Output ? 1 : 0,
+    proxyEnabled: payload.runtimeSettings.proxyEnabled ? 1 : 0,
+    proxyUrl: payload.runtimeSettings.proxyUrl ?? null,
+    autoAspectFromReference: payload.runtimeSettings.autoAspectFromReference === false ? 0 : 1,
     videoMaxResolution: payload.runtimeSettings.videoMaxResolution,
     videoResolutionOptions: payload.runtimeSettings.videoResolutionOptions ?? [payload.runtimeSettings.videoMaxResolution],
     videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
@@ -3067,6 +3118,12 @@ function buildParsedPayloadFromFullManifest(
       veniceEditEnabled: profile.veniceEditEnabled === false ? 0 : 1,
       veniceMultiEditEnabled: profile.veniceMultiEditEnabled === false ? 0 : 1,
       veniceSkipResolution: profile.veniceSkipResolution ? 1 : 0,
+      nsfwChecker: profile.nsfwChecker === false ? 0 : 1,
+      enableSyncMode: profile.enableSyncMode ? 1 : 0,
+      enableBase64Output: profile.enableBase64Output ? 1 : 0,
+      proxyEnabled: profile.proxyEnabled ? 1 : 0,
+      proxyUrl: profile.proxyUrl ?? null,
+      autoAspectFromReference: profile.autoAspectFromReference === false ? 0 : 1,
       videoMaxResolution: profile.videoMaxResolution,
       videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
@@ -3618,7 +3675,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.put('/api/runtime-settings', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    const payload = runtimeSettingsSchema.parse(request.body)
+    const payload = normalizeProviderProxyFields(runtimeSettingsSchema.parse(request.body))
     const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const profile = app.db.upsertProviderProfile({
       id: currentDefaultProfile?.id ?? 'default',
@@ -3636,6 +3693,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       veniceSkipResolution: payload.veniceSkipResolution,
+      nsfwChecker: payload.nsfwChecker,
+      enableSyncMode: payload.enableSyncMode,
+      enableBase64Output: payload.enableBase64Output,
+      proxyEnabled: payload.proxyEnabled,
+      proxyUrl: payload.proxyUrl,
+      autoAspectFromReference: payload.autoAspectFromReference,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3757,7 +3820,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.put('/api/admin/provider-profiles/default', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    const payload = providerProfileSchema.parse(request.body)
+    const payload = normalizeProviderProxyFields(providerProfileSchema.parse(request.body))
     const currentDefaultProfile = app.db.getDefaultProviderProfile()
     const currentProfile = payload.id ? app.db.getProviderProfile(payload.id) : currentDefaultProfile
     const apiKey = payload.apiKey?.trim()
@@ -3784,6 +3847,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       veniceSkipResolution: payload.veniceSkipResolution,
+      nsfwChecker: payload.nsfwChecker,
+      enableSyncMode: payload.enableSyncMode,
+      enableBase64Output: payload.enableBase64Output,
+      proxyEnabled: payload.proxyEnabled,
+      proxyUrl: payload.proxyUrl,
+      autoAspectFromReference: payload.autoAspectFromReference,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3800,7 +3869,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/admin/provider-profiles', async (request, reply) => {
     await requireAdmin(app, request, reply)
-    const payload = providerProfileSchema.parse(request.body)
+    const payload = normalizeProviderProxyFields(providerProfileSchema.parse(request.body))
     const apiKey = payload.apiKey?.trim()
     if (!apiKey) throw new Error('新建 API 配置需要填写 API Key')
     const existingProviderProfileIds = app.db.listProviderProfiles().map((item) => item.id)
@@ -3823,6 +3892,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       veniceSkipResolution: payload.veniceSkipResolution,
+      nsfwChecker: payload.nsfwChecker,
+      enableSyncMode: payload.enableSyncMode,
+      enableBase64Output: payload.enableBase64Output,
+      proxyEnabled: payload.proxyEnabled,
+      proxyUrl: payload.proxyUrl,
+      autoAspectFromReference: payload.autoAspectFromReference,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
@@ -3852,7 +3927,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.put('/api/admin/provider-profiles/:profileId', async (request, reply) => {
     await requireAdmin(app, request, reply)
     const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
-    const payload = providerProfileSchema.parse(request.body)
+    const payload = normalizeProviderProxyFields(providerProfileSchema.parse(request.body))
     const currentProfile = app.db.getProviderProfile(params.profileId)
     if (!currentProfile) {
       reply.code(404)
@@ -3879,6 +3954,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       veniceEditEnabled: payload.veniceEditEnabled,
       veniceMultiEditEnabled: payload.veniceMultiEditEnabled,
       veniceSkipResolution: payload.veniceSkipResolution,
+      nsfwChecker: payload.nsfwChecker,
+      enableSyncMode: payload.enableSyncMode,
+      enableBase64Output: payload.enableBase64Output,
+      proxyEnabled: payload.proxyEnabled,
+      proxyUrl: payload.proxyUrl,
+      autoAspectFromReference: payload.autoAspectFromReference,
       videoMaxResolution: payload.videoMaxResolution,
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
