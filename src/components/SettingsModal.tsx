@@ -744,10 +744,34 @@ const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
 useEffect(() => {
   if (!unusedDetailProfileId) return
 
+  // 收起时吞掉本次点击后续事件，避免穿透到后方 API 下拉
+  const suppressClosingClickSequence = () => {
+    const swallow = (event: Event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
+    const options: AddEventListenerOptions = { capture: true }
+    window.addEventListener('mousedown', swallow, options)
+    window.addEventListener('mouseup', swallow, options)
+    window.addEventListener('pointerup', swallow, options)
+    window.addEventListener('click', swallow, options)
+    window.setTimeout(() => {
+      window.removeEventListener('mousedown', swallow, options)
+      window.removeEventListener('mouseup', swallow, options)
+      window.removeEventListener('pointerup', swallow, options)
+      window.removeEventListener('click', swallow, options)
+    }, 0)
+  }
+
   const onPointerDown = (event: PointerEvent) => {
     const target = event.target as Node
     if (unusedDetailTriggerRef.current?.contains(target)) return
     if (unusedDetailPanelRef.current?.contains(target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    suppressClosingClickSequence()
     closeUnusedDetail()
   }
   const onKeyDown = (event: KeyboardEvent) => {
