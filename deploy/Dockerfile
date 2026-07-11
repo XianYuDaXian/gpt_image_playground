@@ -1,4 +1,4 @@
-FROM node:20-bookworm-slim AS web-build
+FROM node:22-bookworm-slim AS web-build
 
 WORKDIR /app
 ARG TARGETARCH
@@ -24,7 +24,7 @@ COPY . .
 RUN npm run build:web
 
 
-FROM node:20-bookworm-slim AS server-build
+FROM node:22-bookworm-slim AS server-build
 
 WORKDIR /app/server
 COPY server/package.json server/package-lock.json ./
@@ -34,14 +34,14 @@ COPY server ./
 RUN npm run build
 
 
-FROM node:20-bookworm-slim AS server-prod-deps
+FROM node:22-bookworm-slim AS server-prod-deps
 
 WORKDIR /app/server
 COPY server/package.json server/package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 
-FROM node:20-bookworm-slim AS production
+FROM node:22-bookworm-slim AS production
 
 WORKDIR /app
 ENV NODE_ENV=production
@@ -65,3 +65,4 @@ VOLUME ["/app/data"]
 EXPOSE 8787
 
 CMD ["node", "/app/server/dist/index.js"]
+
