@@ -345,6 +345,7 @@ function isMultiModelImageMode(apiMode?: BackendProviderOption['apiMode'] | null
   return apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
 }
 
+
 function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
   if (!option || !isMultiModelImageMode(option.apiMode)) return null
   const label = getProviderLabel(option.apiMode)

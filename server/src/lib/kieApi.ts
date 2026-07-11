@@ -171,14 +171,6 @@ async function mapSizeToAspectRatio(
   return '1:1'
 }
 
-function mapQuality(params: TaskExecutionPayload['params'], provider: ProviderProfileRecord): 'basic' | 'high' {
-  // 开启高分辨率或 quality=high 时走 high(2K)，其余 basic(1K)
-  if (provider.xaiImage2kEnabled) return 'high'
-  if (params.quality === 'high') return 'high'
-  const parsed = parseImageSize(params.size)
-  if (parsed && Math.max(parsed.width, parsed.height) >= 1500) return 'high'
-  return 'basic'
-}
 
 function mapOutputFormat(format: TaskExecutionPayload['params']['output_format']): 'png' | 'jpeg' {
   return format === 'jpeg' ? 'jpeg' : 'png'
@@ -368,6 +360,7 @@ async function runSingleKie(
   const model = pickKieModel(payload.provider, kind)
   if (!model) throw new Error('Kie 缺少模型 ID')
 
+  // Kie 质量固定传 basic，不跟随前端质量选项；审核参数不传
   const input: Record<string, unknown> = {
     prompt: payload.prompt,
     aspect_ratio: await mapSizeToAspectRatio(
@@ -375,8 +368,7 @@ async function runSingleKie(
       payload.inputImages[0]?.filePath,
       Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
     ),
-    quality: mapQuality(payload.params, payload.provider),
-    nsfw_checker: Number(payload.provider.nsfwChecker ?? 1) !== 0,
+    quality: 'basic',
   }
 
   if (kind === 'generate') {

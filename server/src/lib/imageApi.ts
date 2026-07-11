@@ -526,7 +526,6 @@ async function callImagesApi(
               : { image: inputImageDataUrls[0]?.replace(/^data:[^;]+;base64,/, '') }),
             modelId: pickVeniceModel(payload, usesMultipleImages ? 'multi-edit' : 'edit'),
             output_format: payload.params.output_format,
-            safe_mode: false,
             ...(grokSize.aspectRatio && grokSize.aspectRatio !== 'auto' ? { aspect_ratio: grokSize.aspectRatio } : {}),
             ...(getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) ? { resolution: getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) } : {}),
           }),
