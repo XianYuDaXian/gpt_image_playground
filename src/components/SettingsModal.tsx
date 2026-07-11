@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from 'react'
+import { createPortal } from 'react-dom'
 import { normalizeBaseUrl } from '../lib/devProxy'
 import {
   fetchAdminBackendReminders,
@@ -82,6 +83,10 @@ import {
 } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
+import {
+  formatProviderUnusedRemaining,
+  listProviderUnusedUsageCodes,
+} from '../lib/providerUnusedUsageCodes'
 import Select from './Select'
 import ProviderProfileTag, { getProviderProfileDisplayName } from './ProviderProfileTag'
 import HelpModal from './HelpModal'
@@ -579,16 +584,21 @@ export default function SettingsModal() {
   const [mediaStats, setMediaStats] = useState<BackendMediaStats | null>(null)
   const [maintenanceCardNow, setMaintenanceCardNow] = useState(() => Date.now())
   const [usageCodeEventModal, setUsageCodeEventModal] = useState<UsageCodeEventModalState | null>(null)
-  const [isUsageCodeEventCategoryMenuOpen, setIsUsageCodeEventCategoryMenuOpen] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
-  const importInputRef = useRef<HTMLInputElement>(null)
-  const settingsPanelRef = useRef<HTMLDivElement>(null)
-  const usageCodeEventPanelRef = useRef<HTMLDivElement>(null)
-  const usageCodeEventCategoryMenuRef = useRef<HTMLDivElement>(null)
-  const usageCodeDownloadAbortControllersRef = useRef<Record<string, AbortController>>({})
-  const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel' | null>>({})
+const [isUsageCodeEventCategoryMenuOpen, setIsUsageCodeEventCategoryMenuOpen] = useState(false)
+const [showHelp, setShowHelp] = useState(false)
+const importInputRef = useRef<HTMLInputElement>(null)
+const settingsPanelRef = useRef<HTMLDivElement>(null)
+const usageCodeEventPanelRef = useRef<HTMLDivElement>(null)
+const usageCodeEventCategoryMenuRef = useRef<HTMLDivElement>(null)
+const usageCodeDownloadAbortControllersRef = useRef<Record<string, AbortController>>({})
+const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel' | null>>({})
+const [unusedDetailProfileId, setUnusedDetailProfileId] = useState<string | null>(null)
+const unusedDetailTriggerRef = useRef<HTMLButtonElement | null>(null)
+const unusedDetailPanelRef = useRef<HTMLDivElement | null>(null)
+const [unusedDetailPosition, setUnusedDetailPosition] = useState({ left: 0, top: 0, width: 320 })
+const [isMobileUnusedDetail, setIsMobileUnusedDetail] = useState(false)
 
-  const isMultiModelMode = (apiMode: AppSettings['apiMode']) => apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
+const isMultiModelMode = (apiMode: AppSettings['apiMode']) => apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
 
   const getDefaultModelForMode = (apiMode: AppSettings['apiMode']) =>
     apiMode === 'videos'
@@ -674,17 +684,89 @@ export default function SettingsModal() {
       preferRemarkName: isAdmin,
     })
 
-  const getProviderDistributedRemaining = (
-    profileId: string,
-    apiMode: AppSettings['apiMode'],
-  ) => usageCodes.reduce((sum, code) => {
-    const isVideoProvider = apiMode === 'videos'
-    const remaining = isVideoProvider
-      ? code.providerRemainingVideoCredits?.[profileId]
-      : code.providerRemainingImageCredits?.[profileId]
-    return sum + Math.max(0, remaining ?? 0)
-  }, 0)
-  const hasUnreadEndedReminders = useMemo(
+const getProviderDistributedRemaining = (
+  profileId: string,
+  apiMode: AppSettings['apiMode'],
+) => usageCodes.reduce((sum, code) => {
+  const isVideoProvider = apiMode === 'videos'
+  const remaining = isVideoProvider
+    ? code.providerRemainingVideoCredits?.[profileId]
+    : code.providerRemainingImageCredits?.[profileId]
+  return sum + Math.max(0, remaining ?? 0)
+}, 0)
+
+const unusedDetailProfile = unusedDetailProfileId
+  ? profiles.find((item) => item.id === unusedDetailProfileId) ?? null
+  : null
+
+const unusedDetailItems = useMemo(() => {
+  if (!unusedDetailProfile) return []
+  return listProviderUnusedUsageCodes(usageCodes, unusedDetailProfile.id, unusedDetailProfile.apiMode)
+}, [unusedDetailProfile, usageCodes])
+
+const unusedDetailTotal = unusedDetailProfile
+  ? getProviderDistributedRemaining(unusedDetailProfile.id, unusedDetailProfile.apiMode)
+  : 0
+
+const updateUnusedDetailPosition = () => {
+  const rect = unusedDetailTriggerRef.current?.getBoundingClientRect()
+  if (!rect) return
+  const width = Math.min(360, Math.max(280, window.innerWidth - 16))
+  const left = Math.min(
+    Math.max(8, rect.right - width),
+    Math.max(8, window.innerWidth - width - 8),
+  )
+  const estimatedHeight = 360
+  const top = rect.bottom + 8 + estimatedHeight > window.innerHeight
+    ? Math.max(8, rect.top - 8 - estimatedHeight)
+    : rect.bottom + 8
+  setUnusedDetailPosition({ left, top, width })
+}
+
+const closeUnusedDetail = () => {
+  setUnusedDetailProfileId(null)
+  unusedDetailTriggerRef.current = null
+}
+
+const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
+  unusedDetailTriggerRef.current = trigger
+  setIsMobileUnusedDetail(window.matchMedia('(max-width: 639px)').matches)
+  setUnusedDetailProfileId((current) => (current === profileId ? null : profileId))
+  window.requestAnimationFrame(() => updateUnusedDetailPosition())
+}
+
+useEffect(() => {
+  if (!unusedDetailProfileId) return
+
+  const onPointerDown = (event: PointerEvent) => {
+    const target = event.target as Node
+    if (unusedDetailTriggerRef.current?.contains(target)) return
+    if (unusedDetailPanelRef.current?.contains(target)) return
+    closeUnusedDetail()
+  }
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') closeUnusedDetail()
+  }
+  const onReposition = () => {
+    const mobile = window.matchMedia('(max-width: 639px)').matches
+    setIsMobileUnusedDetail(mobile)
+    if (!mobile) updateUnusedDetailPosition()
+  }
+
+  window.addEventListener('pointerdown', onPointerDown, true)
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('resize', onReposition)
+  window.addEventListener('scroll', onReposition, true)
+  onReposition()
+
+  return () => {
+    window.removeEventListener('pointerdown', onPointerDown, true)
+    window.removeEventListener('keydown', onKeyDown)
+    window.removeEventListener('resize', onReposition)
+    window.removeEventListener('scroll', onReposition, true)
+  }
+}, [unusedDetailProfileId])
+const hasUnreadEndedReminders = useMemo(
     () => reminderDrafts.some((item) => isCompletedReminderUnread(item)),
     [reminderDrafts, expandedReminderIds],
   )
@@ -909,14 +991,26 @@ export default function SettingsModal() {
           colorKey={profile.id}
           tagColor={profile.tagColor}
           apiMode={profile.apiMode}
-          isDefault={profile.isDefault}
-        />
-        {distributedRemaining != null && (
-          <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
-            未用 {distributedRemaining}
-          </span>
-        )}
-        {userRemaining != null && (
+isDefault={profile.isDefault}
+/>
+{distributedRemaining != null && (
+  <button
+    type="button"
+    className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+    onClick={(event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      openUnusedDetail(profile.id, event.currentTarget)
+    }}
+    onPointerDown={(event) => {
+      // 防止下拉选项抢先选中或关闭
+      event.stopPropagation()
+    }}
+  >
+    未用 {distributedRemaining}
+  </button>
+)}
+{userRemaining != null && (
           <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
             剩余 {userRemaining}
           </span>
@@ -4957,6 +5051,85 @@ export default function SettingsModal() {
         </div>
       )}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+      {unusedDetailProfile && createPortal(
+        (() => {
+          const detailBody = (
+            <>
+              <div className="border-b border-gray-100 px-4 py-3 dark:border-white/[0.08]">
+                <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  {getAdminProviderName(unusedDetailProfile)}
+                </div>
+                <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  未使用合计 {unusedDetailTotal}
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+                {unusedDetailItems.length === 0 ? (
+                  <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                    该端点暂无剩余额度的使用码
+                  </div>
+                ) : (
+                  <ul className="space-y-1">
+                    {unusedDetailItems.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-center justify-between gap-3 rounded-xl px-2 py-2 text-sm"
+                      >
+                        <span className="min-w-0 truncate text-gray-700 dark:text-gray-200" title={item.name}>
+                          {item.name}
+                        </span>
+                        <span className="shrink-0 font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                          {formatProviderUnusedRemaining(item.remaining)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              {unusedDetailItems.length > 0 && (
+                <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:text-gray-400">
+                  共 {unusedDetailItems.length} 个使用码
+                </div>
+              )}
+            </>
+          )
+
+          if (isMobileUnusedDetail) {
+            return (
+              <div className="fixed inset-0 z-[120] flex items-end justify-center sm:hidden">
+                <button
+                  type="button"
+                  className="absolute inset-0 bg-black/40"
+                  aria-label="关闭未使用明细"
+                  onClick={closeUnusedDetail}
+                />
+                <div
+                  ref={unusedDetailPanelRef}
+                  className="relative z-10 flex max-h-[70vh] w-full flex-col rounded-t-3xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-[#1b1c1e]"
+                >
+                  {detailBody}
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div
+              ref={unusedDetailPanelRef}
+              className="dropdown-glass-surface fixed z-[120] hidden max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
+              style={{
+                left: unusedDetailPosition.left,
+                top: unusedDetailPosition.top,
+                width: unusedDetailPosition.width,
+              }}
+            >
+              {detailBody}
+            </div>
+          )
+        })(),
+        document.body,
+      )}
+
     </div>
   )
 }
