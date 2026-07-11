@@ -530,3 +530,49 @@ export async function executeWaveSpeedImageTask(
   }
   return runConcurrentSingles(payload.params.n, () => runSingleWaveSpeed(payload, apiKey), options)
 }
+
+export type WaveSpeedBalanceResult = {
+  supported: true
+  unit: 'USD'
+  balance: number
+  raw?: unknown
+}
+
+/** 查询 WaveSpeed 账户余额（美元） */
+export async function fetchWaveSpeedBalance(
+  provider: Pick<ProviderProfileRecord, 'baseUrl' | 'timeoutSeconds' | 'proxyEnabled' | 'proxyUrl'>,
+  apiKey: string,
+): Promise<WaveSpeedBalanceResult> {
+  const key = apiKey.trim()
+  if (!key) throw new Error('缺少 API Key，无法查询余额')
+  const baseUrl = provider.baseUrl?.trim()
+  if (!baseUrl) throw new Error('缺少 API URL，无法查询余额')
+
+  const response = await fetchWithTimeout(
+    joinUrl(baseUrl, 'balance'),
+    {
+      method: 'GET',
+      headers: buildHeaders(key),
+    },
+    Math.min(Math.max(10, provider.timeoutSeconds || 30), 60),
+    provider as ProviderProfileRecord,
+  )
+  if (!response.ok) throw new Error(await readErrorMessage(response))
+
+  const payload = await response.json() as WaveSpeedEnvelope & { data?: { balance?: number } }
+  if (payload.code != null && payload.code !== 200) {
+    throw new Error(payload.message || 'WaveSpeed 余额查询失败')
+  }
+
+  const balance = Number((payload.data as { balance?: number } | undefined)?.balance)
+  if (!Number.isFinite(balance)) {
+    throw new Error('WaveSpeed 余额响应格式无效')
+  }
+
+  return {
+    supported: true,
+    unit: 'USD',
+    balance,
+    raw: payload,
+  }
+}

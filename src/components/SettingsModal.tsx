@@ -22,6 +22,7 @@ import {
   saveBackendDistribution,
   updateBackendProviderProfile,
   updateBackendUsageCode,
+  fetchBackendProviderBalance,
   type BackendReminderItem,
   type BackendDistributionSettings,
   type BackendManagementOperationLog,
@@ -556,6 +557,8 @@ export default function SettingsModal() {
   const [addCodeValue, setAddCodeValue] = useState('')
   const [activeTab, setActiveTab] = useState<SettingsTab>('habits')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [isQueryingBalance, setIsQueryingBalance] = useState(false)
+  const [providerBalanceText, setProviderBalanceText] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
@@ -707,6 +710,11 @@ export default function SettingsModal() {
       delete document.body.dataset.settingsModalActive
     }
   }, [showSettings])
+
+  useEffect(() => {
+    setProviderBalanceText(null)
+    setIsQueryingBalance(false)
+  }, [profileDraft.id, profileDraft.apiMode])
   usePreventBackgroundScroll(showSettings || Boolean(usageCodeEventModal), [settingsPanelRef, usageCodeEventPanelRef])
   const filteredUsageCodes = useMemo(() => {
     const query = usageCodeSearchQuery.trim().toLowerCase()
@@ -1484,6 +1492,58 @@ export default function SettingsModal() {
     useStore.getState().setTasks(tasks)
   }
 
+
+  const handleQueryProviderBalance = async () => {
+    if (profileDraft.apiMode !== 'wavespeed' && profileDraft.apiMode !== 'kie' && profileDraft.apiMode !== 'venice_images') {
+      useStore.getState().showToast('当前接口不支持余额查询', 'error')
+      return
+    }
+    const baseUrl = profileDraft.baseUrl.trim() || getDefaultBaseUrlForMode(profileDraft.apiMode)
+    if (!baseUrl) {
+      useStore.getState().showToast('请先填写 API URL', 'error')
+      return
+    }
+    const draftKey = profileDraft.apiKey?.trim() || ''
+    if (!profileDraft.id && !draftKey) {
+      useStore.getState().showToast('请先填写 API Key 再查询余额', 'error')
+      return
+    }
+    if (profileDraft.id && !draftKey && profileDraft.apiKeyConfigured === false) {
+      useStore.getState().showToast('当前配置缺少可用 API Key，请重新填写后查询', 'error')
+      return
+    }
+
+    setIsQueryingBalance(true)
+    try {
+      const result = await fetchBackendProviderBalance({
+        profileId: profileDraft.id || '__draft__',
+        apiKey: draftKey || undefined,
+        baseUrl: normalizeBaseUrl(baseUrl, { preservePath: profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie' }),
+        apiMode: profileDraft.apiMode,
+        timeoutSeconds: Number(profileDraft.timeoutSeconds) || DEFAULT_SETTINGS.timeout,
+        proxyEnabled: profileDraft.proxyEnabled === true,
+        proxyUrl: profileDraft.proxyUrl ?? '',
+      })
+      if (!result.supported) {
+        setProviderBalanceText(null)
+        useStore.getState().showToast(result.message || '当前接口不支持余额查询', 'error')
+        return
+      }
+      const textValue = result.display
+        || (result.unit === 'USD'
+          ? ('USD ' + Number(result.balance ?? 0).toFixed(2))
+          : result.unit === 'DIEM'
+            ? (Number(result.balances?.diem ?? result.balance ?? 0).toFixed(2) + ' DIEM · USD ' + Number(result.balances?.usd ?? 0).toFixed(2))
+            : (String(result.balance ?? 0) + ' credits'))
+      setProviderBalanceText(textValue)
+      useStore.getState().showToast(`余额：${textValue}`, 'success')
+    } catch (error) {
+      setProviderBalanceText(null)
+      useStore.getState().showToast(error instanceof Error ? error.message : '余额查询失败', 'error')
+    } finally {
+      setIsQueryingBalance(false)
+    }
+  }
   const handleSave = async () => {
     if (!isAdmin) {
       const selectedOption = providerOptions.find((option) => option.id === draft.providerProfileId)
@@ -2722,6 +2782,23 @@ export default function SettingsModal() {
                     </svg>
                   </button>
                 </div>
+                {(profileDraft.apiMode === 'wavespeed' || profileDraft.apiMode === 'kie' || profileDraft.apiMode === 'venice_images') && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => { void handleQueryProviderBalance() }}
+                      disabled={isQueryingBalance || isSaving}
+                      className="rounded-lg border border-gray-200/80 bg-white/70 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.08] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]"
+                    >
+                      {isQueryingBalance ? '查询中...' : '查询余额'}
+                    </button>
+                    {providerBalanceText && (
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                        当前余额：{providerBalanceText}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
               <label className="block">

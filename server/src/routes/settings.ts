@@ -43,6 +43,9 @@ import type {
   UsageQuotaEventRowRecord,
 } from '../lib/db.js'
 import { validateProxyUrl } from '../lib/upstreamFetch.js'
+import { fetchWaveSpeedBalance } from '../lib/wavespeedApi.js'
+import { fetchKieBalance } from '../lib/kieApi.js'
+import { fetchVeniceBalance } from '../lib/imageApi.js'
 
 type UsageCodeEventCategory =
   | 'all'
@@ -3979,6 +3982,107 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       return { message: 'API 配置不存在' }
     }
     return { ok: true }
+  })
+
+  app.post('/api/admin/provider-profiles/:profileId/balance', async (request, reply) => {
+    await requireAdmin(app, request, reply)
+    const params = z.object({ profileId: z.string().min(1) }).parse(request.params)
+    const body = z.object({
+      apiKey: z.string().optional(),
+      baseUrl: z.string().optional(),
+      apiMode: z.enum(['images', 'responses', 'videos', 'venice_images', 'wavespeed', 'kie']).optional(),
+      timeoutSeconds: z.coerce.number().int().positive().max(1800).optional(),
+      proxyEnabled: z.boolean().optional(),
+      proxyUrl: z.string().trim().max(500).optional().nullable(),
+    }).parse(request.body ?? {})
+
+    const isDraft = params.profileId === '__draft__' || params.profileId === '__new__'
+    const profile = isDraft ? null : app.db.getProviderProfile(params.profileId)
+    if (!isDraft && !profile) {
+      reply.code(404)
+      return { message: 'API 配置不存在' }
+    }
+
+    const apiMode = body.apiMode ?? profile?.apiMode
+    if (apiMode !== 'wavespeed' && apiMode !== 'kie' && apiMode !== 'venice_images') {
+      return {
+        supported: false,
+        message: '当前接口不支持余额查询',
+      }
+    }
+
+    let apiKey = body.apiKey?.trim() || ''
+    if (!apiKey && profile) {
+      try {
+        apiKey = decryptText(profile.apiKeyEncrypted, app.config.appSecret).trim()
+      } catch {
+        apiKey = ''
+      }
+    }
+    if (!apiKey) {
+      reply.code(400)
+      return { message: isDraft ? '请先填写 API Key 再查询余额' : '当前配置缺少可用 API Key，请重新填写后查询' }
+    }
+
+    const baseUrl = (body.baseUrl?.trim() || profile?.baseUrl || '').replace(/\/+$/, '')
+    if (!baseUrl) {
+      reply.code(400)
+      return { message: '请先填写 API URL 再查询余额' }
+    }
+
+    const proxyPayload = normalizeProviderProxyFields({
+      proxyEnabled: body.proxyEnabled ?? Boolean(profile?.proxyEnabled),
+      proxyUrl: body.proxyUrl ?? profile?.proxyUrl ?? '',
+    })
+
+    const provider = {
+      baseUrl,
+      timeoutSeconds: body.timeoutSeconds ?? profile?.timeoutSeconds ?? 30,
+      proxyEnabled: proxyPayload.proxyEnabled ? 1 : 0,
+      proxyUrl: proxyPayload.proxyUrl || null,
+    }
+
+    try {
+      if (apiMode === 'wavespeed') {
+        const result = await fetchWaveSpeedBalance(provider, apiKey)
+        return {
+          supported: true,
+          apiMode,
+          unit: result.unit,
+          balance: result.balance,
+          display: 'USD ' + Number(result.balance).toFixed(2),
+        }
+      }
+      if (apiMode === 'kie') {
+        const result = await fetchKieBalance(provider, apiKey)
+        return {
+          supported: true,
+          apiMode,
+          unit: result.unit,
+          balance: result.balance,
+          display: String(result.balance) + ' credits',
+        }
+      }
+      const result = await fetchVeniceBalance(provider, apiKey)
+      const diemText = Number(result.balances.diem).toFixed(2) + ' DIEM'
+      const usdText = 'USD ' + Number(result.balances.usd).toFixed(2)
+      return {
+        supported: true,
+        apiMode,
+        unit: result.unit,
+        balance: result.balance,
+        balances: result.balances,
+        consumptionCurrency: result.consumptionCurrency ?? null,
+        canConsume: result.canConsume,
+        diemEpochAllocation: result.diemEpochAllocation ?? null,
+        display: diemText + ' · ' + usdText,
+      }
+    } catch (error) {
+      reply.code(502)
+      return {
+        message: error instanceof Error ? error.message : '余额查询失败',
+      }
+    }
   })
 
   app.get('/api/admin/distribution', async (request, reply) => {

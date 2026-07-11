@@ -858,6 +858,97 @@ export async function executeImageTask(
   return callImagesApi(payload, apiKey, options)
 }
 
+export type VeniceBalanceResult = {
+  supported: true
+  unit: 'DIEM'
+  balance: number
+  balances: {
+    diem: number
+    usd: number
+  }
+  consumptionCurrency?: string | null
+  canConsume?: boolean
+  diemEpochAllocation?: number | null
+  raw?: unknown
+}
+
+/** 查询 Venice 账户余额（DIEM / USD） */
+function formatVeniceBalanceError(status: number, message: string) {
+  const text = message.trim()
+  const lower = text.toLowerCase()
+  if (
+    status === 401
+    || lower.includes('admin api key required')
+    || lower.includes('admin key required')
+  ) {
+    return 'Venice 查询余额需要 Admin API Key。当前 Key 多半是 Inference Only，请到 Venice 控制台生成 Admin Key 后再试。'
+  }
+  return text || ('HTTP ' + status)
+}
+
+export async function fetchVeniceBalance(
+  provider: Pick<ProviderProfileRecord, 'baseUrl' | 'timeoutSeconds' | 'proxyEnabled' | 'proxyUrl'>,
+  apiKey: string,
+): Promise<VeniceBalanceResult> {
+  const key = apiKey.trim()
+  if (!key) throw new Error('缺少 API Key，无法查询余额')
+  const baseUrl = provider.baseUrl?.trim()
+  if (!baseUrl) throw new Error('缺少 API URL，无法查询余额')
+
+  const response = await fetchWithTimeout(
+    buildApiUrl(baseUrl, 'billing/balance'),
+    {
+      method: 'GET',
+      headers: buildHeaders(key),
+    },
+    Math.min(Math.max(10, provider.timeoutSeconds || 30), 60),
+    provider as ProviderProfileRecord,
+  )
+  if (!response.ok) {
+    const message = await readErrorMessage(response)
+    throw new Error(formatVeniceBalanceError(response.status, message))
+  }
+
+  const payload = await response.json() as {
+    canConsume?: boolean
+    consumptionCurrency?: string | null
+    balances?: {
+      diem?: number
+      usd?: number
+      vcu?: number
+    }
+    diemEpochAllocation?: number | null
+    error?: string
+    message?: string
+  }
+
+  if (payload.error || payload.message) {
+    const message = String(payload.error || payload.message || '').trim()
+    if (message) throw new Error(formatVeniceBalanceError(response.status, message))
+  }
+
+  const diem = Number(payload.balances?.diem)
+  const usd = Number(payload.balances?.usd)
+  if (!Number.isFinite(diem) && !Number.isFinite(usd)) {
+    throw new Error('Venice 余额响应格式无效')
+  }
+
+  return {
+    supported: true,
+    unit: 'DIEM',
+    balance: Number.isFinite(diem) ? diem : 0,
+    balances: {
+      diem: Number.isFinite(diem) ? diem : 0,
+      usd: Number.isFinite(usd) ? usd : 0,
+    },
+    consumptionCurrency: payload.consumptionCurrency ?? null,
+    canConsume: payload.canConsume,
+    diemEpochAllocation: payload.diemEpochAllocation ?? null,
+    raw: payload,
+  }
+}
+
+
 export async function writeOutputImage(outputDir: string, fileId: string, image: GeneratedImageResult) {
   const ext = image.mimeType.includes('jpeg')
     ? 'jpg'

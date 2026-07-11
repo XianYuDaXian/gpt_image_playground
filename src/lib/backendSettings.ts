@@ -34,6 +34,22 @@ export interface BackendRuntimeSettings {
   source?: 'env' | 'database'
 }
 
+export interface BackendProviderBalance {
+  supported: boolean
+  apiMode?: AppSettings['apiMode']
+  unit?: 'USD' | 'credits' | 'DIEM'
+  balance?: number
+  balances?: {
+    diem?: number
+    usd?: number
+  }
+  consumptionCurrency?: string | null
+  canConsume?: boolean
+  diemEpochAllocation?: number | null
+  display?: string
+  message?: string
+}
+
 export interface BackendProviderProfile {
   id: string
   name: string
@@ -450,6 +466,31 @@ export async function deleteBackendProviderProfile(profileId: string): Promise<v
     method: 'DELETE',
   })
   await readResponseJson<{ ok: true }>(response)
+}
+
+export async function fetchBackendProviderBalance(input: {
+  profileId?: string | null
+  apiKey?: string
+  baseUrl?: string
+  apiMode: AppSettings['apiMode']
+  timeoutSeconds?: number
+  proxyEnabled?: boolean
+  proxyUrl?: string | null
+}): Promise<BackendProviderBalance> {
+  const profileId = input.profileId?.trim() || '__draft__'
+  const response = await fetch(`/api/admin/provider-profiles/${encodeURIComponent(profileId)}/balance`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl,
+      apiMode: input.apiMode,
+      timeoutSeconds: input.timeoutSeconds,
+      proxyEnabled: input.proxyEnabled,
+      proxyUrl: input.proxyUrl,
+    }),
+  })
+  return readResponseJson<BackendProviderBalance>(response)
 }
 
 export async function resetBackendRemoteData(
