@@ -13,6 +13,9 @@ function getScrollBoundary(target: EventTarget | null, allowRefs?: ScrollBoundar
   if (target instanceof Element) {
     const selectMenu = target.closest('.select-menu-surface')
     if (selectMenu instanceof HTMLElement) return selectMenu
+    // 未使用明细列表（portal 到 body）
+    const unusedDetailList = target.closest('[data-unused-detail-scroll]')
+    if (unusedDetailList instanceof HTMLElement) return unusedDetailList
   }
 
   if (!allowRefs) return null

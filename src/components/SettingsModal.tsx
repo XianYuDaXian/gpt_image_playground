@@ -595,7 +595,7 @@ const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel'
 const [unusedDetailProfileId, setUnusedDetailProfileId] = useState<string | null>(null)
 const unusedDetailTriggerRef = useRef<HTMLButtonElement | null>(null)
 const unusedDetailPanelRef = useRef<HTMLDivElement | null>(null)
-const [unusedDetailPosition, setUnusedDetailPosition] = useState({ left: 0, top: 0, width: 320 })
+const [unusedDetailPosition, setUnusedDetailPosition] = useState({ left: 0, top: 0, width: 320, maxHeight: 360 })
 const [isMobileUnusedDetail, setIsMobileUnusedDetail] = useState(false)
 
 const isMultiModelMode = (apiMode: AppSettings['apiMode']) => apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
@@ -716,11 +716,17 @@ const updateUnusedDetailPosition = () => {
     Math.max(8, rect.right - width),
     Math.max(8, window.innerWidth - width - 8),
   )
-  const estimatedHeight = 360
-  const top = rect.bottom + 8 + estimatedHeight > window.innerHeight
-    ? Math.max(8, rect.top - 8 - estimatedHeight)
-    : rect.bottom + 8
-  setUnusedDetailPosition({ left, top, width })
+  // 预估高度用于决定向上/向下展开，实际高度由 max-h 约束
+  const estimatedHeight = Math.min(Math.round(window.innerHeight * 0.7), 480)
+  const preferBelow = rect.bottom + 8 + estimatedHeight <= window.innerHeight
+  const top = preferBelow
+    ? rect.bottom + 8
+    : Math.max(8, rect.top - 8 - estimatedHeight)
+  // 可用高度：避免弹层超出视口后列表无法形成滚动区
+  const maxHeight = preferBelow
+    ? Math.max(200, window.innerHeight - top - 8)
+    : Math.max(200, rect.top - 16)
+  setUnusedDetailPosition({ left, top, width, maxHeight: Math.min(estimatedHeight, maxHeight) })
 }
 
 const closeUnusedDetail = () => {
@@ -753,17 +759,24 @@ useEffect(() => {
     if (!mobile) updateUnusedDetailPosition()
   }
 
+  // 仅在页面/外层滚动时重定位，列表内部滚动不处理
+  const onScroll = (event: Event) => {
+    const target = event.target
+    if (target instanceof Node && unusedDetailPanelRef.current?.contains(target)) return
+    onReposition()
+  }
+
   window.addEventListener('pointerdown', onPointerDown, true)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('resize', onReposition)
-  window.addEventListener('scroll', onReposition, true)
+  window.addEventListener('scroll', onScroll, true)
   onReposition()
 
   return () => {
     window.removeEventListener('pointerdown', onPointerDown, true)
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('resize', onReposition)
-    window.removeEventListener('scroll', onReposition, true)
+    window.removeEventListener('scroll', onScroll, true)
   }
 }, [unusedDetailProfileId])
 const hasUnreadEndedReminders = useMemo(
@@ -797,7 +810,8 @@ const hasUnreadEndedReminders = useMemo(
     setProviderBalanceText(null)
     setIsQueryingBalance(false)
   }, [profileDraft.id, profileDraft.apiMode])
-  usePreventBackgroundScroll(showSettings || Boolean(usageCodeEventModal), [settingsPanelRef, usageCodeEventPanelRef])
+  // 未使用明细 portal 到 body，需放行内部滚动
+  usePreventBackgroundScroll(showSettings || Boolean(usageCodeEventModal), [settingsPanelRef, usageCodeEventPanelRef, unusedDetailPanelRef])
   const filteredUsageCodes = useMemo(() => {
     const query = usageCodeSearchQuery.trim().toLowerCase()
     if (!query) return usageCodes
@@ -5053,7 +5067,7 @@ isDefault={profile.isDefault}
       {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
       {unusedDetailProfile && createPortal(
         (() => {
-          const detailBody = (
+const detailBody = (
             <>
               <div className="border-b border-gray-100 px-4 py-3 dark:border-white/[0.08]">
                 <div className="truncate text-sm font-semibold text-gray-800 dark:text-gray-100">
@@ -5063,7 +5077,12 @@ isDefault={profile.isDefault}
                   未使用合计 {unusedDetailTotal}
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+              <div
+                data-unused-detail-scroll
+                className="tiny-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
+                onWheel={(event) => event.stopPropagation()}
+                onTouchMove={(event) => event.stopPropagation()}
+              >
                 {unusedDetailItems.length === 0 ? (
                   <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
                     该端点暂无剩余额度的使用码
@@ -5118,7 +5137,7 @@ isDefault={profile.isDefault}
                 />
                 <div
                   ref={unusedDetailPanelRef}
-                  className="relative z-10 flex max-h-[70vh] w-full flex-col rounded-t-3xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-[#1b1c1e]"
+                  className="relative z-10 flex h-[min(70vh,560px)] max-h-[70vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-[#1b1c1e]"
                 >
                   {detailBody}
                 </div>
@@ -5129,11 +5148,14 @@ isDefault={profile.isDefault}
           return (
             <div
               ref={unusedDetailPanelRef}
-              className="dropdown-glass-surface fixed z-[200] hidden max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
+              className="dropdown-glass-surface fixed z-[200] hidden flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
               style={{
                 left: unusedDetailPosition.left,
                 top: unusedDetailPosition.top,
                 width: unusedDetailPosition.width,
+                maxHeight: unusedDetailPosition.maxHeight,
+                height: 'auto',
+                display: 'flex',
               }}
             >
               {detailBody}
