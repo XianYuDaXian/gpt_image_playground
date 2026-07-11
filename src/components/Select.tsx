@@ -53,6 +53,10 @@ export default function Select({
       ) {
         return
       }
+      // 嵌套 portal（如未使用明细）点击不应收起下拉
+      if (e.target instanceof Element && e.target.closest('[data-select-ignore-outside]')) {
+        return
+      }
       if (containerRef.current) {
         setIsOpen(false)
       }

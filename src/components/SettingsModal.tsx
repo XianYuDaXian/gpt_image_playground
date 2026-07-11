@@ -5137,7 +5137,10 @@ const detailBody = (
                 />
                 <div
                   ref={unusedDetailPanelRef}
+                  data-select-ignore-outside
                   className="relative z-10 flex h-[min(70vh,560px)] max-h-[70vh] w-full flex-col overflow-hidden rounded-t-3xl border border-white/50 bg-white shadow-2xl dark:border-white/[0.08] dark:bg-[#1b1c1e]"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
                 >
                   {detailBody}
                 </div>
@@ -5148,6 +5151,7 @@ const detailBody = (
           return (
             <div
               ref={unusedDetailPanelRef}
+              data-select-ignore-outside
               className="dropdown-glass-surface fixed z-[200] hidden flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
               style={{
                 left: unusedDetailPosition.left,
@@ -5157,6 +5161,8 @@ const detailBody = (
                 height: 'auto',
                 display: 'flex',
               }}
+              onMouseDown={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
             >
               {detailBody}
             </div>
