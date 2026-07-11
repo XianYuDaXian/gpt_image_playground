@@ -36,9 +36,9 @@ describe('listProviderUnusedUsageCodes', () => {
       }),
     ]
 
-    expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'images')).toEqual([
-      { id: 'a', name: '可用', remaining: 3 },
-    ])
+expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'images')).toEqual([
+  { id: 'a', name: '可用', remaining: 3, code: null },
+])
   })
 
   it('显式不限配额排在最前', () => {
@@ -112,8 +112,8 @@ describe('listProviderUnusedUsageCodes', () => {
     ]
 
     expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'videos')).toEqual([
-      { id: 'v2', name: '视频不限', remaining: null },
-      { id: 'v1', name: '视频可用', remaining: 4 },
+      { id: 'v2', name: '视频不限', remaining: null, code: null },
+      { id: 'v1', name: '视频可用', remaining: 4, code: null },
     ])
   })
 
@@ -136,8 +136,8 @@ describe('listProviderUnusedUsageCodes', () => {
     ]
 
     expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'images')).toEqual([
-      { id: 'only-id', name: 'only-id', remaining: 2 },
-      { id: 'fallback-id', name: 'CODE-1', remaining: 1 },
+      { id: 'only-id', name: 'only-id', remaining: 2, code: null },
+      { id: 'fallback-id', name: 'CODE-1', remaining: 1, code: 'CODE-1' },
     ])
   })
 
@@ -152,6 +152,20 @@ describe('listProviderUnusedUsageCodes', () => {
     ]
 
     expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'images')).toEqual([])
+  })
+  it('保留可复制的明文使用码', () => {
+    const usageCodes = [
+      code({
+        id: 'copy',
+        name: '备注甲',
+        code: 'PLAIN-1',
+        allowedProviderProfileIds: null,
+        providerRemainingImageCredits: { p1: 7 },
+      }),
+    ]
+    expect(listProviderUnusedUsageCodes(usageCodes, 'p1', 'images')).toEqual([
+      { id: 'copy', name: '备注甲', remaining: 7, code: 'PLAIN-1' },
+    ])
   })
 })
 

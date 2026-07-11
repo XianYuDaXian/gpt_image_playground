@@ -15,6 +15,8 @@ export interface ProviderUnusedUsageCodeItem {
   id: string
   name: string
   remaining: number | null
+  /** 明文使用码，可能为空（旧码不可恢复） */
+  code: string | null
 }
 
 function isAllowedForProvider(
@@ -64,16 +66,17 @@ export function listProviderUnusedUsageCodes(
     if (!isAllowedForProvider(code.allowedProviderProfileIds, profileId)) continue
 
     const remaining = readRemaining(code, profileId, apiMode)
+    const plainCode = code.code?.trim() || null
     if (typeof remaining === 'number') {
       if (remaining > 0) {
-        items.push({ id: code.id, name: resolveDisplayName(code), remaining })
+        items.push({ id: code.id, name: resolveDisplayName(code), remaining, code: plainCode })
       }
       continue
     }
 
     // remaining 为 null/undefined：仅显式不限配额才展示
     if (isExplicitUnlimited(code, profileId, apiMode)) {
-      items.push({ id: code.id, name: resolveDisplayName(code), remaining: null })
+      items.push({ id: code.id, name: resolveDisplayName(code), remaining: null, code: plainCode })
     }
   }
 

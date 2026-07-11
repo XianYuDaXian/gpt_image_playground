@@ -5075,9 +5075,22 @@ isDefault={profile.isDefault}
                         key={item.id}
                         className="flex items-center justify-between gap-3 rounded-xl px-2 py-2 text-sm"
                       >
-                        <span className="min-w-0 truncate text-gray-700 dark:text-gray-200" title={item.name}>
+                        <button
+                          type="button"
+                          className={`min-w-0 truncate text-left text-gray-700 transition dark:text-gray-200 ${item.code ? 'hover:text-blue-600 dark:hover:text-blue-300' : 'cursor-default'}`}
+                          title={item.code ? `点击复制使用码：${item.name}` : item.name}
+                          onClick={() => {
+                            if (!item.code) {
+                              useStore.getState().showToast('该使用码无法复制（旧码不可恢复）', 'error')
+                              return
+                            }
+                            void copyTextToClipboard(item.code)
+                              .then(() => useStore.getState().showToast('使用码已复制', 'success'))
+                              .catch((err) => useStore.getState().showToast(getClipboardFailureMessage('复制失败', err), 'error'))
+                          }}
+                        >
                           {item.name}
-                        </span>
+                        </button>
                         <span className="shrink-0 font-medium tabular-nums text-gray-900 dark:text-gray-100">
                           {formatProviderUnusedRemaining(item.remaining)}
                         </span>
@@ -5096,7 +5109,7 @@ isDefault={profile.isDefault}
 
           if (isMobileUnusedDetail) {
             return (
-              <div className="fixed inset-0 z-[120] flex items-end justify-center sm:hidden">
+              <div className="fixed inset-0 z-[200] flex items-end justify-center sm:hidden">
                 <button
                   type="button"
                   className="absolute inset-0 bg-black/40"
@@ -5116,7 +5129,7 @@ isDefault={profile.isDefault}
           return (
             <div
               ref={unusedDetailPanelRef}
-              className="dropdown-glass-surface fixed z-[120] hidden max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
+              className="dropdown-glass-surface fixed z-[200] hidden max-h-[70vh] flex-col overflow-hidden rounded-2xl border border-gray-200/70 shadow-xl ring-1 ring-black/5 sm:flex dark:border-white/[0.08] dark:ring-white/10"
               style={{
                 left: unusedDetailPosition.left,
                 top: unusedDetailPosition.top,
