@@ -346,6 +346,16 @@ function isMultiModelImageMode(apiMode?: BackendProviderOption['apiMode'] | null
 }
 
 
+/** OpenAI images/responses 才支持遮罩；其余协议走高级编辑 */
+function supportsMaskEditing(option: BackendProviderOption | null | undefined) {
+  if (!option) return true
+  if (option.apiMode === 'venice_images' || option.apiMode === 'wavespeed' || option.apiMode === 'kie' || option.apiMode === 'videos') {
+    return false
+  }
+  if (option.grokApiCompat) return false
+  return option.apiMode === 'images' || option.apiMode === 'responses'
+}
+
 function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
   if (!option || !isMultiModelImageMode(option.apiMode)) return null
   const label = getProviderLabel(option.apiMode)
@@ -567,6 +577,8 @@ export default function InputBar() {
   const maskDraft = useStore((s) => s.maskDraft)
   const clearMaskDraft = useStore((s) => s.clearMaskDraft)
   const setMaskEditorImageId = useStore((s) => s.setMaskEditorImageId)
+  const setLightboxImageId = useStore((s) => s.setLightboxImageId)
+  const setLightboxStartEditor = useStore((s) => s.setLightboxStartEditor)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cameraInputRef = useRef<HTMLInputElement>(null)
@@ -1481,6 +1493,22 @@ export default function InputBar() {
     setMaskEditorImageId(imageId)
   }, [setMaskEditorImageId])
 
+  const openAdvancedEditor = useCallback((imageId: string) => {
+    setLightboxStartEditor(true)
+    setLightboxImageId(imageId, inputImages.map((image) => image.id))
+  }, [inputImages, setLightboxImageId, setLightboxStartEditor])
+
+  const openReferenceImageEditor = useCallback((imageId: string) => {
+    if (supportsMaskEditing(activeProviderOption)) {
+      openMaskEditor(imageId)
+      return
+    }
+    openAdvancedEditor(imageId)
+  }, [activeProviderOption, openAdvancedEditor, openMaskEditor])
+
+  const canEditMask = supportsMaskEditing(activeProviderOption)
+  const referenceEditTitle = canEditMask ? '添加遮罩' : '高级编辑'
+
   const handleInputImageDragStart = (event: React.DragEvent<HTMLDivElement>, index: number) => {
     if (isMobile) {
       event.preventDefault()
@@ -1596,9 +1624,9 @@ export default function InputBar() {
               }}
               onClick={(e) => {
                 e.stopPropagation()
-                openMaskEditor(img.id)
+                openReferenceImageEditor(img.id)
               }}
-              title={isMaskTarget ? '编辑遮罩' : '添加遮罩'}
+              title={isMaskTarget ? '编辑遮罩' : referenceEditTitle}
             >
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
@@ -1610,9 +1638,9 @@ export default function InputBar() {
               className="absolute inset-0 z-20 flex h-full w-full items-center justify-center border-none bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 cursor-pointer focus:outline-none"
               onClick={(e) => {
                 e.stopPropagation()
-                openMaskEditor(img.id)
+                openReferenceImageEditor(img.id)
               }}
-              title={isMaskTarget ? '编辑遮罩' : '添加遮罩'}
+              title={isMaskTarget ? '编辑遮罩' : referenceEditTitle}
             >
               <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
