@@ -360,7 +360,7 @@ async function runSingleKie(
   const model = pickKieModel(payload.provider, kind)
   if (!model) throw new Error('Kie 缺少模型 ID')
 
-  // Kie 质量固定传 basic，不跟随前端质量选项；审核参数不传
+  // Kie 质量固定传 basic；nsfw_checker 始终按端点开关发送
   const input: Record<string, unknown> = {
     prompt: payload.prompt,
     aspect_ratio: await mapSizeToAspectRatio(
@@ -369,6 +369,7 @@ async function runSingleKie(
       Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
     ),
     quality: 'basic',
+    nsfw_checker: Number(payload.provider.nsfwChecker ?? 1) !== 0,
   }
 
   if (kind === 'generate') {
