@@ -6,6 +6,7 @@ import type { AppDatabase, ProviderProfileRecord } from './db.js'
 import { executeWaveSpeedImageTask } from './wavespeedApi.js'
 import { executeKieImageTask } from './kieApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
+import { resolveAdminGatedResolution } from './specialProviderQuality.js'
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -366,12 +367,26 @@ function pickGrokResolution(
   return Math.abs(requestedLongEdge - longEdge2k) < Math.abs(requestedLongEdge - longEdge1k) ? '2k' : '1k'
 }
 
+/** Venice：分辨率只跟管理员开关 + 用户 high，不按尺寸推断 */
+function resolveVeniceGatedResolution(
+  xaiImage2kEnabled: boolean,
+  userQuality: TaskExecutionPayload['params']['quality'] | null | undefined,
+): GrokResolution {
+  return resolveAdminGatedResolution({
+    adminHighEnabled: xaiImage2kEnabled,
+    userQuality,
+  })
+}
+
 function mapSizeToGrokParams(
   size: string,
   xaiImage2kEnabled: boolean,
   options?: {
     autoAspectFromReference?: boolean
     referenceSize?: { width: number; height: number } | null
+    /** Venice 专用：分辨率按管理员开关 + 用户 high 映射 */
+    veniceQualityGate?: boolean
+    userQuality?: TaskExecutionPayload['params']['quality']
   },
 ): { aspectRatio: GrokAspectRatio; resolution?: GrokResolution } {
   const parsed = parseImageSize(size)
@@ -381,7 +396,12 @@ function mapSizeToGrokParams(
 
   if (!dimensions) {
     // 无明确尺寸、且未从参考图取比例时，保留 auto
-    return { aspectRatio: 'auto', resolution: '1k' }
+    return {
+      aspectRatio: 'auto',
+      resolution: options?.veniceQualityGate
+        ? resolveVeniceGatedResolution(xaiImage2kEnabled, options.userQuality)
+        : '1k',
+    }
   }
 
   const actualRatio = dimensions.width / dimensions.height
@@ -398,7 +418,9 @@ function mapSizeToGrokParams(
 
   return {
     aspectRatio,
-    resolution: pickGrokResolution(dimensions, aspectRatio, xaiImage2kEnabled),
+    resolution: options?.veniceQualityGate
+      ? resolveVeniceGatedResolution(xaiImage2kEnabled, options.userQuality)
+      : pickGrokResolution(dimensions, aspectRatio, xaiImage2kEnabled),
   }
 }
 
@@ -495,6 +517,9 @@ async function callImagesApi(
     {
       autoAspectFromReference: Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
       referenceSize,
+      // Venice：按管理员 2K 开关 + 用户 high 映射分辨率
+      veniceQualityGate: Boolean(shouldUseVeniceCompat(payload) && isVeniceProvider(payload)),
+      userQuality: payload.params.quality,
     },
   )
 

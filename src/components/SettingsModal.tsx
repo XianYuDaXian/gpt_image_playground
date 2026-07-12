@@ -3263,7 +3263,7 @@ isDefault={profile.isDefault}
                   <PreferenceRow
                     title="允许 xAI 2K 图片"
                     description={profileDraft.apiMode === 'venice_images'
-                      ? '开启后会按请求尺寸尽量提交更高分辨率。关闭时固定提交 1K。'
+                      ? '开启后，用户选择 high 才提交 2K；关闭时固定 1K。'
                       : '开启后，xAI 图片接口会按请求尺寸尽量使用 2K。关闭时，xAI 图片仍固定使用 1K。'}
                     checked={profileDraft.xaiImage2kEnabled}
                     onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
@@ -3293,8 +3293,8 @@ isDefault={profile.isDefault}
                 {profileDraft.apiMode === 'wavespeed' && (
                   <>
                     <PreferenceRow
-                      title="允许高分辨率 (2K/4K)"
-                      description="开启后按请求尺寸映射 resolution 为 2k 或 4k。关闭时固定提交 1k。"
+                      title="允许高分辨率 (2K)"
+                      description="开启后，用户选择 high 才提交 2k；关闭时固定 1k。"
                       checked={profileDraft.xaiImage2kEnabled}
                       onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
                     />
@@ -3322,7 +3322,7 @@ isDefault={profile.isDefault}
                     />
                     <PreferenceRow
                       title="高质量 (2K)"
-                      description="开启后 quality 使用 high（2K）。关闭时使用 basic（1K）。也可由尺寸与质量参数共同推断。"
+                      description="开启后，用户选择 high 才提交 quality=high；关闭时固定 basic。"
                       checked={profileDraft.xaiImage2kEnabled}
                       onChange={(checked) => updateProfileDraft({ xaiImage2kEnabled: checked })}
                     />

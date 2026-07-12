@@ -4,6 +4,7 @@ import sharp from 'sharp'
 import type { ProviderProfileRecord } from './db.js'
 import type { GeneratedImageResult, TaskExecutionPayload, ExecuteImageTaskOptions } from './imageApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
+import { resolveAdminGatedKieQuality } from './specialProviderQuality.js'
 
 type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '2:3' | '3:2'
 type KieTaskKind = 'generate' | 'edit' | 'multi-edit'
@@ -360,7 +361,8 @@ async function runSingleKie(
   const model = pickKieModel(payload.provider, kind)
   if (!model) throw new Error('Kie 缺少模型 ID')
 
-  // Kie 质量固定传 basic；nsfw_checker 始终按端点开关发送
+  // 质量：管理员开关门控；仅 high 且开关开启时传 high，否则 basic
+  // 审核：始终发送 nsfw_checker，值仅跟随管理员开关，忽略用户审核选项
   const input: Record<string, unknown> = {
     prompt: payload.prompt,
     aspect_ratio: await mapSizeToAspectRatio(
@@ -368,7 +370,10 @@ async function runSingleKie(
       payload.inputImages[0]?.filePath,
       Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
     ),
-    quality: 'basic',
+    quality: resolveAdminGatedKieQuality({
+      adminHighEnabled: Boolean(payload.provider.xaiImage2kEnabled),
+      userQuality: payload.params.quality,
+    }),
     nsfw_checker: Number(payload.provider.nsfwChecker ?? 1) !== 0,
   }
 

@@ -4,6 +4,7 @@ import sharp from 'sharp'
 import type { ProviderProfileRecord } from './db.js'
 import type { GeneratedImageResult, TaskExecutionPayload, ExecuteImageTaskOptions } from './imageApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
+import { resolveAdminGatedResolution } from './specialProviderQuality.js'
 
 type AspectRatio =
   | '1:1'
@@ -155,13 +156,6 @@ function nearestAspectRatio(width: number, height: number): AspectRatio {
     .sort((a, b) => a.delta - b.delta)[0]?.value ?? '1:1'
 }
 
-function pickResolution(longEdge: number, allowHighResolution: boolean): WaveSpeedResolution {
-  if (!allowHighResolution) return '1k'
-  if (longEdge >= 3000) return '4k'
-  if (longEdge >= 1500) return '2k'
-  return '1k'
-}
-
 async function readLocalImageSize(filePath: string): Promise<{ width: number; height: number } | null> {
   try {
     const metadata = await sharp(filePath, { animated: false }).metadata()
@@ -172,32 +166,21 @@ async function readLocalImageSize(filePath: string): Promise<{ width: number; he
   }
 }
 
-async function mapSizeToAspectAndResolution(
+async function mapSizeToAspectRatio(
   size: string,
-  allowHighResolution: boolean,
   referenceImagePath?: string | null,
   autoAspectFromReference = true,
-): Promise<{ aspectRatio: AspectRatio; resolution: WaveSpeedResolution }> {
+): Promise<AspectRatio> {
   const parsed = parseImageSize(size)
-  if (parsed) {
-    return {
-      aspectRatio: nearestAspectRatio(parsed.width, parsed.height),
-      resolution: pickResolution(Math.max(parsed.width, parsed.height), allowHighResolution),
-    }
-  }
+  if (parsed) return nearestAspectRatio(parsed.width, parsed.height)
 
   // size=auto 时：有参考图则按参考图比例，否则回退 1:1
   if (autoAspectFromReference && referenceImagePath) {
     const imageSize = await readLocalImageSize(referenceImagePath)
-    if (imageSize) {
-      return {
-        aspectRatio: nearestAspectRatio(imageSize.width, imageSize.height),
-        resolution: pickResolution(Math.max(imageSize.width, imageSize.height), allowHighResolution),
-      }
-    }
+    if (imageSize) return nearestAspectRatio(imageSize.width, imageSize.height)
   }
 
-  return { aspectRatio: '1:1', resolution: '1k' }
+  return '1:1'
 }
 
 function pickWaveSpeedModel(provider: ProviderProfileRecord, kind: 'generate' | 'edit' | 'multi-edit') {
@@ -433,10 +416,13 @@ async function runSingleWaveSpeed(
   const modelPath = pickWaveSpeedModel(payload.provider, kind)
   if (!modelPath) throw new Error('WaveSpeed 缺少模型 ID')
 
-  const allowHighResolution = Boolean(payload.provider.xaiImage2kEnabled)
-  const sizeParams = await mapSizeToAspectAndResolution(
+  // 分辨率：管理员开关门控；仅用户 high 且开关开启时传 2k，否则 1k（不升 4k）
+  const resolution = resolveAdminGatedResolution({
+    adminHighEnabled: Boolean(payload.provider.xaiImage2kEnabled),
+    userQuality: payload.params.quality,
+  })
+  const aspectRatio = await mapSizeToAspectRatio(
     payload.params.size,
-    allowHighResolution,
     payload.inputImages[0]?.filePath,
     Number(payload.provider.autoAspectFromReference ?? 1) !== 0,
   )
@@ -458,8 +444,8 @@ async function runSingleWaveSpeed(
     enable_base64_output: enableBase64,
     enable_sync_mode: enableSync,
     output_format: payload.params.output_format,
-    resolution: sizeParams.resolution,
-    aspect_ratio: sizeParams.aspectRatio,
+    resolution,
+    aspect_ratio: aspectRatio,
   }
 
   if (hasInputs) {

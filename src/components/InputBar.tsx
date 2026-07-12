@@ -927,7 +927,9 @@ export default function InputBar() {
     : []
   const showAtImageMenu = atImageOptions.length > 0 && !isCursorInSelectedImageMention(prompt, cursorPos) && !isComposingRef.current
   const compressionHint = useHintTooltip()
-  const moderationHint = useHintTooltip({ enabled: () => settings.apiMode === 'responses' })
+  // 仅 Responses 禁用审核；Venice/WaveSpeed/Kie 前端无感可选，后端忽略
+  const moderationIgnored = settings.apiMode === 'responses'
+  const moderationHint = useHintTooltip({ enabled: () => moderationIgnored })
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli })
   const sizeHint = useHintTooltip()
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
@@ -1790,21 +1792,21 @@ export default function InputBar() {
       >
         <span className="text-gray-400 dark:text-gray-500 ml-1">审核</span>
         <Select
-          value={settings.apiMode === 'responses' ? 'auto' : params.moderation}
+          value={moderationIgnored ? 'auto' : params.moderation}
           onChange={(val) => {
-            if (settings.apiMode !== 'responses') setParams({ moderation: val as any })
+            if (!moderationIgnored) setParams({ moderation: val as any })
           }}
           options={[
             { label: 'auto', value: 'auto' },
             { label: 'low', value: 'low' },
           ]}
-          disabled={settings.apiMode === 'responses'}
-          className={settings.apiMode === 'responses'
+          disabled={moderationIgnored}
+          className={moderationIgnored
             ? 'px-3 py-1.5 rounded-xl border border-gray-200/60 dark:border-white/[0.08] bg-gray-100/50 dark:bg-white/[0.05] opacity-50 cursor-not-allowed text-xs transition-all duration-200 shadow-sm'
             : selectClass}
         />
         <ButtonTooltip
-          visible={settings.apiMode === 'responses' && moderationHint.visible}
+          visible={moderationIgnored && moderationHint.visible}
           text="Responses API 不支持审核参数"
         />
       </label>
@@ -1884,9 +1886,9 @@ export default function InputBar() {
         <span className="text-gray-400 dark:text-gray-500">张数</span>
         <span>{params.n}</span>
       </button>
-      <button type="button" onClick={() => settings.apiMode !== 'responses' && setMobileParamSheet('moderation')} className={`${mobileChipClass} ${settings.apiMode === 'responses' ? 'opacity-50' : ''}`}>
+      <button type="button" onClick={() => !moderationIgnored && setMobileParamSheet('moderation')} className={`${mobileChipClass} ${moderationIgnored ? 'opacity-50' : ''}`}>
         <span className="text-gray-400 dark:text-gray-500">审核</span>
-        <span>{settings.apiMode === 'responses' ? 'auto' : params.moderation}</span>
+        <span>{moderationIgnored ? 'auto' : params.moderation}</span>
       </button>
         </>
       )}
