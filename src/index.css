@@ -121,6 +121,50 @@ input[type="number"] {
   display: none;
 }
 
+/* 设置页顶部 Tab：常规宽度铺满无滚动条，极窄屏才允许横向滚动 */
+.settings-tabs {
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+  height: 0;
+  width: 0;
+}
+@media (max-width: 360px) {
+  .settings-tabs {
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(156, 163, 175, 0.45) transparent;
+  }
+  /* 极窄屏保留可读宽度，允许横向滚动 */
+  .settings-tabs > button {
+    flex: 0 0 auto;
+    min-width: max-content;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+  .settings-tabs::-webkit-scrollbar {
+    display: block;
+    height: 3px;
+    width: 0;
+  }
+  .settings-tabs::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .settings-tabs::-webkit-scrollbar-thumb {
+    background: rgba(156, 163, 175, 0.45);
+    border-radius: 9999px;
+  }
+  .dark .settings-tabs {
+    scrollbar-color: rgba(113, 113, 122, 0.5) transparent;
+  }
+  .dark .settings-tabs::-webkit-scrollbar-thumb {
+    background: rgba(113, 113, 122, 0.5);
+  }
+}
+
 .mask-edge-r {
   -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
   mask-image: linear-gradient(to right, black 85%, transparent 100%);

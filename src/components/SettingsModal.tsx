@@ -2561,7 +2561,8 @@ const hasUnreadEndedReminders = useMemo(
   }
 
   const tabClass = (tab: SettingsTab) =>
-    `flex shrink-0 items-center gap-1.5 rounded-2xl px-4 py-2 text-sm font-medium transition ${
+    // 移动端均分铺满；桌面端保持原有胶囊尺寸
+    `flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded-2xl px-1.5 py-2 text-[12px] font-medium transition sm:flex-none sm:shrink-0 sm:justify-start sm:gap-1.5 sm:px-4 sm:text-sm ${
       activeTab === tab
         ? 'bg-blue-50 text-blue-500 dark:bg-blue-500/10 dark:text-blue-300'
         : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/[0.06]'
@@ -2597,7 +2598,8 @@ const hasUnreadEndedReminders = useMemo(
           </div>
         </div>
 
-        <div className="tiny-scrollbar flex gap-2 overflow-x-auto border-b border-gray-100 px-5 py-3 dark:border-white/[0.08]">
+        {/* 默认铺满无滚动条；仅极窄屏（如 SE）才允许横向滚动并显示细滚动条 */}
+        <div className="settings-tabs flex w-full gap-1 border-b border-gray-100 px-3 py-2.5 dark:border-white/[0.08] sm:gap-2 sm:px-5 sm:py-3">
           {isAdmin && <button className={tabClass('habits')} onClick={() => setActiveTab('habits')}>习惯配置</button>}
           <button className={tabClass('api')} onClick={() => setActiveTab('api')}>API 配置</button>
           {isAdmin && (
