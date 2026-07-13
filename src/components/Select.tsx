@@ -138,7 +138,8 @@ export default function Select({
           disabled ? '!opacity-50 !cursor-not-allowed !bg-gray-100/50 dark:!bg-white/[0.05]' : ''
         }`}
       >
-        <span className={`flex min-w-0 flex-1 items-center overflow-hidden ${selectedLabelClassName ?? 'whitespace-nowrap truncate'}`}>{selectedOption?.label ?? value}</span>
+        {/* 选中标签占满箭头左侧空间，便于内部按钮靠右 */}
+        <span className={`flex min-w-0 flex-1 items-center overflow-hidden ${selectedLabelClassName ?? ''}`}>{selectedOption?.label ?? value}</span>
         <svg
           className={`w-3.5 h-3.5 flex-shrink-0 text-gray-400 dark:text-gray-500 transition-transform duration-200 ${arrowPointsUp ? 'rotate-180' : ''}`}
           fill="none"
@@ -174,7 +175,7 @@ export default function Select({
                     : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-white/[0.06]'
                 } ${optionItemClassName ?? ''}`}
               >
-                <span className={`relative block min-w-0 ${optionLabelClassName ?? 'whitespace-nowrap truncate'}`}>{option.label}</span>
+                <span className={`relative flex min-w-0 w-full items-center ${optionLabelClassName ?? ''}`}>{option.label}</span>
               </div>
             )
           })}

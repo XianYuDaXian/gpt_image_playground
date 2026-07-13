@@ -1085,51 +1085,55 @@ const hasUnreadEndedReminders = useMemo(
         }, 0)
       : null
     return (
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <ProviderProfileTag
-          name={profile.name}
-          remarkName={profile.remarkName}
-          preferRemarkName={isAdmin}
-          colorKey={profile.id}
-          tagColor={profile.tagColor}
-          apiMode={profile.apiMode}
-isDefault={profile.isDefault}
-/>
-{distributedRemaining != null && (
-  <div className="flex shrink-0 items-center gap-1">
-    <button
-      type="button"
-      className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-emerald-200/80 bg-emerald-50/80 px-1.5 text-[11px] font-medium leading-none text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
-      onClick={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        openUnusedDetail(profile.id, event.currentTarget)
-      }}
-      onPointerDown={(event) => {
-        // 防止下拉选项抢先选中或关闭
-        event.stopPropagation()
-      }}
-    >
-      <span className="truncate">未用 {distributedRemaining}</span>
-    </button>
-    <button
-      type="button"
-      className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-slate-200/80 bg-slate-50/90 px-1.5 text-[11px] font-medium leading-none text-slate-600 transition hover:bg-slate-100 dark:border-white/[0.10] dark:bg-white/[0.05] dark:text-slate-300 dark:hover:bg-white/[0.08]"
-      onClick={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        openUsedDetail(profile.id, event.currentTarget)
-      }}
-      onPointerDown={(event) => {
-        event.stopPropagation()
-      }}
-    >
-      <span className="truncate">已用 {getProviderDistributedUsed(profile.id, profile.apiMode)}</span>
-    </button>
-  </div>
-)}
-{userRemaining != null && (
-          <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
+      <div className="flex w-full min-w-0 items-center gap-2 pr-0.5">
+        {/* 左侧标签可收缩，未用/已用固定靠右（收起态与展开态一致） */}
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <ProviderProfileTag
+            name={profile.name}
+            remarkName={profile.remarkName}
+            preferRemarkName={isAdmin}
+            colorKey={profile.id}
+            tagColor={profile.tagColor}
+            apiMode={profile.apiMode}
+            isDefault={profile.isDefault}
+            className="max-w-full"
+          />
+        </div>
+        {distributedRemaining != null && (
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-emerald-200/80 bg-emerald-50/80 px-1.5 text-[11px] font-medium leading-none text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                openUnusedDetail(profile.id, event.currentTarget)
+              }}
+              onPointerDown={(event) => {
+                // 防止下拉选项抢先选中或关闭
+                event.stopPropagation()
+              }}
+            >
+              <span className="truncate">未用 {distributedRemaining}</span>
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-slate-200/80 bg-slate-50/90 px-1.5 text-[11px] font-medium leading-none text-slate-600 transition hover:bg-slate-100 dark:border-white/[0.10] dark:bg-white/[0.05] dark:text-slate-300 dark:hover:bg-white/[0.08]"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                openUsedDetail(profile.id, event.currentTarget)
+              }}
+              onPointerDown={(event) => {
+                event.stopPropagation()
+              }}
+            >
+              <span className="truncate">已用 {getProviderDistributedUsed(profile.id, profile.apiMode)}</span>
+            </button>
+          </div>
+        )}
+        {userRemaining != null && (
+          <span className="ml-auto shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
             剩余 {userRemaining}
           </span>
         )}
