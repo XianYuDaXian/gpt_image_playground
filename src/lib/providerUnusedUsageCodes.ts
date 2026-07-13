@@ -9,6 +9,8 @@ export interface ProviderUnusedUsageCodeSource {
   providerVideoQuotas?: Record<string, number | null> | null
   providerRemainingImageCredits?: Record<string, number | null> | null
   providerRemainingVideoCredits?: Record<string, number | null> | null
+  providerUsedImageCredits?: Record<string, number | null> | null
+  providerUsedVideoCredits?: Record<string, number | null> | null
 }
 
 export interface ProviderUnusedUsageCodeItem {
@@ -16,6 +18,14 @@ export interface ProviderUnusedUsageCodeItem {
   name: string
   remaining: number | null
   /** 明文使用码，可能为空（旧码不可恢复） */
+  code: string | null
+}
+
+/** 已用明细项：按已用次数展示 */
+export interface ProviderUsedUsageCodeItem {
+  id: string
+  name: string
+  used: number
   code: string | null
 }
 
@@ -46,6 +56,16 @@ function readRemaining(
   return apiMode === 'videos'
     ? code.providerRemainingVideoCredits?.[profileId]
     : code.providerRemainingImageCredits?.[profileId]
+}
+
+function readUsed(
+  code: ProviderUnusedUsageCodeSource,
+  profileId: string,
+  apiMode: AppSettings['apiMode'],
+) {
+  return apiMode === 'videos'
+    ? code.providerUsedVideoCredits?.[profileId]
+    : code.providerUsedImageCredits?.[profileId]
 }
 
 function resolveDisplayName(code: ProviderUnusedUsageCodeSource) {
@@ -90,6 +110,51 @@ export function listProviderUnusedUsageCodes(
   })
 }
 
+/**
+ * 已用明细：授权该端点且 used>0，按已用降序，同值按备注名 zh-CN
+ */
+export function listProviderUsedUsageCodes(
+  usageCodes: ProviderUnusedUsageCodeSource[],
+  profileId: string,
+  apiMode: AppSettings['apiMode'],
+): ProviderUsedUsageCodeItem[] {
+  const items: ProviderUsedUsageCodeItem[] = []
+
+  for (const code of usageCodes) {
+    if (!isAllowedForProvider(code.allowedProviderProfileIds, profileId)) continue
+
+    const usedRaw = readUsed(code, profileId, apiMode)
+    const used = typeof usedRaw === 'number' && Number.isFinite(usedRaw) ? Math.max(0, usedRaw) : 0
+    if (used <= 0) continue
+
+    items.push({
+      id: code.id,
+      name: resolveDisplayName(code),
+      used,
+      code: code.code?.trim() || null,
+    })
+  }
+
+  return items.sort((left, right) => {
+    if (left.used !== right.used) return right.used - left.used
+    return left.name.localeCompare(right.name, 'zh-CN')
+  })
+}
+
+/** 端点已用合计（仅统计授权码的 used） */
+export function sumProviderUsedUsageCodes(
+  usageCodes: ProviderUnusedUsageCodeSource[],
+  profileId: string,
+  apiMode: AppSettings['apiMode'],
+) {
+  return listProviderUsedUsageCodes(usageCodes, profileId, apiMode)
+    .reduce((sum, item) => sum + item.used, 0)
+}
+
 export function formatProviderUnusedRemaining(remaining: number | null) {
   return remaining == null ? '不限' : String(remaining)
+}
+
+export function formatProviderUsedCount(used: number) {
+  return String(used)
 }

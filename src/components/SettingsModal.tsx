@@ -86,6 +86,9 @@ import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import {
   formatProviderUnusedRemaining,
   listProviderUnusedUsageCodes,
+  listProviderUsedUsageCodes,
+  sumProviderUsedUsageCodes,
+  formatProviderUsedCount,
 } from '../lib/providerUnusedUsageCodes'
 import Select from './Select'
 import ProviderProfileTag, { getProviderProfileDisplayName } from './ProviderProfileTag'
@@ -593,6 +596,8 @@ const usageCodeEventCategoryMenuRef = useRef<HTMLDivElement>(null)
 const usageCodeDownloadAbortControllersRef = useRef<Record<string, AbortController>>({})
 const usageCodeDownloadStopActionsRef = useRef<Record<string, 'pause' | 'cancel' | null>>({})
 const [unusedDetailProfileId, setUnusedDetailProfileId] = useState<string | null>(null)
+  /** unused=未用明细 used=已用明细 */
+  const [usageDetailKind, setUsageDetailKind] = useState<'unused' | 'used'>('unused')
 const unusedDetailTriggerRef = useRef<HTMLButtonElement | null>(null)
 const unusedDetailPanelRef = useRef<HTMLDivElement | null>(null)
 const [unusedDetailPosition, setUnusedDetailPosition] = useState({ left: 0, top: 0, width: 320, maxHeight: 360 })
@@ -698,6 +703,11 @@ const getProviderDistributedRemaining = (
   return sum + Math.max(0, remaining ?? 0)
 }, 0)
 
+const getProviderDistributedUsed = (
+  profileId: string,
+  apiMode: AppSettings['apiMode'],
+) => sumProviderUsedUsageCodes(usageCodes, profileId, apiMode)
+
 const unusedDetailProfile = unusedDetailProfileId
   ? profiles.find((item) => item.id === unusedDetailProfileId) ?? null
   : null
@@ -707,9 +717,25 @@ const unusedDetailItems = useMemo(() => {
   return listProviderUnusedUsageCodes(usageCodes, unusedDetailProfile.id, unusedDetailProfile.apiMode)
 }, [unusedDetailProfile, usageCodes])
 
+const usedDetailItems = useMemo(() => {
+  if (!unusedDetailProfile) return []
+  return listProviderUsedUsageCodes(usageCodes, unusedDetailProfile.id, unusedDetailProfile.apiMode)
+}, [unusedDetailProfile, usageCodes])
+
 const unusedDetailTotal = unusedDetailProfile
   ? getProviderDistributedRemaining(unusedDetailProfile.id, unusedDetailProfile.apiMode)
   : 0
+
+const usedDetailTotal = unusedDetailProfile
+  ? getProviderDistributedUsed(unusedDetailProfile.id, unusedDetailProfile.apiMode)
+  : 0
+
+const usageDetailItems = usageDetailKind === 'used' ? usedDetailItems : unusedDetailItems
+const usageDetailTotal = usageDetailKind === 'used' ? usedDetailTotal : unusedDetailTotal
+const usageDetailTitle = usageDetailKind === 'used' ? '已使用合计' : '未使用合计'
+const usageDetailEmptyText = usageDetailKind === 'used'
+  ? '该端点暂无已使用记录的使用码'
+  : '该端点暂无剩余额度的使用码'
 
 const updateUnusedDetailPosition = () => {
   const rect = unusedDetailTriggerRef.current?.getBoundingClientRect()
@@ -735,6 +761,7 @@ const updateUnusedDetailPosition = () => {
 const closeUnusedDetail = () => {
   setUnusedDetailProfileId(null)
   unusedDetailTriggerRef.current = null
+  setUsageDetailKind('unused')
   // 遮罩卸掉后仍拦截一段时间，避免点击落到后方下拉
   setUnusedDetailClickShield(true)
   if (unusedDetailClickShieldTimerRef.current != null) {
@@ -746,11 +773,25 @@ const closeUnusedDetail = () => {
   }, 450)
 }
 
-const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
+const openUsageDetail = (profileId: string, kind: 'unused' | 'used', trigger: HTMLButtonElement) => {
+  // 同一端点同一类型再点则关闭；切类型则保持打开并切换
+  if (unusedDetailProfileId === profileId && usageDetailKind === kind) {
+    closeUnusedDetail()
+    return
+  }
   unusedDetailTriggerRef.current = trigger
   setIsMobileUnusedDetail(window.matchMedia('(max-width: 639px)').matches)
-  setUnusedDetailProfileId((current) => (current === profileId ? null : profileId))
+  setUsageDetailKind(kind)
+  setUnusedDetailProfileId(profileId)
   window.requestAnimationFrame(() => updateUnusedDetailPosition())
+}
+
+const openUnusedDetail = (profileId: string, trigger: HTMLButtonElement) => {
+  openUsageDetail(profileId, 'unused', trigger)
+}
+
+const openUsedDetail = (profileId: string, trigger: HTMLButtonElement) => {
+  openUsageDetail(profileId, 'used', trigger)
 }
 
 useEffect(() => {
@@ -1055,21 +1096,37 @@ const hasUnreadEndedReminders = useMemo(
 isDefault={profile.isDefault}
 />
 {distributedRemaining != null && (
-  <button
-    type="button"
-    className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-gray-500 transition hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
-    onClick={(event) => {
-      event.preventDefault()
-      event.stopPropagation()
-      openUnusedDetail(profile.id, event.currentTarget)
-    }}
-    onPointerDown={(event) => {
-      // 防止下拉选项抢先选中或关闭
-      event.stopPropagation()
-    }}
-  >
-    未用 {distributedRemaining}
-  </button>
+  <div className="flex shrink-0 items-center gap-1">
+    <button
+      type="button"
+      className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-emerald-200/80 bg-emerald-50/80 px-1.5 text-[11px] font-medium leading-none text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        openUnusedDetail(profile.id, event.currentTarget)
+      }}
+      onPointerDown={(event) => {
+        // 防止下拉选项抢先选中或关闭
+        event.stopPropagation()
+      }}
+    >
+      <span className="truncate">未用 {distributedRemaining}</span>
+    </button>
+    <button
+      type="button"
+      className="inline-flex h-6 max-w-[5.5rem] items-center justify-center whitespace-nowrap rounded-md border border-slate-200/80 bg-slate-50/90 px-1.5 text-[11px] font-medium leading-none text-slate-600 transition hover:bg-slate-100 dark:border-white/[0.10] dark:bg-white/[0.05] dark:text-slate-300 dark:hover:bg-white/[0.08]"
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        openUsedDetail(profile.id, event.currentTarget)
+      }}
+      onPointerDown={(event) => {
+        event.stopPropagation()
+      }}
+    >
+      <span className="truncate">已用 {getProviderDistributedUsed(profile.id, profile.apiMode)}</span>
+    </button>
+  </div>
 )}
 {userRemaining != null && (
           <span className="shrink-0 text-[11px] text-gray-500 dark:text-gray-400">
@@ -5121,7 +5178,7 @@ const detailBody = (
                   {getAdminProviderName(unusedDetailProfile)}
                 </div>
                 <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  未使用合计 {unusedDetailTotal}
+                  {usageDetailTitle} {usageDetailTotal}
                 </div>
               </div>
               <div
@@ -5130,13 +5187,13 @@ const detailBody = (
                 onWheel={(event) => event.stopPropagation()}
                 onTouchMove={(event) => event.stopPropagation()}
               >
-                {unusedDetailItems.length === 0 ? (
+                {usageDetailItems.length === 0 ? (
                   <div className="px-2 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                    该端点暂无剩余额度的使用码
+                    {usageDetailEmptyText}
                   </div>
                 ) : (
                   <ul className="space-y-1">
-                    {unusedDetailItems.map((item) => (
+                    {usageDetailItems.map((item) => (
                       <li
                         key={item.id}
                         className="flex items-center justify-between gap-3 rounded-xl px-2 py-2 text-sm"
@@ -5158,16 +5215,18 @@ const detailBody = (
                           {item.name}
                         </button>
                         <span className="shrink-0 font-medium tabular-nums text-gray-900 dark:text-gray-100">
-                          {formatProviderUnusedRemaining(item.remaining)}
+                          {usageDetailKind === 'used'
+                            ? formatProviderUsedCount((item as { used: number }).used)
+                            : formatProviderUnusedRemaining((item as { remaining: number | null }).remaining)}
                         </span>
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
-              {unusedDetailItems.length > 0 && (
+              {usageDetailItems.length > 0 && (
                 <div className="border-t border-gray-100 px-4 py-2 text-xs text-gray-500 dark:border-white/[0.08] dark:text-gray-400">
-                  共 {unusedDetailItems.length} 个使用码
+                  共 {usageDetailItems.length} 个使用码
                 </div>
               )}
             </>
@@ -5179,7 +5238,7 @@ const detailBody = (
                 <button
                   type="button"
                   className="absolute inset-0 bg-black/40"
-                  aria-label="关闭未使用明细"
+                  aria-label={usageDetailKind === 'used' ? '关闭已使用明细' : '关闭未使用明细'}
                   data-select-ignore-outside
                   onPointerDown={(event) => {
                     event.preventDefault()

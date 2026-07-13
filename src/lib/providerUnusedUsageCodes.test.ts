@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   formatProviderUnusedRemaining,
   listProviderUnusedUsageCodes,
+  listProviderUsedUsageCodes,
+  sumProviderUsedUsageCodes,
+  formatProviderUsedCount,
   type ProviderUnusedUsageCodeSource,
 } from './providerUnusedUsageCodes'
 
@@ -174,5 +177,95 @@ describe('formatProviderUnusedRemaining', () => {
     expect(formatProviderUnusedRemaining(null)).toBe('不限')
     expect(formatProviderUnusedRemaining(0)).toBe('0')
     expect(formatProviderUnusedRemaining(12)).toBe('12')
+  })
+})
+
+describe('listProviderUsedUsageCodes', () => {
+  it('纳入授权且 used>0 的使用码，排除 used=0 与未授权项', () => {
+    const usageCodes = [
+      code({
+        id: 'a',
+        name: '已使用',
+        allowedProviderProfileIds: ['p1'],
+        providerUsedImageCredits: { p1: 3 },
+      }),
+      code({
+        id: 'b',
+        name: '未使用',
+        allowedProviderProfileIds: ['p1'],
+        providerUsedImageCredits: { p1: 0 },
+      }),
+      code({
+        id: 'c',
+        name: '未授权',
+        allowedProviderProfileIds: ['p2'],
+        providerUsedImageCredits: { p1: 9, p2: 2 },
+      }),
+    ]
+
+    expect(listProviderUsedUsageCodes(usageCodes, 'p1', 'images')).toEqual([
+      { id: 'a', name: '已使用', used: 3, code: null },
+    ])
+  })
+
+  it('按已用降序，同已用按备注名 localeCompare zh-CN', () => {
+    const usageCodes = [
+      code({
+        id: 'b',
+        name: '香蕉',
+        allowedProviderProfileIds: null,
+        providerUsedImageCredits: { p1: 2 },
+      }),
+      code({
+        id: 'a',
+        name: '苹果',
+        allowedProviderProfileIds: null,
+        providerUsedImageCredits: { p1: 5 },
+      }),
+      code({
+        id: 'c',
+        name: '橙子',
+        allowedProviderProfileIds: null,
+        providerUsedImageCredits: { p1: 5 },
+      }),
+    ]
+
+    const sameUsedNames = ['苹果', '橙子'].sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    expect(listProviderUsedUsageCodes(usageCodes, 'p1', 'images').map((item) => item.name)).toEqual([
+      ...sameUsedNames,
+      '香蕉',
+    ])
+  })
+
+  it('视频端点读取 video used', () => {
+    const usageCodes = [
+      code({
+        id: 'v1',
+        name: '视频已用',
+        allowedProviderProfileIds: ['p1'],
+        providerUsedImageCredits: { p1: 99 },
+        providerUsedVideoCredits: { p1: 4 },
+      }),
+    ]
+
+    expect(listProviderUsedUsageCodes(usageCodes, 'p1', 'videos')).toEqual([
+      { id: 'v1', name: '视频已用', used: 4, code: null },
+    ])
+  })
+
+  it('合计已用次数', () => {
+    const usageCodes = [
+      code({ id: 'a', name: '甲', providerUsedImageCredits: { p1: 3 } }),
+      code({ id: 'b', name: '乙', providerUsedImageCredits: { p1: 2 } }),
+      code({ id: 'c', name: '丙', allowedProviderProfileIds: ['p2'], providerUsedImageCredits: { p1: 9 } }),
+    ]
+    expect(sumProviderUsedUsageCodes(usageCodes, 'p1', 'images')).toBe(5)
+  })
+})
+
+describe('formatProviderUsedCount', () => {
+  it('数字原样字符串化', () => {
+    expect(formatProviderUsedCount(0)).toBe('0')
+    expect(formatProviderUsedCount(12)).toBe('12')
   })
 })
