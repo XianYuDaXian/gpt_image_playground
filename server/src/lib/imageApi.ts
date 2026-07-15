@@ -7,6 +7,7 @@ import { executeWaveSpeedImageTask } from './wavespeedApi.js'
 import { executeKieImageTask } from './kieApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
 import { resolveAdminGatedResolution } from './specialProviderQuality.js'
+import { isImagesOnlyModel, parseProviderImageJsonResponse } from './providerImageExtract.js'
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -150,19 +151,23 @@ function createResponsesInput(prompt: string, inputImageDataUrls: string[]) {
 }
 
 function createResponsesImageTool(payload: TaskExecutionPayload): Record<string, unknown> {
+  // 反代实测：仅 type=image_generation 最稳。size/quality 等扩展字段在部分网关会静默失败。
   const tool: Record<string, unknown> = {
     type: 'image_generation',
-    action: payload.inputImages.length > 0 ? 'edit' : 'generate',
-    size: payload.params.size,
-    output_format: payload.params.output_format,
   }
 
-  if (!payload.provider.codexCli) {
-    tool.quality = payload.params.quality
+  // 有参考图时再补 action=edit；无参考图保持最小工具体
+  if (payload.inputImages.length > 0) {
+    tool.action = 'edit'
   }
 
-  if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
-    tool.output_compression = payload.params.output_compression
+  // Codex CLI 模式可附带输出格式；普通反代尽量精简
+  if (payload.provider.codexCli) {
+    tool.size = payload.params.size
+    tool.output_format = payload.params.output_format
+    if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
+      tool.output_compression = payload.params.output_compression
+    }
   }
 
   if (payload.maskImage) {
@@ -434,6 +439,11 @@ async function readLocalImageSize(filePath: string): Promise<{ width: number; he
   }
 }
 
+function resolveImageTimeoutSeconds(payload: TaskExecutionPayload) {
+  // 反代生图体积 2–3MB，建议至少 180 秒
+  return Math.max(180, Number(payload.provider.timeoutSeconds) || 0)
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -456,24 +466,13 @@ async function fetchWithTimeout(
 }
 
 async function extractImageResults(result: Array<{ b64_json?: string; url?: string }> | undefined) {
-  if (!Array.isArray(result) || result.length === 0) {
-    throw new Error('接口未返回图片数据')
-  }
-
-  const images: GeneratedImageResult[] = []
-  for (const item of result) {
-    if (item.b64_json) {
-      images.push(normalizeBase64Image(item.b64_json))
-    } else if (item.url) {
-      images.push(await fetchRemoteImage(item.url))
-    }
-  }
-
+  // 兼容旧调用：把 data 包装后走统一解析
+  const { extractImagesFromProviderResponse } = await import('./providerImageExtract.js')
+  const images = await extractImagesFromProviderResponse({ data: result ?? [] })
   if (!images.length) {
     throw new Error('接口未返回可用图片数据')
   }
-
-  return images
+  return images.map(({ buffer, mimeType }) => ({ buffer, mimeType }))
 }
 
 async function runConcurrentSingles(
@@ -555,7 +554,7 @@ async function callImagesApi(
             ...(getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) ? { resolution: getVeniceResolution(payload, usesMultipleImages ? 'multi-edit' : 'edit', grokSize.resolution) } : {}),
           }),
         },
-        payload.provider.timeoutSeconds,
+        resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -605,7 +604,7 @@ async function callImagesApi(
                 }),
           }),
         },
-        payload.provider.timeoutSeconds,
+        resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -613,11 +612,7 @@ async function callImagesApi(
         throw new Error(await readErrorMessage(response))
       }
 
-      const result = await response.json() as {
-        data?: Array<{ b64_json?: string; url?: string }>
-      }
-
-      return extractImageResults(result.data)
+      return parseProviderImageJsonResponse(response, 'Images API')
     }
 
     const formData = new FormData()
@@ -659,7 +654,7 @@ async function callImagesApi(
         headers: buildHeaders(apiKey),
         body: formData,
       },
-      payload.provider.timeoutSeconds,
+      resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -667,11 +662,7 @@ async function callImagesApi(
       throw new Error(await readErrorMessage(response))
     }
 
-    const result = await response.json() as {
-      data?: Array<{ b64_json?: string; url?: string }>
-    }
-
-    return extractImageResults(result.data)
+    return parseProviderImageJsonResponse(response, 'Images API')
   }
 
   const runSingleGeneration = async () => {
@@ -692,7 +683,7 @@ async function callImagesApi(
             ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
           }),
         },
-        payload.provider.timeoutSeconds,
+        resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -700,11 +691,7 @@ async function callImagesApi(
         throw new Error(await readErrorMessage(response))
       }
 
-      const result = await response.json() as {
-        data?: Array<{ b64_json?: string; url?: string }>
-      }
-
-      return extractImageResults(result.data)
+      return parseProviderImageJsonResponse(response, 'Images API')
     }
 
     if (payload.provider.grokApiCompat) {
@@ -725,7 +712,7 @@ async function callImagesApi(
             ...(!shouldUseConcurrentSingles && payload.params.n > 1 ? { n: payload.params.n } : {}),
           }),
         },
-        payload.provider.timeoutSeconds,
+        resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -733,11 +720,7 @@ async function callImagesApi(
         throw new Error(await readErrorMessage(response))
       }
 
-      const result = await response.json() as {
-        data?: Array<{ b64_json?: string; url?: string }>
-      }
-
-      return extractImageResults(result.data)
+      return parseProviderImageJsonResponse(response, 'Images API')
     }
 
     const response = await fetchWithTimeout(
@@ -752,18 +735,20 @@ async function callImagesApi(
           model: payload.provider.model,
           prompt,
           size: payload.params.size,
+          // 反代兼容：优先拿 b64_json，避免只返回完成态却无图
+          response_format: 'b64_json',
+          n: (!shouldUseConcurrentSingles && payload.params.n > 1) ? payload.params.n : 1,
+          // 下列字段部分反代会忽略；保留以兼容官方 OpenAI
           output_format: payload.params.output_format,
           moderation: payload.params.moderation,
-          ...(payload.provider.responseFormatB64Json ? { response_format: 'b64_json' } : {}),
           ...(payload.provider.codexCli ? {} : { quality: payload.params.quality }),
           ...(payload.params.output_format !== 'png'
             && payload.params.output_compression != null
             ? { output_compression: payload.params.output_compression }
             : {}),
-          ...(!shouldUseConcurrentSingles && payload.params.n > 1 ? { n: payload.params.n } : {}),
         }),
       },
-      payload.provider.timeoutSeconds,
+      resolveImageTimeoutSeconds(payload),
         payload.provider,
       )
 
@@ -771,11 +756,7 @@ async function callImagesApi(
       throw new Error(await readErrorMessage(response))
     }
 
-    const result = await response.json() as {
-      data?: Array<{ b64_json?: string; url?: string }>
-    }
-
-    return extractImageResults(result.data)
+    return parseProviderImageJsonResponse(response, 'Images API')
   }
 
   if (payload.inputImages.length > 0) {
@@ -794,12 +775,21 @@ async function callResponsesApi(
   apiKey: string,
   options: ExecuteImageTaskOptions = {},
 ): Promise<GeneratedImageResult[]> {
+  // 仅当模型本身是 images-only（如 gpt-image-2）时回退 Images API。
+  // 配置名包含 image-2 但模型 ID 为 gpt-5.x 时，不回退。
+  if (isImagesOnlyModel(payload.provider.model)) {
+    return callImagesApi(payload, apiKey, options)
+  }
+
   const inputImageDataUrls = await Promise.all(
     payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
   )
   const maskDataUrl = payload.maskImage
     ? await fileToDataUrl(payload.maskImage.filePath, payload.maskImage.mimeType)
     : null
+
+  // 超时至少 180s：Responses + image_generation 实测常需 40–70s，反代更大
+  const timeoutSeconds = Math.max(180, Number(payload.provider.timeoutSeconds) || 0)
 
   const body = {
     model: payload.provider.model,
@@ -816,6 +806,7 @@ async function callResponsesApi(
           : {}),
       },
     ],
+    // 用户明确生图：强制触发 image_generation 工具
     tool_choice: 'required',
   }
 
@@ -830,30 +821,15 @@ async function callResponsesApi(
         },
         body: JSON.stringify(body),
       },
-      payload.provider.timeoutSeconds,
-        payload.provider,
-      )
+      timeoutSeconds,
+      payload.provider,
+    )
 
     if (!response.ok) {
       throw new Error(await readErrorMessage(response))
     }
 
-    const result = await response.json() as {
-      output?: Array<{ type?: string; result?: string }>
-    }
-    const output = result.output ?? []
-    const images: GeneratedImageResult[] = []
-    for (const item of output) {
-      if (item.type === 'image_generation_call' && typeof item.result === 'string' && item.result.trim()) {
-        images.push(normalizeBase64Image(item.result))
-      }
-    }
-
-    if (!images.length) {
-      throw new Error('接口未返回图片数据')
-    }
-
-    return images
+    return parseProviderImageJsonResponse(response, 'Responses API')
   }
 
   if (payload.params.n === 1) {
