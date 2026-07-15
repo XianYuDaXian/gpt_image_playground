@@ -129,6 +129,9 @@ async function readErrorMessage(response: Response) {
     }
   }
 
+  if (response.status === 524) {
+    return `${statusPrefix} - Cloudflare 源站超时（通常约 120 秒未返回完整响应）。请稍后重试；若频繁出现，需上游/线路优化`
+  }
   return statusPrefix
 }
 
@@ -435,8 +438,47 @@ async function readLocalImageSize(filePath: string): Promise<{ width: number; he
 }
 
 function resolveImageTimeoutSeconds(payload: TaskExecutionPayload) {
-  // 反代生图体积 2–3MB，建议至少 180 秒
+  // 反代/Cloudflare 生图体积 2–3MB，建议至少 180 秒
   return Math.max(180, Number(payload.provider.timeoutSeconds) || 0)
+}
+
+function isRetryableUpstreamStatus(status: number) {
+  // 524：Cloudflare 源站读超时（ark717 实测约 120s 切断，可重试）
+  return status === 408
+    || status === 425
+    || status === 429
+    || status === 500
+    || status === 502
+    || status === 503
+    || status === 504
+    || status === 524
+}
+
+function isRetryableUpstreamError(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+  return (
+    message.includes('http 408')
+    || message.includes('http 425')
+    || message.includes('http 429')
+    || message.includes('http 500')
+    || message.includes('http 502')
+    || message.includes('http 503')
+    || message.includes('http 504')
+    || message.includes('http 524')
+    || message.includes('fetch failed')
+    || message.includes('network')
+    || message.includes('timeout')
+    || message.includes('aborted')
+    || message.includes('econnreset')
+    || message.includes('etimedout')
+    || message.includes('socket hang up')
+    || message.includes('origin_response_timeout')
+  )
+}
+
+function sleepMs(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function fetchWithTimeout(
@@ -458,6 +500,40 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeoutId)
   }
+}
+
+/** 生图请求自动重试：覆盖 Cloudflare 524 / 网关抖动 */
+async function fetchImageWithRetry(
+  url: string,
+  init: RequestInit,
+  timeoutSeconds: number,
+  provider?: ProviderProfileRecord,
+  attempts = 3,
+) {
+  let lastError: unknown
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const response = await fetchWithTimeout(url, init, timeoutSeconds, provider)
+      if (!response.ok && isRetryableUpstreamStatus(response.status) && i < attempts) {
+        // 524 正文常带 retry_after=120；默认退避 8/16 秒，最多等 45 秒
+        const backoff = Math.min(45_000, 8_000 * i)
+        if (response.status === 524) {
+          await sleepMs(Math.max(backoff, 12_000))
+        } else {
+          await sleepMs(backoff)
+        }
+        continue
+      }
+      return response
+    } catch (error) {
+      lastError = error
+      if (i >= attempts || !isRetryableUpstreamError(error)) {
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+      await sleepMs(Math.min(45_000, 8_000 * i))
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
 async function extractImageResults(result: Array<{ b64_json?: string; url?: string }> | undefined) {
@@ -642,7 +718,7 @@ async function callImagesApi(
       formData.append('mask', new Blob([maskBuffer], { type: payload.maskImage.mimeType }), 'mask.png')
     }
 
-    const response = await fetchWithTimeout(
+    const response = await fetchImageWithRetry(
       buildApiUrl(payload.provider.baseUrl, 'images/edits'),
       {
         method: 'POST',
@@ -718,7 +794,7 @@ async function callImagesApi(
       return parseProviderImageJsonResponse(response, 'Images API')
     }
 
-    const response = await fetchWithTimeout(
+    const response = await fetchImageWithRetry(
       buildApiUrl(payload.provider.baseUrl, 'images/generations'),
       {
         method: 'POST',
@@ -806,7 +882,7 @@ async function callResponsesApi(
   }
 
   const runSingle = async () => {
-    const response = await fetchWithTimeout(
+    const response = await fetchImageWithRetry(
       buildApiUrl(payload.provider.baseUrl, 'responses'),
       {
         method: 'POST',
@@ -818,6 +894,7 @@ async function callResponsesApi(
       },
       timeoutSeconds,
       payload.provider,
+      3,
     )
 
     if (!response.ok) {
@@ -831,7 +908,16 @@ async function callResponsesApi(
     return runSingle()
   }
 
-  return runConcurrentSingles(payload.params.n, runSingle, options)
+  // Responses 多图串行：并发会放大 Cloudflare 524 / 冷却
+  const all: GeneratedImageResult[] = []
+  for (let i = 0; i < payload.params.n; i += 1) {
+    const images = await runSingle()
+    all.push(...images)
+    const completed = i + 1
+    await options.onImagesReady?.(images, { completed, total: payload.params.n })
+    options.onImageComplete?.(completed, payload.params.n)
+  }
+  return all
 }
 
 function isResponsesCapableModel(model: string | null | undefined) {

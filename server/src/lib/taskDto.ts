@@ -141,6 +141,9 @@ function getTaskErrorForViewer(task: TaskRecord, exposeDetailedError?: boolean) 
   }
   if (exposeDetailedError) return raw
   const httpMatch = raw.match(/\bHTTP\s+(\d{3})\b/i)
+  if (httpMatch?.[1] === '524') {
+    return 'HTTP 524 上游超时，请稍后重试'
+  }
   if (httpMatch?.[1]) {
     return `HTTP ${httpMatch[1]}`
   }
