@@ -245,6 +245,48 @@ export async function extractImagesFromProviderResponse(json: unknown): Promise<
   return images
 }
 
+/** 将上游/运行时异常整理为可读文案，避免出现字面量 null */
+export function normalizeProviderErrorMessage(error: unknown, fallback = '生成失败，请联系管理员') {
+  const fallbackText = String(fallback || '生成失败，请联系管理员').trim() || '生成失败，请联系管理员'
+
+  const clean = (value: unknown): string | null => {
+    if (value == null) return null
+    if (typeof value === 'string') {
+      const text = value.trim()
+      if (!text) return null
+      if (/^(null|undefined|nan)$/i.test(text)) return null
+      return text
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value)
+    }
+    if (typeof value === 'object') {
+      const record = value as Record<string, unknown>
+      let sawPreferred = false
+      for (const key of ['message', 'detail', 'error', 'title', 'code']) {
+        if (key in record) {
+          sawPreferred = true
+          const nested = clean(record[key])
+          if (nested) return nested
+        }
+      }
+      if (sawPreferred) return null
+      try {
+        const text = JSON.stringify(value)
+        if (text && text !== '{}' && text !== 'null') return text
+      } catch {
+        /* ignore */
+      }
+    }
+    return null
+  }
+
+  if (error instanceof Error) {
+    return clean(error.message) || fallbackText
+  }
+  return clean(error) || fallbackText
+}
+
 export async function parseProviderImageJsonResponse(response: Response, context: string) {
   const rawText = await response.text()
   if (!rawText.trim()) {
@@ -264,11 +306,7 @@ export async function parseProviderImageJsonResponse(response: Response, context
 
   if (json && typeof json === 'object' && 'error' in (json as object)) {
     const err = (json as { error?: unknown }).error
-    const message = typeof err === 'string'
-      ? err
-      : (err && typeof err === 'object' && 'message' in err
-          ? String((err as { message?: unknown }).message ?? '')
-          : JSON.stringify(err))
+    const message = normalizeProviderErrorMessage(err, '')
     const lower = message.toLowerCase()
     if (
       lower.includes('only supported on /v1/images/generations')

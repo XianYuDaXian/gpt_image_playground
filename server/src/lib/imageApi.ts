@@ -151,28 +151,23 @@ function createResponsesInput(prompt: string, inputImageDataUrls: string[]) {
 }
 
 function createResponsesImageTool(payload: TaskExecutionPayload): Record<string, unknown> {
-  // 反代实测：仅 type=image_generation 最稳。size/quality 等扩展字段在部分网关会静默失败。
+  // 反代实测：最小工具 {type:image_generation} 最稳。
+  // size=auto / action=edit / 多余字段在部分网关会导致无图或错误 message=null。
   const tool: Record<string, unknown> = {
     type: 'image_generation',
   }
 
-  // 有参考图时再补 action=edit；无参考图保持最小工具体
-  if (payload.inputImages.length > 0) {
-    tool.action = 'edit'
-  }
-
-  // Codex CLI 模式可附带输出格式；普通反代尽量精简
+  // 仅官方/Codex CLI 且 size 合法时再附带扩展字段
   if (payload.provider.codexCli) {
-    tool.size = payload.params.size
-    tool.output_format = payload.params.output_format
+    const size = String(payload.params.size || '').trim()
+    if (size && size.toLowerCase() !== 'auto') {
+      tool.size = size
+    }
+    if (payload.params.output_format) {
+      tool.output_format = payload.params.output_format
+    }
     if (payload.params.output_format !== 'png' && payload.params.output_compression != null) {
       tool.output_compression = payload.params.output_compression
-    }
-  }
-
-  if (payload.maskImage) {
-    tool.input_image_mask = {
-      image_url: '',
     }
   }
 
@@ -839,6 +834,20 @@ async function callResponsesApi(
   return runConcurrentSingles(payload.params.n, runSingle, options)
 }
 
+function isResponsesCapableModel(model: string | null | undefined) {
+  const value = String(model ?? '').trim().toLowerCase()
+  if (!value) return false
+  // 对话/工具模型：应走 /v1/responses + image_generation，而不是 /v1/images/*
+  if (isImagesOnlyModel(value)) return false
+  return (
+    value.includes('gpt-5')
+    || value.startsWith('gpt-4.1')
+    || value.startsWith('gpt-4o')
+    || value.startsWith('chatgpt')
+    || /^o[1-4]/.test(value)
+  )
+}
+
 export async function executeImageTask(
   db: AppDatabase,
   payload: TaskExecutionPayload,
@@ -854,6 +863,10 @@ export async function executeImageTask(
   }
   if (payload.provider.apiMode === 'kie') {
     return executeKieImageTask(payload, apiKey, options)
+  }
+  // 配置仍写 images，但模型是 gpt-5.x 等对话模型时，自动改走 Responses 生图
+  if (payload.provider.apiMode === 'images' && isResponsesCapableModel(payload.provider.model)) {
+    return callResponsesApi(payload, apiKey, options)
   }
   return callImagesApi(payload, apiKey, options)
 }

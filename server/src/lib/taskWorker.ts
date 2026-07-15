@@ -6,6 +6,7 @@ import { executeImageTask, writeOutputImage, writeOutputImageThumbnail, type Gen
 import { assertAllOutputImagesPersisted, createOutputImagePersistQueue } from './outputImagePersist.js'
 import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
+import { normalizeProviderErrorMessage } from './providerImageExtract.js'
 
 export class TaskWorker {
   private running = new Set<string>()
@@ -226,12 +227,17 @@ export class TaskWorker {
       const persistOutputImages = (images: Awaited<ReturnType<typeof executeImageTask>>) =>
         outputPersistQueue.enqueue(images)
 
+      // 任务创建时记录的模型优先于配置当前默认模型
+      const runtimeProvider = task.providerProfileModel?.trim()
+        ? { ...provider, model: task.providerProfileModel.trim() }
+        : provider
+
       const images = await executeImageTask(
         this.db,
         {
           prompt: task.prompt,
           params,
-          provider,
+          provider: runtimeProvider,
           inputImages: inputImages.map((image) => ({
             filePath: path.join(this.config.mediaDir, image.filePath),
             mimeType: image.mimeType,
@@ -321,7 +327,7 @@ export class TaskWorker {
         status: 'failed',
         step: 'failed',
         percent: 60,
-        message: error instanceof Error ? error.message : String(error),
+        message: normalizeProviderErrorMessage(error),
       })
     }
   }
@@ -459,7 +465,7 @@ export class TaskWorker {
         status: 'failed',
         step: 'failed',
         percent: 60,
-        message: error instanceof Error ? error.message : String(error),
+        message: normalizeProviderErrorMessage(error),
       })
     }
   }

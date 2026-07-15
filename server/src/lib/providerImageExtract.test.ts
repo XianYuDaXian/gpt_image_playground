@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   extractImagesFromProviderResponse,
   isImagesOnlyModel,
+  normalizeProviderErrorMessage,
   summarizeResponseForError,
 } from './providerImageExtract.js'
 
@@ -62,5 +63,18 @@ describe('providerImageExtract', () => {
       status: 'completed',
       output: [{ type: 'message' }],
     })).toContain('output_types=message')
+  })
+})
+
+
+describe('normalizeProviderErrorMessage', () => {
+  it('把 null/字面量 null 转成可读失败文案', () => {
+    expect(normalizeProviderErrorMessage(null)).toBe('生成失败，请联系管理员')
+    expect(normalizeProviderErrorMessage(new Error('null'))).toBe('生成失败，请联系管理员')
+    expect(normalizeProviderErrorMessage({ message: null })).toBe('生成失败，请联系管理员')
+  })
+
+  it('保留真实错误文案', () => {
+    expect(normalizeProviderErrorMessage(new Error('接口未返回图片数据'))).toBe('接口未返回图片数据')
   })
 })

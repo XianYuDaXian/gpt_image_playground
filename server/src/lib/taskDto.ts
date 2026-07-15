@@ -132,9 +132,15 @@ function buildImageBytesMap(images: TaskImageRecord[]) {
 }
 
 function getTaskErrorForViewer(task: TaskRecord, exposeDetailedError?: boolean) {
-  if (!task.errorMessage) return null
-  if (exposeDetailedError) return task.errorMessage
-  const httpMatch = task.errorMessage.match(/\bHTTP\s+(\d{3})\b/i)
+  const raw = String(task.errorMessage ?? '').trim()
+  // 历史任务可能把 JS null 写成字面量 "null"
+  if (!raw || /^(null|undefined)$/i.test(raw)) {
+    return task.status === 'failed' || task.status === 'canceled'
+      ? '生成失败，请联系管理员'
+      : null
+  }
+  if (exposeDetailedError) return raw
+  const httpMatch = raw.match(/\bHTTP\s+(\d{3})\b/i)
   if (httpMatch?.[1]) {
     return `HTTP ${httpMatch[1]}`
   }
