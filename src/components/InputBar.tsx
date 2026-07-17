@@ -1607,7 +1607,7 @@ export default function InputBar() {
     // 超过当前端点上限的后几张参考图置灰，提示用户删除后再提交
     const isOverflowThumb = originalIndex >= veniceImageLimit
     const deleteButtonClass = isMobile
-      ? (selected || isOverflowThumb)
+      ? selected
         ? 'h-9 w-9 opacity-100'
         : 'h-9 w-9 pointer-events-none opacity-0'
       : 'h-[22px] w-[22px] opacity-0 group-hover:opacity-100'
@@ -1643,9 +1643,9 @@ export default function InputBar() {
                 : 'border-gray-200 dark:border-white/[0.08]'
           } ${isDropTarget ? 'ring-2 ring-blue-400/55 border-blue-400' : ''}`}
           onClick={() => {
+            // 超额图与正常图一致：点击选中后才出现删除按钮
             if (isOverflowThumb) {
               showImageHint(img.id)
-              return
             }
             handleInputImageClick(img.id)
           }}
