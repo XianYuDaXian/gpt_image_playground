@@ -33,6 +33,13 @@ import { formatInputImageCompressionMessage, prepareInputImageDataUrl } from './
 import { normalizeImageSize } from './lib/size'
 import { clearAnnouncementLocalState } from './lib/announcement'
 import { matchesTaskFilters, type SearchTagMode } from './lib/taskSearch'
+import {
+  buildTaskListRequestKey,
+  canApplyTaskListResult,
+  clampTaskPage,
+  isSameTaskListRequestKey,
+  type TaskListRequestKey,
+} from './lib/taskListRequest'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -51,6 +58,12 @@ let taskRefreshLifecycleInitialized = false
 let thumbnailBackfillScheduled = false
 let taskRefreshTimer: number | null = null
 let authRefreshTimer: number | null = null
+// 任务列表请求世代号，避免乱序响应覆盖新结果
+let taskListRequestSeq = 0
+let taskListInFlightSeq: number | null = null
+let taskListLastAppliedSeq = 0
+let taskListLastSuccessAt: number | null = null
+let taskListLastRequestKey: TaskListRequestKey | null = null
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 
@@ -360,6 +373,8 @@ interface AppState {
   setTaskPageSize: (pageSize: number) => void
   taskTotal: number
   setTaskPaginationMeta: (input: { page?: number; pageSize?: number; total?: number }) => void
+  isRefreshingTasks: boolean
+  setIsRefreshingTasks: (value: boolean) => void
 
   // 搜索和筛选
   searchQuery: string
@@ -638,6 +653,8 @@ export const useStore = create<AppState>()(
         taskPageSize: pageSize == null ? state.taskPageSize : Math.max(1, Math.floor(pageSize) || 50),
         taskTotal: total == null ? state.taskTotal : Math.max(0, Math.floor(total) || 0),
       })),
+      isRefreshingTasks: false,
+      setIsRefreshingTasks: (isRefreshingTasks) => set({ isRefreshingTasks }),
 
       // Search & Filter
       searchQuery: '',
@@ -1574,9 +1591,7 @@ function upsertTaskFromServer(task: TaskRecord) {
 
 function scheduleTaskRefresh(delay = 400) {
   if (typeof window === 'undefined') return
-  if (taskRefreshTimer != null) {
-    window.clearTimeout(taskRefreshTimer)
-  }
+  if (taskRefreshTimer != null) window.clearTimeout(taskRefreshTimer)
   taskRefreshTimer = window.setTimeout(() => {
     taskRefreshTimer = null
     void refreshTasksFromServer({ silent: true })
@@ -1627,33 +1642,101 @@ function removeTaskFromStore(taskId: string) {
   }
 }
 
-export async function refreshTasksFromServer(options: { silent?: boolean } = {}) {
+export async function refreshTasksFromServer(options: {
+  silent?: boolean
+  force?: boolean
+} = {}) {
+  const state = useStore.getState()
+  const requestKey = buildTaskListRequestKey({
+    page: state.taskPage,
+    pageSize: state.taskPageSize,
+    searchTags: state.searchTags,
+    searchTagMode: state.searchTagMode,
+    status: state.filterStatus,
+    taskType: state.filterTaskType,
+    favorite: state.filterFavorite,
+    archived: state.filterArchived,
+    showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+  })
+
+  // 相同筛选条件且已有进行中请求时，默认直接复用
+  if (
+    !options.force
+    && taskListInFlightSeq != null
+    && taskListLastRequestKey
+    && isSameTaskListRequestKey(taskListLastRequestKey, requestKey)
+  ) {
+    return
+  }
+
+  const responseSeq = ++taskListRequestSeq
+  taskListInFlightSeq = responseSeq
+  taskListLastRequestKey = requestKey
+  state.setIsRefreshingTasks(true)
+
   try {
-    const state = useStore.getState()
     const taskPageResult = await fetchBackendTaskPage({
-      page: state.taskPage,
-      pageSize: state.taskPageSize,
-      searchTags: state.searchTags,
-      searchTagMode: state.searchTagMode,
-      status: state.filterStatus,
-      taskType: state.filterTaskType,
-      favorite: state.filterFavorite,
-      archived: state.filterArchived,
-      showUsageCodeTasksForAdmin: state.showUsageCodeTasksForAdmin,
+      page: requestKey.page,
+      pageSize: requestKey.pageSize,
+      searchTags: requestKey.searchTags,
+      searchTagMode: requestKey.searchTagMode,
+      status: requestKey.status,
+      taskType: requestKey.taskType,
+      favorite: requestKey.favorite,
+      archived: requestKey.archived,
+      showUsageCodeTasksForAdmin: requestKey.showUsageCodeTasksForAdmin,
     })
+
+    const latest = useStore.getState()
+    const currentKey = buildTaskListRequestKey({
+      page: latest.taskPage,
+      pageSize: latest.taskPageSize,
+      searchTags: latest.searchTags,
+      searchTagMode: latest.searchTagMode,
+      status: latest.filterStatus,
+      taskType: latest.filterTaskType,
+      favorite: latest.filterFavorite,
+      archived: latest.filterArchived,
+      showUsageCodeTasksForAdmin: latest.showUsageCodeTasksForAdmin,
+    })
+
+    if (!canApplyTaskListResult({
+      responseSeq,
+      lastAppliedSeq: taskListLastAppliedSeq,
+      inFlightSeq: taskListInFlightSeq,
+      requestKey,
+      currentKey,
+    })) {
+      return
+    }
+
     const mergedTasks = mergeLocalTaskFlags(taskPageResult.items)
-    state.setTaskPaginationMeta({
-      page: taskPageResult.page,
-      pageSize: taskPageResult.pageSize,
+    // 页码只按当前 state 做边界收敛，禁止用服务端 page 回写
+    const nextPage = clampTaskPage({
+      page: latest.taskPage,
+      total: taskPageResult.total,
+      pageSize: latest.taskPageSize,
+    })
+
+    latest.setTaskPaginationMeta({
+      page: nextPage,
+      pageSize: latest.taskPageSize,
       total: taskPageResult.total,
     })
     useStore.getState().setTasks(sortTasksForDisplay(mergedTasks))
+    taskListLastAppliedSeq = responseSeq
+    taskListLastSuccessAt = Date.now()
   } catch (err) {
     if (!options.silent) {
       useStore.getState().showToast(
         `刷新后端任务失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
+    }
+  } finally {
+    if (taskListInFlightSeq === responseSeq) {
+      taskListInFlightSeq = null
+      useStore.getState().setIsRefreshingTasks(false)
     }
   }
 }
@@ -1740,12 +1823,13 @@ function setupTaskRefreshLifecycle() {
   taskRefreshLifecycleInitialized = true
 
   const handleResume = () => {
+    if (taskListLastSuccessAt && Date.now() - taskListLastSuccessAt < 1500) return
     void refreshTasksFromServer({ silent: true })
   }
 
   const handleVisibilityChange = () => {
     if (document.visibilityState === 'visible') {
-      void refreshTasksFromServer({ silent: true })
+      handleResume()
     }
   }
 
