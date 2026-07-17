@@ -88,6 +88,7 @@ export default function TaskGrid() {
   const taskPageSize = useStore((s) => s.taskPageSize)
   const setTaskPageSize = useStore((s) => s.setTaskPageSize)
   const taskTotal = useStore((s) => s.taskTotal)
+  const isRefreshingTasks = useStore((s) => s.isRefreshingTasks)
   const hasOverlayOpen = useStore((s) =>
     Boolean(s.detailTaskId || s.lightboxImageId || s.maskEditorImageId || s.showSettings || s.confirmDialog),
   )
@@ -123,10 +124,12 @@ export default function TaskGrid() {
   }, [searchTags, searchTagMode, filterStatus, filterTaskType, filterFavorite, filterArchived, showUsageCodeTasksForAdmin, setTaskPage])
 
   useEffect(() => {
+    // 只在非刷新中、且当前 total 已对应当前筛选时，才做最终 clamp
+    if (isRefreshingTasks) return
     if (taskPage > totalPages) {
       setTaskPage(totalPages)
     }
-  }, [taskPage, totalPages, setTaskPage])
+  }, [isRefreshingTasks, taskPage, totalPages, setTaskPage])
 
   useEffect(() => {
     const applyLayout = () => {
@@ -303,6 +306,9 @@ export default function TaskGrid() {
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="text-xs text-gray-500 dark:text-gray-400">
             共 {taskTotal} 条，每页 {taskPageSize} 条，第 {safeCurrentPage} / {totalPages} 页
+            {isRefreshingTasks && (
+              <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">刷新中</span>
+            )}
           </div>
           <div
             className={
