@@ -796,6 +796,8 @@ export default function InputBar() {
 
   const applyProviderOption = useCallback((option: BackendProviderOption | null) => {
     if (!option) return
+    const previousProviderId = useStore.getState().settings.providerProfileId
+    const providerChanged = previousProviderId !== option.id
     useStore.getState().setSettings({
       providerProfileId: option.id,
       apiMode: option.apiMode,
@@ -810,6 +812,19 @@ export default function InputBar() {
       videoMaxDuration: option.videoMaxDuration ?? 6,
       videoDurationOptions: normalizeVideoDurationOptions(option.videoDurationOptions ?? [option.videoMaxDuration ?? 6]),
     })
+    // 仅在端点真正切换时，提示超出新端点参考图上限的图片
+    if (providerChanged) {
+      const nextLimit = getVeniceImageLimit(option)
+      const currentImages = useStore.getState().inputImages
+      if (currentImages.length > nextLimit) {
+        const overflowCount = currentImages.length - nextLimit
+        const label = option.name?.trim() || getProviderLabel(option.apiMode)
+        useStore.getState().showToast(
+          `${label} 最多支持 ${nextLimit} 张参考图，已有 ${overflowCount} 张超出并置灰，请删除后再提交`,
+          'error',
+        )
+      }
+    }
   }, [])
 
   const submitWithUsageCode = useCallback(async (usageCodeId?: string | null) => {
@@ -934,6 +949,7 @@ export default function InputBar() {
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const veniceImageLimit = getVeniceImageLimit(activeProviderOption)
   const atEffectiveImageLimit = inputImages.length >= veniceImageLimit
+  const overflowInputImageCount = Math.max(0, inputImages.length - veniceImageLimit)
 
   useEffect(() => {
     if (atImageMenuIndex < atImageOptions.length) return
@@ -1566,6 +1582,8 @@ export default function InputBar() {
     const selected = selectedInputImageId === img.id
     const isDropTarget = dragInputImageIndex != null && dragOverInputImageIndex === originalIndex
     const isDraggingThumb = dragInputImageIndex === originalIndex
+    // 超过当前端点上限的后几张参考图置灰，提示用户删除后再提交
+    const isOverflowThumb = originalIndex >= veniceImageLimit
     const deleteButtonClass = isMobile
       ? selected
         ? 'h-9 w-9 opacity-100'
@@ -1586,6 +1604,10 @@ export default function InputBar() {
         onDragEnd={handleInputImageDragEnd}
       >
         <ButtonTooltip visible={imageHintId === img.id && isMaskTarget} text="遮罩图必须为第一张" />
+        <ButtonTooltip
+          visible={imageHintId === img.id && isOverflowThumb}
+          text={`当前端点最多 ${veniceImageLimit} 张，该图超出上限`}
+        />
         <button
           type="button"
           className={`relative block h-[52px] w-[52px] overflow-hidden rounded-xl border p-0 shadow-sm transition-all ${
@@ -1595,13 +1617,19 @@ export default function InputBar() {
                 ? 'border-blue-500 border-2'
                 : 'border-gray-200 dark:border-white/[0.08]'
           } ${isDropTarget ? 'ring-2 ring-blue-400/55 border-blue-400' : ''}`}
-          onClick={() => handleInputImageClick(img.id)}
+          onClick={() => {
+            if (isOverflowThumb) {
+              showImageHint(img.id)
+              return
+            }
+            handleInputImageClick(img.id)
+          }}
           aria-pressed={selected}
           aria-label={selected ? '取消选择参考图' : '选择参考图'}
         >
           <img
             src={displaySrc}
-            className="w-full h-full object-cover hover:opacity-90 transition-opacity"
+            className={`w-full h-full object-cover transition-opacity ${isOverflowThumb ? 'opacity-35 grayscale' : 'hover:opacity-90'}`}
             draggable={false}
             alt=""
           />
@@ -1611,6 +1639,11 @@ export default function InputBar() {
           {isMaskTarget && (
             <span className="absolute left-1 top-1 rounded bg-blue-500/90 px-1.5 py-0.5 text-[8px] leading-none text-white font-bold tracking-wider backdrop-blur-sm z-10 pointer-events-none">
               MASK
+            </span>
+          )}
+          {isOverflowThumb && (
+            <span className="absolute inset-x-0 top-0 z-10 bg-black/55 px-1 py-0.5 text-center text-[8px] leading-none text-white pointer-events-none">
+              超出
             </span>
           )}
           {isMobile ? (
@@ -1625,6 +1658,10 @@ export default function InputBar() {
               }}
               onClick={(e) => {
                 e.stopPropagation()
+                if (isOverflowThumb) {
+                  showImageHint(img.id)
+                  return
+                }
                 openReferenceImageEditor(img.id)
               }}
               title={isMaskTarget ? '编辑遮罩' : referenceEditTitle}
@@ -1639,6 +1676,10 @@ export default function InputBar() {
               className="absolute inset-0 z-20 flex h-full w-full items-center justify-center border-none bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 cursor-pointer focus:outline-none"
               onClick={(e) => {
                 e.stopPropagation()
+                if (isOverflowThumb) {
+                  showImageHint(img.id)
+                  return
+                }
                 openReferenceImageEditor(img.id)
               }}
               title={isMaskTarget ? '编辑遮罩' : referenceEditTitle}
