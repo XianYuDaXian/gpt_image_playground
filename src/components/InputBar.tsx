@@ -949,7 +949,6 @@ export default function InputBar() {
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
   const veniceImageLimit = getVeniceImageLimit(activeProviderOption)
   const atEffectiveImageLimit = inputImages.length >= veniceImageLimit
-  const overflowInputImageCount = Math.max(0, inputImages.length - veniceImageLimit)
 
   useEffect(() => {
     if (atImageMenuIndex < atImageOptions.length) return
