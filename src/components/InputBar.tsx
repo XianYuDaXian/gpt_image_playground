@@ -31,6 +31,7 @@ import Select from './Select'
 import ProviderProfileTag from './ProviderProfileTag'
 import SizePickerModal from './SizePickerModal'
 import VideoAspectModal from './VideoAspectModal'
+import { resolveEffectiveMaxReferenceImages } from '../lib/maxReferenceImages'
 
 /** 通用悬浮气泡提示 */
 function ButtonTooltip({ visible, text }: { visible: boolean; text: string }) {
@@ -359,23 +360,21 @@ function supportsMaskEditing(option: BackendProviderOption | null | undefined) {
 function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
   if (!option || !isMultiModelImageMode(option.apiMode)) return null
   const label = getProviderLabel(option.apiMode)
+  const limit = resolveEffectiveMaxReferenceImages(option)
   if (imageCount <= 0) {
     return option.veniceGenerateEnabled === false ? `当前 ${label} 配置已禁用文生图` : null
   }
   if (imageCount === 1) {
     return option.veniceEditEnabled === false ? `当前 ${label} 配置已禁用单图编辑` : null
   }
-  if (imageCount <= 3) {
+  if (imageCount <= limit) {
     return option.veniceMultiEditEnabled === false ? `当前 ${label} 配置已禁用多图编辑` : null
   }
-  return `当前 ${label} 最多支持 3 张参考图`
+  return `当前 ${label} 最多支持 ${limit} 张参考图`
 }
 
 function getVeniceImageLimit(option: BackendProviderOption | null) {
-  if (!option || !isMultiModelImageMode(option.apiMode)) return API_MAX_IMAGES
-  if (option.veniceEditEnabled === false && option.veniceMultiEditEnabled === false) return 0
-  if (option.veniceMultiEditEnabled === false) return 1
-  return 3
+  return resolveEffectiveMaxReferenceImages(option)
 }
 
 function useIsMobile() {
@@ -933,7 +932,7 @@ export default function InputBar() {
   const qualityHint = useHintTooltip({ enabled: () => settings.codexCli })
   const sizeHint = useHintTooltip()
   const nLimitHint = useHintTooltip({ autoHideMs: 2000 })
-  const veniceImageLimit = taskMode === 'image' ? getVeniceImageLimit(activeProviderOption) : API_MAX_IMAGES
+  const veniceImageLimit = getVeniceImageLimit(activeProviderOption)
   const atEffectiveImageLimit = inputImages.length >= veniceImageLimit
 
   useEffect(() => {
@@ -1129,7 +1128,7 @@ export default function InputBar() {
     try {
       const currentCount = useStore.getState().inputImages.length
       const currentProvider = activeProviderOption
-      const maxImages = taskMode === 'image' ? getVeniceImageLimit(currentProvider) : API_MAX_IMAGES
+      const maxImages = getVeniceImageLimit(currentProvider)
       if (currentCount >= maxImages) {
         useStore.getState().showToast(
           `参考图数量已达上限（${maxImages} 张），无法继续添加`,

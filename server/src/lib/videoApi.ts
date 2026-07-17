@@ -4,6 +4,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import type { ProviderProfileRecord } from './db.js'
+import { resolveEffectiveMaxReferenceImages } from './maxReferenceImages.js'
 
 export interface VideoTaskParams {
   aspect_ratio?: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
@@ -78,6 +79,10 @@ async function fileToDataUrl(filePath: string, mimeType: string) {
 }
 
 export async function submitVideoGeneration(payload: VideoGenerationPayload, apiKey: string) {
+  const maxImages = resolveEffectiveMaxReferenceImages(payload.provider)
+  if (payload.inputImages.length > maxImages) {
+    throw new Error(`当前配置最多支持 ${maxImages} 张参考图`)
+  }
   const inputImageDataUrls = await Promise.all(
     payload.inputImages.map((image) => fileToDataUrl(image.filePath, image.mimeType)),
   )

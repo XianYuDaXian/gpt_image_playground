@@ -5,6 +5,7 @@ import type { ProviderProfileRecord } from './db.js'
 import type { GeneratedImageResult, TaskExecutionPayload, ExecuteImageTaskOptions } from './imageApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
 import { resolveAdminGatedResolution } from './specialProviderQuality.js'
+import { resolveEffectiveMaxReferenceImages } from './maxReferenceImages.js'
 
 type AspectRatio =
   | '1:1'
@@ -404,8 +405,9 @@ async function runSingleWaveSpeed(
   }
 
   const imageCount = payload.inputImages.length
-  if (imageCount > 3) {
-    throw new Error('当前 WaveSpeed 配置最多支持 3 张参考图')
+  const maxImages = resolveEffectiveMaxReferenceImages(payload.provider)
+  if (imageCount > maxImages) {
+    throw new Error(`当前 WaveSpeed 配置最多支持 ${maxImages} 张参考图`)
   }
   const kind: 'generate' | 'edit' | 'multi-edit' = imageCount <= 0
     ? 'generate'

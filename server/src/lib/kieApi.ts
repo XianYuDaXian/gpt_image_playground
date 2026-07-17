@@ -5,6 +5,7 @@ import type { ProviderProfileRecord } from './db.js'
 import type { GeneratedImageResult, TaskExecutionPayload, ExecuteImageTaskOptions } from './imageApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
 import { resolveAdminGatedKieQuality } from './specialProviderQuality.js'
+import { resolveEffectiveMaxReferenceImages } from './maxReferenceImages.js'
 
 type AspectRatio = '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '2:3' | '3:2'
 type KieTaskKind = 'generate' | 'edit' | 'multi-edit'
@@ -351,8 +352,9 @@ async function runSingleKie(
   }
 
   const imageCount = payload.inputImages.length
-  if (imageCount > 3) {
-    throw new Error('当前 Kie 配置最多支持 3 张参考图')
+  const maxImages = resolveEffectiveMaxReferenceImages(payload.provider)
+  if (imageCount > maxImages) {
+    throw new Error(`当前 Kie 配置最多支持 ${maxImages} 张参考图`)
   }
 
   const kind = resolveTaskKind(imageCount)

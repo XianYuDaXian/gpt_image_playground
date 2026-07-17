@@ -84,6 +84,7 @@ export interface BackendProviderProfile {
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
   videoDurationOptions?: VideoDurationOption[]
+  maxReferenceImages?: number
   isDefault: boolean
   createdAt?: string
   updatedAt?: string
@@ -119,6 +120,7 @@ export interface BackendProviderOption {
   videoResolutionOptions?: VideoResolutionOption[]
   videoMaxDuration?: VideoDurationOption
   videoDurationOptions?: VideoDurationOption[]
+  maxReferenceImages?: number
   isDefault: boolean
 }
 

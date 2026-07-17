@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import type { TaskEventRecord } from './eventBus.js'
+import { normalizeMaxReferenceImages } from './maxReferenceImages.js'
 
 export interface ProviderProfileRecord {
   id: string
@@ -33,6 +34,7 @@ export interface ProviderProfileRecord {
   videoResolutionOptions?: Array<'480p' | '720p'>
   videoMaxDuration: 6 | 10 | 15
   videoDurationOptions?: Array<6 | 10 | 15>
+  maxReferenceImages: number
   isDefault: number
   createdAt: string
   updatedAt: string
@@ -543,6 +545,7 @@ export class AppDatabase {
         video_resolution_options_json TEXT,
         video_max_duration INTEGER NOT NULL DEFAULT 6,
         video_duration_options_json TEXT,
+        max_reference_images INTEGER NOT NULL DEFAULT 16,
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -802,6 +805,17 @@ export class AppDatabase {
         WHERE COALESCE(model, '') <> ''
       `)
     }
+    if (!profileColumnNames.has('max_reference_images')) {
+      this.sqlite.exec('ALTER TABLE provider_profiles ADD COLUMN max_reference_images INTEGER NOT NULL DEFAULT 16')
+      // 特殊端点旧配置默认按 3 张补齐，普通端点保持 16，兼容现网行为
+      this.sqlite.exec(`
+        UPDATE provider_profiles
+        SET max_reference_images = CASE
+          WHEN api_mode IN ('venice_images', 'wavespeed', 'kie') THEN 3
+          ELSE 16
+        END
+      `)
+    }
     this.assignMissingProviderTagColors()
     const usageCodeColumns = this.sqlite.prepare('PRAGMA table_info(usage_codes)').all() as Array<{ name: string }>
     const usageCodeColumnNames = new Set(usageCodeColumns.map((column) => column.name))
@@ -1022,6 +1036,7 @@ export class AppDatabase {
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           video_duration_options_json as videoDurationOptionsJson,
+          max_reference_images as maxReferenceImages,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -1072,6 +1087,7 @@ export class AppDatabase {
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           video_duration_options_json as videoDurationOptionsJson,
+          max_reference_images as maxReferenceImages,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -1120,6 +1136,7 @@ export class AppDatabase {
           video_resolution_options_json as videoResolutionOptionsJson,
           CASE WHEN video_max_duration >= 15 THEN 15 WHEN video_max_duration >= 10 THEN 10 ELSE 6 END as videoMaxDuration,
           video_duration_options_json as videoDurationOptionsJson,
+          max_reference_images as maxReferenceImages,
           is_default as isDefault,
           created_at as createdAt,
           updated_at as updatedAt
@@ -1166,6 +1183,7 @@ export class AppDatabase {
     videoResolutionOptions?: Array<'480p' | '720p'>
     videoMaxDuration?: 6 | 10 | 15
     videoDurationOptions?: Array<6 | 10 | 15>
+    maxReferenceImages?: number
     isDefault: boolean
   }) {
     const now = new Date().toISOString()
@@ -1208,6 +1226,7 @@ export class AppDatabase {
           video_resolution_options_json,
           video_max_duration,
           video_duration_options_json,
+          max_reference_images,
           is_default,
           created_at,
           updated_at
@@ -1241,6 +1260,7 @@ export class AppDatabase {
           @videoResolutionOptionsJson,
           @videoMaxDuration,
           @videoDurationOptionsJson,
+          @maxReferenceImages,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -1273,6 +1293,7 @@ export class AppDatabase {
           video_resolution_options_json = excluded.video_resolution_options_json,
           video_max_duration = excluded.video_max_duration,
           video_duration_options_json = excluded.video_duration_options_json,
+          max_reference_images = excluded.max_reference_images,
           is_default = excluded.is_default,
           updated_at = excluded.updated_at
       `).run({
@@ -1298,6 +1319,7 @@ export class AppDatabase {
         videoResolutionOptionsJson: JSON.stringify(videoResolutionOptions),
         videoMaxDuration,
         videoDurationOptionsJson: JSON.stringify(videoDurationOptions),
+        maxReferenceImages: normalizeMaxReferenceImages(input.apiMode, input.maxReferenceImages),
         isDefault: input.isDefault ? 1 : 0,
         createdAt: now,
         updatedAt: now,
@@ -3448,6 +3470,7 @@ ${selectUsageCodeFields()}
           video_resolution_options_json,
           video_max_duration,
           video_duration_options_json,
+          max_reference_images,
           is_default,
           created_at,
           updated_at
@@ -3481,6 +3504,7 @@ ${selectUsageCodeFields()}
           @videoResolutionOptionsJson,
           @videoMaxDuration,
           @videoDurationOptionsJson,
+          @maxReferenceImages,
           @isDefault,
           @createdAt,
           @updatedAt
@@ -3687,6 +3711,7 @@ ${selectUsageCodeFields()}
           modelOptionsJson: JSON.stringify(profile.modelOptions ?? [profile.model]),
           videoResolutionOptionsJson: JSON.stringify(normalizeVideoResolutionOptions(profile.videoResolutionOptions ?? [profile.videoMaxResolution])),
           videoDurationOptionsJson: JSON.stringify(normalizeVideoDurationOptions(profile.videoDurationOptions ?? [profile.videoMaxDuration])),
+          maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
         })
       }
       for (const setting of input.appSettings) {

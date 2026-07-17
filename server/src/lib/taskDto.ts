@@ -1,6 +1,7 @@
 import path from 'node:path'
 import type { AppDatabase, ProviderProfileRecord, TaskImageRecord, TaskRecord } from './db.js'
 import { decryptText } from './crypto.js'
+import { resolveEffectiveMaxReferenceImages } from './maxReferenceImages.js'
 
 function toUiStatus(status: string) {
   if (status === 'failed' || status === 'canceled') return 'error'
@@ -181,8 +182,27 @@ export function resolveProviderModelLabel(
   return multiEditModel ?? null
 }
 
+export function getProviderLabel(apiMode: ProviderProfileRecord['apiMode'] | null | undefined) {
+  if (apiMode === 'wavespeed') return 'WaveSpeed'
+  if (apiMode === 'kie') return 'Kie'
+  if (apiMode === 'venice_images') return 'Venice'
+  if (apiMode === 'videos') return 'Videos'
+  if (apiMode === 'responses') return 'Responses'
+  return 'Images'
+}
+
+export function getReferenceImageLimitError(
+  providerProfile: Pick<ProviderProfileRecord, 'apiMode' | 'veniceEditEnabled' | 'veniceMultiEditEnabled' | 'maxReferenceImages' | 'name'>,
+  inputImageCount: number,
+) {
+  const limit = resolveEffectiveMaxReferenceImages(providerProfile)
+  if (inputImageCount <= limit) return null
+  const label = providerProfile.name?.trim() || getProviderLabel(providerProfile.apiMode)
+  return `当前 ${label} 最多支持 ${limit} 张参考图`
+}
+
 export function getMultiModelImageCapabilityError(
-  providerProfile: Pick<ProviderProfileRecord, 'apiMode' | 'veniceGenerateEnabled' | 'veniceEditEnabled' | 'veniceMultiEditEnabled' | 'name'>,
+  providerProfile: Pick<ProviderProfileRecord, 'apiMode' | 'veniceGenerateEnabled' | 'veniceEditEnabled' | 'veniceMultiEditEnabled' | 'maxReferenceImages' | 'name'>,
   inputImageCount: number,
 ) {
   if (
@@ -190,14 +210,11 @@ export function getMultiModelImageCapabilityError(
     && providerProfile.apiMode !== 'wavespeed'
     && providerProfile.apiMode !== 'kie'
   ) {
-    return null
+    return getReferenceImageLimitError(providerProfile, inputImageCount)
   }
 
-  const label = providerProfile.apiMode === 'wavespeed'
-    ? 'WaveSpeed'
-    : providerProfile.apiMode === 'kie'
-      ? 'Kie'
-      : 'Venice'
+  const label = getProviderLabel(providerProfile.apiMode)
+  const limit = resolveEffectiveMaxReferenceImages(providerProfile)
 
   if (inputImageCount <= 0) {
     return providerProfile.veniceGenerateEnabled === 0 ? `当前 ${label} 配置已禁用文生图` : null
@@ -205,10 +222,10 @@ export function getMultiModelImageCapabilityError(
   if (inputImageCount === 1) {
     return providerProfile.veniceEditEnabled === 0 ? `当前 ${label} 配置已禁用单图编辑` : null
   }
-  if (inputImageCount <= 3) {
+  if (inputImageCount <= limit) {
     return providerProfile.veniceMultiEditEnabled === 0 ? `当前 ${label} 配置已禁用多图编辑` : null
   }
-  return `当前 ${label} 最多支持 3 张参考图`
+  return `当前 ${label} 最多支持 ${limit} 张参考图`
 }
 
 function resolveDisplayedProviderModel(

@@ -18,6 +18,7 @@ import {
   requireAuth,
   setSessionCookie,
 } from '../lib/auth.js'
+import { normalizeMaxReferenceImages } from '../lib/maxReferenceImages.js'
 import { decryptText, encryptText, maskSecret } from '../lib/crypto.js'
 import {
   appendManagementOperationLog,
@@ -133,6 +134,7 @@ const providerProfileSchema = z.object({
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema.default(6),
   videoDurationOptions: videoDurationOptionsSchema.default([6]),
+  maxReferenceImages: z.coerce.number().int().min(1).max(16).optional(),
   isDefault: z.boolean().default(false),
 }).refine((value) => !(value.codexCli && value.grokApiCompat), {
   message: 'Codex CLI 模式与 Grok API 兼容不能同时启用',
@@ -163,6 +165,7 @@ const runtimeSettingsSchemaBase = z.object({
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema.default(6),
   videoDurationOptions: videoDurationOptionsSchema.default([6]),
+  maxReferenceImages: z.coerce.number().int().min(1).max(16).optional(),
   clearInputAfterSubmit: z.boolean().default(false),
   persistInputOnRestart: z.boolean().default(true),
   reuseTaskApiProfileTemporarily: z.boolean().default(false),
@@ -268,6 +271,7 @@ const fullBackupProviderProfileSchema = z.object({
   videoResolutionOptions: videoResolutionOptionsSchema.default(['480p']),
   videoMaxDuration: videoDurationOptionSchema,
   videoDurationOptions: videoDurationOptionsSchema.default([6]),
+  maxReferenceImages: z.coerce.number().int().min(1).max(16).optional(),
   isDefault: z.boolean(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -1062,6 +1066,7 @@ function serializeProfile(app: Parameters<FastifyPluginAsync>[0], profile: Provi
     videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
     videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
+    maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -1100,6 +1105,7 @@ function serializeProviderOption(profile: ProviderProfileRecord) {
     videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
     videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
+    maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
     isDefault: Boolean(profile.isDefault),
   }
 }
@@ -1658,6 +1664,17 @@ function buildFullBackupManifest(app: Parameters<FastifyPluginAsync>[0]) {
     videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
     videoMaxDuration: profile.videoMaxDuration,
     videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
+    maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
+    veniceGenerateEnabled: Boolean(profile.veniceGenerateEnabled),
+    veniceEditEnabled: Boolean(profile.veniceEditEnabled),
+    veniceMultiEditEnabled: Boolean(profile.veniceMultiEditEnabled),
+    veniceSkipResolution: Boolean(profile.veniceSkipResolution),
+    nsfwChecker: profile.nsfwChecker !== 0,
+    enableSyncMode: Boolean(profile.enableSyncMode),
+    enableBase64Output: Boolean(profile.enableBase64Output),
+    proxyEnabled: Boolean(profile.proxyEnabled),
+    proxyUrl: profile.proxyUrl ?? '',
+    autoAspectFromReference: profile.autoAspectFromReference !== 0,
     isDefault: Boolean(profile.isDefault),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
@@ -2961,6 +2978,7 @@ function buildLegacyImportPayload(app: Parameters<FastifyPluginAsync>[0], payloa
     videoResolutionOptions: payload.runtimeSettings.videoResolutionOptions ?? [payload.runtimeSettings.videoMaxResolution],
     videoMaxDuration: payload.runtimeSettings.videoMaxDuration,
     videoDurationOptions: payload.runtimeSettings.videoDurationOptions ?? [payload.runtimeSettings.videoMaxDuration],
+    maxReferenceImages: normalizeMaxReferenceImages(payload.runtimeSettings.apiMode, payload.runtimeSettings.maxReferenceImages),
     isDefault: 1,
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -3131,6 +3149,7 @@ function buildParsedPayloadFromFullManifest(
       videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
       videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
       isDefault: profile.isDefault ? 1 : 0,
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
@@ -3667,6 +3686,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       videoResolutionOptions: profile.videoResolutionOptions ?? [profile.videoMaxResolution],
       videoMaxDuration: profile.videoMaxDuration,
       videoDurationOptions: profile.videoDurationOptions ?? [profile.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(profile.apiMode, profile.maxReferenceImages),
       clearInputAfterSubmit: preferences.clearInputAfterSubmit,
       persistInputOnRestart: preferences.persistInputOnRestart,
       reuseTaskApiProfileTemporarily: preferences.reuseTaskApiProfileTemporarily,
@@ -3706,6 +3726,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
       videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(payload.apiMode, payload.maxReferenceImages),
       isDefault: true,
     })
 
@@ -3860,6 +3881,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
       videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(payload.apiMode, payload.maxReferenceImages),
       isDefault: true,
     })
 
@@ -3905,6 +3927,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
       videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(payload.apiMode, payload.maxReferenceImages),
       isDefault: shouldSetDefault,
     })
     if (!profile) throw new Error('创建 API 配置失败')
@@ -3967,6 +3990,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       videoResolutionOptions: payload.videoResolutionOptions ?? [payload.videoMaxResolution],
       videoMaxDuration: payload.videoMaxDuration,
       videoDurationOptions: payload.videoDurationOptions ?? [payload.videoMaxDuration],
+      maxReferenceImages: normalizeMaxReferenceImages(payload.apiMode, payload.maxReferenceImages),
       isDefault: payload.isDefault,
     })
     if (!profile) throw new Error('保存 API 配置失败')

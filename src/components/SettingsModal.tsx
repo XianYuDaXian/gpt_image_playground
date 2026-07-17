@@ -41,6 +41,7 @@ import {
   type BackendAdminTaskCleanupCandidate,
 } from '../lib/backendSettings'
 import { isCompletedReminderUnread, markCompletedReminderSeen } from '../lib/announcement'
+import { defaultMaxReferenceImages, isMultiModelImageMode as isSpecialMultiModelMode, normalizeMaxReferenceImages } from '../lib/maxReferenceImages'
 import {
   fetchAdminBackupImportCandidates,
   deleteUsageCodeMediaExportFiles,
@@ -216,6 +217,7 @@ function createEmptyProfile(): BackendProviderProfile {
     videoResolutionOptions: ['480p'],
     videoMaxDuration: 6,
     videoDurationOptions: [6],
+    maxReferenceImages: 16,
     isDefault: false,
   }
 }
@@ -1874,6 +1876,7 @@ const hasUnreadEndedReminders = useMemo(
       videoDurationOptions: profileDraft.apiMode === 'videos' && profileDraft.grokApiCompat
         ? normalizeVideoDurationOptions(profileDraft.videoDurationOptions ?? [profileDraft.videoMaxDuration ?? 6])
         : [6],
+      maxReferenceImages: normalizeMaxReferenceImages(profileDraft.apiMode, profileDraft.maxReferenceImages),
       isDefault: Boolean(profileDraft.isDefault),
     }
 
@@ -3056,6 +3059,14 @@ const hasUnreadEndedReminders = useMemo(
                       veniceGenerateModel: generateModel,
                       veniceEditModel: editModel,
                       veniceMultiEditModel: multiEditModel,
+                      maxReferenceImages: (() => {
+                        const previousDefault = defaultMaxReferenceImages(profileDraft.apiMode)
+                        const current = profileDraft.maxReferenceImages
+                        if (current == null || current === previousDefault) {
+                          return defaultMaxReferenceImages(apiMode)
+                        }
+                        return normalizeMaxReferenceImages(apiMode, current)
+                      })(),
                     })
                   }}
                   options={[
@@ -3070,12 +3081,12 @@ const hasUnreadEndedReminders = useMemo(
                 />
                 {profileDraft.apiMode === 'venice_images' && (
                   <div className="mt-2 rounded-2xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-400/20 dark:bg-amber-500/10 dark:text-amber-200">
-                    此模式需要分别填写 Venice 文生图、单图编辑、多图编辑三个模型。系统会自动分发：不上传图片时走文生图，上传 1 张图时走单图编辑，上传 2 到 3 张图时走多图编辑。
+                    此模式需要分别填写 Venice 文生图、单图编辑、多图编辑三个模型。系统会自动分发：不上传图片时走文生图，上传 1 张图时走单图编辑，上传 2 到 N 张图时走多图编辑（N 为下方参考图上限）。
                   </div>
                 )}
                 {profileDraft.apiMode === 'wavespeed' && (
                   <div className="mt-2 rounded-2xl border border-sky-200/70 bg-sky-50/80 px-3 py-2 text-xs leading-5 text-sky-700 dark:border-sky-400/20 dark:bg-sky-500/10 dark:text-sky-200">
-                    Base URL 建议填写 https://api.wavespeed.ai/api/v3。请分别填写文生图、单图编辑、多图编辑模型。系统会自动分发：无图走文生图，1 张图走单图编辑，2 到 3 张图走多图编辑。编辑请求会先上传文件。
+                    Base URL 建议填写 https://api.wavespeed.ai/api/v3。请分别填写文生图、单图编辑、多图编辑模型。系统会自动分发：无图走文生图，1 张图走单图编辑，2 到 N 张图走多图编辑（N 为下方参考图上限）。编辑请求会先上传文件。
                   </div>
                 )}
                 {profileDraft.apiMode === 'kie' && (
@@ -3161,7 +3172,7 @@ const hasUnreadEndedReminders = useMemo(
                     <div className="mb-3 flex items-start justify-between gap-3">
                       <div>
                         <div className="text-sm font-medium text-gray-800 dark:text-gray-100">多图编辑模型</div>
-                        <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">上传 2 到 3 张参考图时使用。</div>
+                        <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">上传 2 到 {normalizeMaxReferenceImages(profileDraft.apiMode, profileDraft.maxReferenceImages)} 张参考图时使用。</div>
                       </div>
                       <Switch
                         checked={profileDraft.veniceMultiEditEnabled !== false}
@@ -3247,6 +3258,60 @@ const hasUnreadEndedReminders = useMemo(
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2 text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
                 />
               </label>
+
+              <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div className="mb-2">
+                  <div className="text-sm font-medium text-gray-800 dark:text-gray-100">参考图上限</div>
+                  <div className="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+                    {isSpecialMultiModelMode(profileDraft.apiMode)
+                      ? '多图编辑开启时生效。关闭多图后最多 1 张；单图和多图都关闭时不能上传参考图。'
+                      : '限制用户可上传的参考图张数。'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => updateProfileDraft({
+                      maxReferenceImages: Math.max(1, normalizeMaxReferenceImages(profileDraft.apiMode, profileDraft.maxReferenceImages) - 1),
+                    })}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200/70 bg-white/70 text-lg text-gray-700 transition hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    aria-label="减少参考图上限"
+                  >
+                    −
+                  </button>
+                  <input
+                    value={profileDraft.maxReferenceImages ?? ''}
+                    onChange={(event) => {
+                      const raw = event.target.value.trim()
+                      if (raw === '') {
+                        updateProfileDraft({ maxReferenceImages: undefined as unknown as number })
+                        return
+                      }
+                      const next = Number(raw)
+                      if (Number.isNaN(next)) return
+                      updateProfileDraft({ maxReferenceImages: next })
+                    }}
+                    onBlur={() => updateProfileDraft({
+                      maxReferenceImages: normalizeMaxReferenceImages(profileDraft.apiMode, profileDraft.maxReferenceImages),
+                    })}
+                    type="number"
+                    min={1}
+                    max={16}
+                    className="h-10 w-24 rounded-xl border border-gray-200/70 bg-white/60 px-3 text-center text-sm text-gray-700 outline-none dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => updateProfileDraft({
+                      maxReferenceImages: Math.min(16, normalizeMaxReferenceImages(profileDraft.apiMode, profileDraft.maxReferenceImages) + 1),
+                    })}
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200/70 bg-white/70 text-lg text-gray-700 transition hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200"
+                    aria-label="增加参考图上限"
+                  >
+                    +
+                  </button>
+                  <span className="text-xs text-gray-400 dark:text-gray-500">张（1-16）</span>
+                </div>
+              </div>
 
               <div className="rounded-2xl border border-gray-200/70 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <div className="mb-3 flex items-start justify-between gap-3">

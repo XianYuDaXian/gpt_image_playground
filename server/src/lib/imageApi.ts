@@ -8,6 +8,7 @@ import { executeKieImageTask } from './kieApi.js'
 import { fetchWithProviderProxy } from './upstreamFetch.js'
 import { resolveAdminGatedResolution } from './specialProviderQuality.js'
 import { isImagesOnlyModel, parseProviderImageJsonResponse } from './providerImageExtract.js'
+import { resolveEffectiveMaxReferenceImages } from './maxReferenceImages.js'
 
 const MIME_MAP: Record<string, string> = {
   png: 'image/png',
@@ -867,6 +868,10 @@ export async function executeImageTask(
   options: ExecuteImageTaskOptions = {},
 ) {
   void db
+  const maxImages = resolveEffectiveMaxReferenceImages(payload.provider)
+  if (payload.inputImages.length > maxImages) {
+    throw new Error(`当前配置最多支持 ${maxImages} 张参考图`)
+  }
   if (payload.provider.apiMode === 'responses') {
     return callResponsesApi(payload, apiKey, options)
   }
