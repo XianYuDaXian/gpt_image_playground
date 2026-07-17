@@ -353,6 +353,13 @@ function getProviderOptionDisplayName(option: BackendProviderOption | null | und
   }) || getProviderLabel(option.apiMode)
 }
 
+function getProviderOptionDisplayNameForRole(
+  option: BackendProviderOption | null | undefined,
+  role: string | null | undefined,
+) {
+  return getProviderOptionDisplayName(option, role === 'admin')
+}
+
 function isMultiModelImageMode(apiMode?: BackendProviderOption['apiMode'] | null) {
   return apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
 }
@@ -368,9 +375,13 @@ function supportsMaskEditing(option: BackendProviderOption | null | undefined) {
   return option.apiMode === 'images' || option.apiMode === 'responses'
 }
 
-function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
+function getVeniceImageCapability(
+  option: BackendProviderOption | null,
+  imageCount: number,
+  preferRemarkName = false,
+) {
   if (!option || !isMultiModelImageMode(option.apiMode)) return null
-  const label = getProviderOptionDisplayName(option)
+  const label = getProviderOptionDisplayName(option, preferRemarkName)
   const limit = resolveEffectiveMaxReferenceImages(option)
   if (imageCount <= 0) {
     return option.veniceGenerateEnabled === false ? `当前 ${label} 配置已禁用文生图` : null
@@ -642,7 +653,7 @@ export default function InputBar() {
       ?? null
   const activeProviderOption = modeProviderOptions.find((option) => option.id === activeProviderProfileId) ?? null
   const imageCapabilityError = taskMode === 'image'
-    ? getVeniceImageCapability(activeProviderOption, inputImages.length)
+    ? getVeniceImageCapability(activeProviderOption, inputImages.length, authStatus?.role === 'admin')
     : null
   const canSubmit = Boolean(
     prompt.trim()
@@ -829,7 +840,8 @@ export default function InputBar() {
       const currentImages = useStore.getState().inputImages
       if (currentImages.length > nextLimit) {
         const overflowCount = currentImages.length - nextLimit
-        const label = getProviderOptionDisplayName(option)
+        // 管理员优先显示备注名
+        const label = getProviderOptionDisplayNameForRole(option, useStore.getState().authStatus?.role)
         useStore.getState().showToast(
           `${label} 最多支持 ${nextLimit} 张参考图，已有 ${overflowCount} 张超出并置灰，请删除后再提交`,
           'error',
@@ -864,7 +876,7 @@ export default function InputBar() {
       return
     }
     if (taskMode === 'image') {
-      const capabilityError = getVeniceImageCapability(activeProviderOption, inputImages.length)
+      const capabilityError = getVeniceImageCapability(activeProviderOption, inputImages.length, authStatus?.role === 'admin')
       if (capabilityError) {
         useStore.getState().showToast(capabilityError, 'error')
         return
@@ -1595,13 +1607,16 @@ export default function InputBar() {
     // 超过当前端点上限的后几张参考图置灰，提示用户删除后再提交
     const isOverflowThumb = originalIndex >= veniceImageLimit
     const deleteButtonClass = isMobile
-      ? selected
+      ? (selected || isOverflowThumb)
         ? 'h-9 w-9 opacity-100'
         : 'h-9 w-9 pointer-events-none opacity-0'
       : 'h-[22px] w-[22px] opacity-0 group-hover:opacity-100'
-    const mobileEditButtonClass = selected
-      ? 'opacity-100 translate-y-0 pointer-events-auto'
-      : 'opacity-0 translate-y-1 pointer-events-none'
+    // 超额图不显示编辑入口，避免挡住删除
+    const mobileEditButtonClass = isOverflowThumb
+      ? 'opacity-0 translate-y-1 pointer-events-none'
+      : selected
+        ? 'opacity-100 translate-y-0 pointer-events-auto'
+        : 'opacity-0 translate-y-1 pointer-events-none'
 
     return (
       <div
@@ -1616,7 +1631,7 @@ export default function InputBar() {
         <ButtonTooltip visible={imageHintId === img.id && isMaskTarget} text="遮罩图必须为第一张" />
         <ButtonTooltip
           visible={imageHintId === img.id && isOverflowThumb}
-          text={`当前端点最多 ${veniceImageLimit} 张，该图超出上限`}
+          text={`${getProviderOptionDisplayNameForRole(activeProviderOption, authStatus?.role)} 最多 ${veniceImageLimit} 张，该图超出上限`}
         />
         <button
           type="button"
@@ -2407,7 +2422,7 @@ export default function InputBar() {
               data-placeholder={taskMode === 'video'
                 ? '描述你想生成的视频。可添加参考图。'
                 : (activeProviderOption?.apiMode === 'venice_images' || activeProviderOption?.apiMode === 'wavespeed' || activeProviderOption?.apiMode === 'kie') && activeProviderOption.veniceGenerateEnabled === false
-                  ? `当前 ${getProviderOptionDisplayName(activeProviderOption)} 已禁用文生图。请先添加参考图。`
+                  ? `当前 ${getProviderOptionDisplayNameForRole(activeProviderOption, authStatus?.role)} 已禁用文生图。请先添加参考图。`
                   : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
               className="w-full min-h-[42px] px-4 py-3 pr-11 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />
