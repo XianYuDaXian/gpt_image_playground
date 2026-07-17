@@ -29,6 +29,7 @@ import { useKeyboardVisible } from '../hooks/useKeyboardVisible'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import Select from './Select'
 import ProviderProfileTag from './ProviderProfileTag'
+import { getProviderProfileDisplayName } from './ProviderProfileTag'
 import SizePickerModal from './SizePickerModal'
 import VideoAspectModal from './VideoAspectModal'
 import { resolveEffectiveMaxReferenceImages } from '../lib/maxReferenceImages'
@@ -342,6 +343,16 @@ function getProviderLabel(apiMode: BackendProviderOption['apiMode']) {
   return '当前接口'
 }
 
+/** 优先显示端点名称/备注名，不显示协议类型 */
+function getProviderOptionDisplayName(option: BackendProviderOption | null | undefined, preferRemarkName = false) {
+  if (!option) return '当前端点'
+  return getProviderProfileDisplayName({
+    name: option.name,
+    remarkName: option.remarkName,
+    preferRemarkName,
+  }) || getProviderLabel(option.apiMode)
+}
+
 function isMultiModelImageMode(apiMode?: BackendProviderOption['apiMode'] | null) {
   return apiMode === 'venice_images' || apiMode === 'wavespeed' || apiMode === 'kie'
 }
@@ -359,7 +370,7 @@ function supportsMaskEditing(option: BackendProviderOption | null | undefined) {
 
 function getVeniceImageCapability(option: BackendProviderOption | null, imageCount: number) {
   if (!option || !isMultiModelImageMode(option.apiMode)) return null
-  const label = getProviderLabel(option.apiMode)
+  const label = getProviderOptionDisplayName(option)
   const limit = resolveEffectiveMaxReferenceImages(option)
   if (imageCount <= 0) {
     return option.veniceGenerateEnabled === false ? `当前 ${label} 配置已禁用文生图` : null
@@ -818,7 +829,7 @@ export default function InputBar() {
       const currentImages = useStore.getState().inputImages
       if (currentImages.length > nextLimit) {
         const overflowCount = currentImages.length - nextLimit
-        const label = option.name?.trim() || getProviderLabel(option.apiMode)
+        const label = getProviderOptionDisplayName(option)
         useStore.getState().showToast(
           `${label} 最多支持 ${nextLimit} 张参考图，已有 ${overflowCount} 张超出并置灰，请删除后再提交`,
           'error',
@@ -2396,7 +2407,7 @@ export default function InputBar() {
               data-placeholder={taskMode === 'video'
                 ? '描述你想生成的视频。可添加参考图。'
                 : (activeProviderOption?.apiMode === 'venice_images' || activeProviderOption?.apiMode === 'wavespeed' || activeProviderOption?.apiMode === 'kie') && activeProviderOption.veniceGenerateEnabled === false
-                  ? `当前 ${getProviderLabel(activeProviderOption.apiMode)} 已禁用文生图。请先添加参考图。`
+                  ? `当前 ${getProviderOptionDisplayName(activeProviderOption)} 已禁用文生图。请先添加参考图。`
                   : '描述你想生成的图片。输入 @ 可引用当前参考图。'}
               className="w-full min-h-[42px] px-4 py-3 pr-11 rounded-2xl border border-gray-200/60 dark:border-white/[0.08] bg-white/50 dark:bg-white/[0.03] text-sm focus:outline-none leading-relaxed shadow-sm transition-[border-color,box-shadow] duration-200 whitespace-pre-wrap break-words empty:before:pointer-events-none empty:before:text-gray-400 empty:before:content-[attr(data-placeholder)] dark:text-gray-100 dark:empty:before:text-gray-500"
             />
