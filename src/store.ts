@@ -1794,14 +1794,19 @@ function setupGlobalTaskListStream() {
     const previousTask = useStore.getState().tasks.find((item) => item.id === payload.task.id) ?? null
     upsertTaskFromServer(payload.task)
 
-    const shouldRefreshList =
-      !previousTask
-      || useStore.getState().taskPage !== 1
-      || previousTask.serverStatus !== payload.task.serverStatus
+    const state = useStore.getState()
+    const isOnFirstPage = state.taskPage === 1
+    const statusChanged = previousTask?.serverStatus !== payload.task.serverStatus
+    const becameTerminal = previousTask?.status === 'running' && payload.task.status !== 'running'
 
-    if (shouldRefreshList) {
-      scheduleTaskRefresh()
-    }
+    // 已在列表中的任务：优先局部 upsert
+    // 仅在“新任务进入第一页”或“可能改变当前页成员”时整页刷新
+    const shouldRefreshList =
+      (!previousTask && isOnFirstPage)
+      || statusChanged
+      || becameTerminal
+
+    if (shouldRefreshList) scheduleTaskRefresh()
 
     if (payload.task.status !== 'running') {
       scheduleAuthRefresh()
