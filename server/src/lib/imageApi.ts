@@ -50,6 +50,8 @@ export interface ExecuteImageTaskOptions {
     images: GeneratedImageResult[],
     state: { completed: number; total: number },
   ) => Promise<void> | void
+  /** 上游异步任务 ID（如 Kie taskId / WaveSpeed prediction id） */
+  onUpstreamRequestId?: (requestId: string) => void
 }
 
 function normalizeBase64Image(value: string) {

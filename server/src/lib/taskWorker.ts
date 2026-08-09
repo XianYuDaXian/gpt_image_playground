@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
 import { executeImageTask, writeOutputImage, writeOutputImageThumbnail, type GeneratedImageResult } from './imageApi.js'
+import { recoverKieTaskOutputs } from './kieApi.js'
 import { assertAllOutputImagesPersisted, createOutputImagePersistQueue } from './outputImagePersist.js'
 import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
@@ -169,10 +170,14 @@ export class TaskWorker {
       return
     }
 
+    let runtimeProvider = provider
+    let apiKey = ''
+    let outputDir = path.join(this.config.outputsDir, taskId)
+
     try {
       const inputImages = this.db.listTaskImages(taskId).filter((image) => image.kind === 'input')
       const maskImage = this.db.listTaskImages(taskId).find((image) => image.kind === 'mask') ?? null
-      const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
+      apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
 
       if (!this.emit(taskId, { status: 'submitted', step: 'submitted', percent: 35, message: '已提交到上游接口' })) return
       if (!this.emit(taskId, { status: 'processing', step: 'processing', percent: 60, message: '正在生成图片' })) return
@@ -186,7 +191,7 @@ export class TaskWorker {
         n: number
       }
       const shouldPersistIncrementally = params.n > 1
-      const outputDir = path.join(this.config.outputsDir, taskId)
+      outputDir = path.join(this.config.outputsDir, taskId)
       const outputPersistQueue = createOutputImagePersistQueue<GeneratedImageResult>({
         isInactive: () => this.isTaskInactive(taskId),
         getItemKey: (image) => crypto.createHash('sha256').update(image.buffer).digest('hex'),
@@ -228,7 +233,8 @@ export class TaskWorker {
         outputPersistQueue.enqueue(images)
 
       // 任务创建时记录的模型优先于配置当前默认模型
-      const runtimeProvider = task.providerProfileModel?.trim()
+      // runtimeProvider/apiKey/outputDir 提到 try 外层变量，供失败恢复复用
+      runtimeProvider = task.providerProfileModel?.trim()
         ? { ...provider, model: task.providerProfileModel.trim() }
         : provider
 
@@ -251,6 +257,15 @@ export class TaskWorker {
         },
         apiKey,
         {
+          onUpstreamRequestId: (requestId) => {
+            this.db.updateTaskProgress({
+              id: taskId,
+              status: "processing",
+              progressPercent: 60,
+              currentStep: "processing",
+              upstreamRequestId: requestId,
+            })
+          },
           onImagesReady: shouldPersistIncrementally
             ? async (readyImages, state) => {
                 const ok = await persistOutputImages(readyImages)
@@ -323,6 +338,106 @@ export class TaskWorker {
       this.emit(taskId, { status: 'succeeded', step: 'succeeded', percent: 100, message: `生成完成，共 ${images.length} 张图片` })
     } catch (error) {
       if (this.isTaskInactive(taskId)) return
+
+      const latestTask = this.db.getTask(taskId)
+      const upstreamTaskId = latestTask?.upstreamRequestId?.trim() || ''
+      const existingOutputs = this.db.listTaskImages(taskId).filter((image) => image.kind === 'output')
+      if (existingOutputs.length === 0 && upstreamTaskId && provider.apiMode === 'kie') {
+        try {
+          if (!this.emit(taskId, {
+            status: 'processing',
+            step: 'recovering',
+            percent: 70,
+            message: '上游可能已出图，正在按任务 ID 重新拉取',
+          })) return
+
+          const recoveredImages = await recoverKieTaskOutputs(runtimeProvider, apiKey, upstreamTaskId)
+          if (this.isTaskInactive(taskId)) return
+
+          if (!this.emit(taskId, {
+            status: 'downloading',
+            step: 'downloading',
+            percent: 90,
+            message: recoveredImages.length > 1
+              ? `正在保存恢复的输出图片（${recoveredImages.length} 张）`
+              : '正在保存恢复的输出图片',
+          })) return
+
+          const recoverPersistQueue = createOutputImagePersistQueue<GeneratedImageResult>({
+            isInactive: () => this.isTaskInactive(taskId),
+            getItemKey: (image) => crypto.createHash('sha256').update(image.buffer).digest('hex'),
+            persistOne: async (image) => {
+              const outputImageId = crypto.randomUUID()
+              const written = await writeOutputImage(outputDir, outputImageId, image)
+              const saved = this.db.addTaskImage({
+                id: outputImageId,
+                taskId,
+                kind: 'output',
+                filePath: path.join('outputs', taskId, written.fileName),
+                mimeType: written.mimeType,
+                bytes: written.bytes,
+                sha256: written.sha256,
+                width: written.width,
+                height: written.height,
+              })
+              if (!saved) return false
+
+              const thumbnailDir = path.join(this.config.thumbsDir, taskId)
+              const thumbnail = await writeOutputImageThumbnail(thumbnailDir, outputImageId, image)
+              const thumbnailSaved = this.db.addTaskImage({
+                id: crypto.randomUUID(),
+                taskId,
+                kind: 'thumb',
+                filePath: path.join('thumbs', taskId, thumbnail.fileName),
+                mimeType: thumbnail.mimeType,
+                bytes: thumbnail.bytes,
+                sha256: thumbnail.sha256,
+                width: thumbnail.width,
+                height: thumbnail.height,
+                metadataJson: JSON.stringify({ imageId: outputImageId }),
+              })
+              return thumbnailSaved
+            },
+          })
+
+          const ok = await recoverPersistQueue.enqueue(recoveredImages)
+          if (!ok) throw new Error('输出图片保存失败')
+          await recoverPersistQueue.waitForIdle()
+          assertAllOutputImagesPersisted(recoverPersistQueue.getPersistedCount(), recoveredImages.length)
+
+          if (task.ownerKind === 'usage_code' && task.ownerUsageCodeId) {
+            this.db.recordUsageCodeOutputImages({
+              usageCodeId: task.ownerUsageCodeId,
+              count: recoveredImages.length,
+            })
+            this.db.insertUsageCodeActivityLog({
+              usageCodeId: task.ownerUsageCodeId,
+              taskId,
+              actorKind: 'user',
+              eventType: 'image_task_succeeded',
+              message: `使用码用户生成图片 ${recoveredImages.length} 张（上游任务恢复）`,
+            })
+          }
+
+          this.emit(taskId, {
+            status: 'succeeded',
+            step: 'succeeded',
+            percent: 100,
+            message: `生成完成，共 ${recoveredImages.length} 张图片`,
+          })
+          return
+        } catch (recoverError) {
+          if (this.isTaskInactive(taskId)) return
+          this.emit(taskId, {
+            status: 'failed',
+            step: 'failed',
+            percent: 60,
+            message: normalizeProviderErrorMessage(recoverError, normalizeProviderErrorMessage(error)),
+          })
+          return
+        }
+      }
+
       this.emit(taskId, {
         status: 'failed',
         step: 'failed',

@@ -68,6 +68,61 @@ function joinUrl(baseUrl: string, pathPart: string) {
   return `${normalizeBase(baseUrl)}/${pathPart.replace(/^\/+/, '')}`
 }
 
+function isTransientHttpStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504
+}
+
+/** 展开 undici/Node 网络错误链，避免只剩裸 "fetch failed"。 */
+export function formatNetworkError(error: unknown, fallback = '网络请求失败') {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  let depth = 0
+  while (current != null && depth < 6 && !seen.has(current)) {
+    seen.add(current)
+    depth += 1
+    if (current instanceof Error) {
+      const message = current.message?.trim()
+      if (message) parts.push(message)
+      const code = (current as Error & { code?: unknown }).code
+      if (typeof code === 'string' && code.trim()) parts.push(code.trim())
+      current = (current as Error & { cause?: unknown }).cause
+      continue
+    }
+    if (typeof current === 'string' && current.trim()) {
+      parts.push(current.trim())
+      break
+    }
+    break
+  }
+  const unique = Array.from(new Set(parts.map((item) => item.trim()).filter(Boolean)))
+  return unique.join(' | ') || fallback
+}
+
+export function isTransientNetworkError(error: unknown) {
+  if (!(error instanceof Error)) return false
+  const message = formatNetworkError(error).toLowerCase()
+  return (
+    message.includes('http 408')
+    || message.includes('http 425')
+    || message.includes('http 429')
+    || message.includes('http 500')
+    || message.includes('http 502')
+    || message.includes('http 503')
+    || message.includes('http 504')
+    || message.includes('fetch failed')
+    || message.includes('network')
+    || message.includes('timeout')
+    || message.includes('aborted')
+    || message.includes('econnreset')
+    || message.includes('etimedout')
+    || message.includes('enotfound')
+    || message.includes('eai_again')
+    || message.includes('socket hang up')
+    || message.includes('und_err')
+  )
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -96,13 +151,25 @@ async function fetchWithRetry(
   let lastError: unknown
   for (let i = 1; i <= attempts; i += 1) {
     try {
-      return await fetchWithTimeout(url, init, timeoutSeconds, provider)
+      const response = await fetchWithTimeout(url, init, timeoutSeconds, provider)
+      if (!response.ok && isTransientHttpStatus(response.status) && i < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * i))
+        continue
+      }
+      return response
     } catch (error) {
       lastError = error
+      if (i >= attempts || !isTransientNetworkError(error)) {
+        throw error instanceof Error
+          ? new Error(formatNetworkError(error), { cause: error })
+          : new Error(formatNetworkError(error))
+      }
       await new Promise((resolve) => setTimeout(resolve, 1000 * i))
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+  throw lastError instanceof Error
+    ? new Error(formatNetworkError(lastError), { cause: lastError })
+    : new Error(formatNetworkError(lastError))
 }
 
 async function readErrorMessage(response: Response) {
@@ -132,49 +199,52 @@ function parseImageSize(size: string) {
   return { width, height }
 }
 
-const ASPECT_RATIOS: AspectRatio[] = ['1:1', '4:3', '3:4', '16:9', '9:16', '2:3', '3:2']
-
-function nearestAspectRatio(width: number, height: number): AspectRatio {
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return '1:1'
-  const actual = width / height
-  return ASPECT_RATIOS
-    .map((item) => {
-      const [w, h] = item.split(':').map(Number)
-      const ratio = w / h
-      return { value: item, delta: Math.abs(actual - ratio) / ratio }
-    })
-    .sort((a, b) => a.delta - b.delta)[0]?.value ?? '1:1'
-}
-
-async function readLocalImageSize(filePath: string): Promise<{ width: number; height: number } | null> {
-  try {
-    const metadata = await sharp(filePath, { animated: false }).metadata()
-    if (!metadata.width || !metadata.height) return null
-    return { width: metadata.width, height: metadata.height }
-  } catch {
-    return null
+function closestAspectRatio(width: number, height: number): AspectRatio {
+  const value = width / height
+  const candidates: Array<{ ratio: AspectRatio; value: number }> = [
+    { ratio: '1:1', value: 1 },
+    { ratio: '4:3', value: 4 / 3 },
+    { ratio: '3:4', value: 3 / 4 },
+    { ratio: '16:9', value: 16 / 9 },
+    { ratio: '9:16', value: 9 / 16 },
+    { ratio: '2:3', value: 2 / 3 },
+    { ratio: '3:2', value: 3 / 2 },
+  ]
+  let best = candidates[0]
+  let bestDelta = Math.abs(value - best.value)
+  for (const item of candidates.slice(1)) {
+    const delta = Math.abs(value - item.value)
+    if (delta < bestDelta) {
+      best = item
+      bestDelta = delta
+    }
   }
+  return best.ratio
 }
 
 async function mapSizeToAspectRatio(
   size: string,
-  referenceImagePath?: string | null,
-  autoAspectFromReference = true,
+  referenceImagePath?: string,
+  autoFromReference = true,
 ): Promise<AspectRatio> {
-  const parsed = parseImageSize(size)
-  if (parsed) return nearestAspectRatio(parsed.width, parsed.height)
-
-  // size=auto 时：有参考图则按参考图比例，否则回退 1:1
-  if (autoAspectFromReference && referenceImagePath) {
-    const imageSize = await readLocalImageSize(referenceImagePath)
-    if (imageSize) return nearestAspectRatio(imageSize.width, imageSize.height)
+  const normalized = size.trim().toLowerCase()
+  if (normalized === 'auto') {
+    if (autoFromReference && referenceImagePath) {
+      try {
+        const meta = await sharp(referenceImagePath).metadata()
+        if (meta.width && meta.height) return closestAspectRatio(meta.width, meta.height)
+      } catch {
+        /* ignore */
+      }
+    }
+    return '1:1'
   }
-
-  return '1:1'
+  const parsed = parseImageSize(size)
+  if (!parsed) return '1:1'
+  return closestAspectRatio(parsed.width, parsed.height)
 }
 
-
-function mapOutputFormat(format: TaskExecutionPayload['params']['output_format']): 'png' | 'jpeg' {
+function mapOutputFormat(format: string) {
   return format === 'jpeg' ? 'jpeg' : 'png'
 }
 
@@ -253,25 +323,36 @@ async function queryTask(provider: ProviderProfileRecord, apiKey: string, taskId
   return payload.data ?? {}
 }
 
+export function parseKieResultUrls(resultJson?: string | null) {
+  if (!resultJson?.trim()) return [] as string[]
+  try {
+    const parsed = JSON.parse(resultJson) as { resultUrls?: unknown }
+    return Array.isArray(parsed.resultUrls)
+      ? parsed.resultUrls.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      : []
+  } catch {
+    throw new Error('Kie resultJson 解析失败')
+  }
+}
+
 async function waitForTask(provider: ProviderProfileRecord, apiKey: string, taskId: string) {
   const startedAt = Date.now()
   const timeoutMs = Math.max(30, provider.timeoutSeconds) * 1000
   while (Date.now() - startedAt <= timeoutMs) {
-    const data = await queryTask(provider, apiKey, taskId)
-    const state = String(data.state || '').toLowerCase()
-    if (state === 'success') {
-      let urls: string[] = []
-      try {
-        const parsed = JSON.parse(data.resultJson || '{}') as { resultUrls?: string[] }
-        urls = Array.isArray(parsed.resultUrls) ? parsed.resultUrls.filter(Boolean) : []
-      } catch {
-        throw new Error('Kie resultJson 解析失败')
+    try {
+      const data = await queryTask(provider, apiKey, taskId)
+      const state = String(data.state || '').toLowerCase()
+      if (state === 'success') {
+        const urls = parseKieResultUrls(data.resultJson)
+        if (!urls.length) throw new Error('Kie 任务成功但未返回 resultUrls')
+        return urls
       }
-      if (!urls.length) throw new Error('Kie 任务成功但未返回 resultUrls')
-      return urls
-    }
-    if (state === 'fail' || state === 'failed' || state === 'error') {
-      throw new Error(data.failMsg || data.failCode || 'Kie 任务失败')
+      if (state === 'fail' || state === 'failed' || state === 'error') {
+        throw new Error(data.failMsg || data.failCode || 'Kie 任务失败')
+      }
+    } catch (error) {
+      // 轮询偶发网络抖动时继续等，避免上游已完成后被本地误判失败
+      if (!isTransientNetworkError(error)) throw error
     }
     await new Promise((resolve) => setTimeout(resolve, 4000))
   }
@@ -279,8 +360,20 @@ async function waitForTask(provider: ProviderProfileRecord, apiKey: string, task
 }
 
 async function downloadRemoteImage(url: string): Promise<GeneratedImageResult> {
-  const response = await fetchWithRetry(url, { headers: { 'Cache-Control': 'no-store' } }, 120, undefined, 3)
-  if (!response.ok) throw new Error(await readErrorMessage(response))
+  // 结果 CDN 偶发超时/断连，下载阶段单独加重试
+  let response: Response
+  try {
+    response = await fetchWithRetry(
+      url,
+      { headers: { 'Cache-Control': 'no-store' } },
+      120,
+      undefined,
+      6,
+    )
+  } catch (error) {
+    throw new Error(`远端图片下载失败：${formatNetworkError(error)}`, { cause: error instanceof Error ? error : undefined })
+  }
+  if (!response.ok) throw new Error(`远端图片下载失败：${await readErrorMessage(response)}`)
   const buffer = Buffer.from(await response.arrayBuffer())
   if (!buffer.length) throw new Error('Kie 输出图片为空')
   const contentType = response.headers.get('content-type')?.toLowerCase() || ''
@@ -292,6 +385,48 @@ async function downloadRemoteImage(url: string): Promise<GeneratedImageResult> {
         ? 'image/webp'
         : 'image/jpeg'
   return { buffer, mimeType }
+}
+
+async function downloadResultImages(urls: string[]) {
+  const images: GeneratedImageResult[] = []
+  // 串行下载，避免并发把弱网打满后全部失败
+  for (const url of urls) {
+    images.push(await downloadRemoteImage(url))
+  }
+  return images
+}
+
+async function materializeKieOutputs(
+  provider: ProviderProfileRecord,
+  apiKey: string,
+  taskId: string,
+  urls: string[],
+) {
+  try {
+    return await downloadResultImages(urls)
+  } catch (firstError) {
+    // 上游已成功时，再查一次结果 URL 后重下，降低 CDN 短时失效概率
+    let freshUrls = urls
+    try {
+      const data = await queryTask(provider, apiKey, taskId)
+      if (String(data.state || '').toLowerCase() === 'success') {
+        const nextUrls = parseKieResultUrls(data.resultJson)
+        if (nextUrls.length > 0) freshUrls = nextUrls
+      }
+    } catch {
+      /* 使用首轮 URL */
+    }
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      return await downloadResultImages(freshUrls)
+    } catch (secondError) {
+      throw new Error(
+        `远端已出图但本地下载失败：${formatNetworkError(secondError, formatNetworkError(firstError))}`,
+        { cause: secondError instanceof Error ? secondError : firstError instanceof Error ? firstError : undefined },
+      )
+    }
+  }
 }
 
 async function uploadLocalImage(
@@ -346,6 +481,7 @@ async function uploadInputImages(
 async function runSingleKie(
   payload: TaskExecutionPayload,
   apiKey: string,
+  options: ExecuteImageTaskOptions = {},
 ): Promise<GeneratedImageResult[]> {
   if (payload.maskImage) {
     throw new Error('Kie 模式暂不支持遮罩编辑')
@@ -392,8 +528,10 @@ async function runSingleKie(
     model,
     input,
   })
+  options.onUpstreamRequestId?.(taskId)
+
   const urls = await waitForTask(payload.provider, apiKey, taskId)
-  return Promise.all(urls.map((url) => downloadRemoteImage(url)))
+  return materializeKieOutputs(payload.provider, apiKey, taskId, urls)
 }
 
 async function runSerialSingles(
@@ -413,15 +551,40 @@ async function runSerialSingles(
   return images
 }
 
+/** 按上游 taskId 再查详情并下载结果图（用于本地下载失败后的恢复）。 */
+export async function recoverKieTaskOutputs(
+  provider: ProviderProfileRecord,
+  apiKey: string,
+  upstreamTaskId: string,
+): Promise<GeneratedImageResult[]> {
+  const taskId = String(upstreamTaskId || "").trim();
+  if (!taskId) throw new Error("缺少上游 taskId，无法恢复结果");
+
+  const data = await queryTask(provider, apiKey, taskId);
+  const state = String(data.state || "").toLowerCase();
+  if (state === "fail" || state === "failed" || state === "error") {
+    throw new Error(data.failMsg || data.failCode || "Kie 任务失败");
+  }
+  if (state !== "success") {
+    // 仍在生成中时继续等到完成或超时
+    const urls = await waitForTask(provider, apiKey, taskId);
+    return materializeKieOutputs(provider, apiKey, taskId, urls);
+  }
+
+  const urls = parseKieResultUrls(data.resultJson);
+  if (!urls.length) throw new Error("Kie 任务成功但未返回 resultUrls");
+  return materializeKieOutputs(provider, apiKey, taskId, urls);
+}
+
 export async function executeKieImageTask(
   payload: TaskExecutionPayload,
   apiKey: string,
   options: ExecuteImageTaskOptions = {},
 ) {
   if (payload.params.n <= 1) {
-    return runSingleKie(payload, apiKey)
+    return runSingleKie(payload, apiKey, options)
   }
-  return runSerialSingles(payload.params.n, () => runSingleKie(payload, apiKey), options)
+  return runSerialSingles(payload.params.n, () => runSingleKie(payload, apiKey, options), options)
 }
 
 export type KieBalanceResult = {

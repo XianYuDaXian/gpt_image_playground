@@ -282,7 +282,22 @@ export function normalizeProviderErrorMessage(error: unknown, fallback = '生成
   }
 
   if (error instanceof Error) {
-    return clean(error.message) || fallbackText
+    const parts: string[] = []
+    const seen = new Set<unknown>()
+    let current: unknown = error
+    let depth = 0
+    while (current instanceof Error && depth < 6 && !seen.has(current)) {
+      seen.add(current)
+      depth += 1
+      const text = clean(current.message)
+      if (text) parts.push(text)
+      const code = (current as Error & { code?: unknown }).code
+      if (typeof code === "string" && code.trim()) parts.push(code.trim())
+      current = current.cause
+    }
+    const unique = Array.from(new Set(parts))
+    if (unique.length > 0) return unique.join(" | ")
+    return fallbackText
   }
   return clean(error) || fallbackText
 }
