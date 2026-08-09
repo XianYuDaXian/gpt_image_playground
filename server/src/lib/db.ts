@@ -80,6 +80,21 @@ export interface TaskRecord {
   isArchived: number
 }
 
+export interface TaskSearchRow {
+  id: string
+  prompt: string
+  taskType: 'image' | 'video'
+  status: string
+  currentStep: string | null
+  paramsJson: string
+  providerProfileId: string | null
+  providerProfileModel: string | null
+  ownerUsageCodeId: string | null
+  ownerKind: 'admin' | 'usage_code' | 'legacy'
+  ownerLabel: string
+  ownerUsageCodeCodeEncrypted: string | null
+  createdAt: string
+}
 export interface TaskListQueryInput {
   ownerUsageCodeIds?: string[]
   includeUsageCodeTasksForAdmin?: boolean
@@ -2812,7 +2827,72 @@ ${selectUsageCodeFields()}
     }
   }
 
+  private taskListSelect() {
+    return `
+      tasks.id,
+      tasks.prompt,
+      tasks.task_type as taskType,
+      tasks.status,
+      tasks.progress_percent as progressPercent,
+      tasks.current_step as currentStep,
+      tasks.params_json as paramsJson,
+      tasks.error_message as errorMessage,
+      tasks.provider_profile_id as providerProfileId,
+      tasks.provider_profile_model as providerProfileModel,
+      tasks.upstream_request_id as upstreamRequestId,
+      tasks.upstream_usage_json as upstreamUsageJson,
+      tasks.owner_usage_code_id as ownerUsageCodeId,
+      tasks.owner_kind as ownerKind,
+      tasks.reserved_image_credits as reservedImageCredits,
+      CASE
+        WHEN tasks.owner_kind = 'admin' THEN '管理员'
+        WHEN tasks.owner_kind = 'usage_code' THEN COALESCE(usage_codes.name, '已删除使用码')
+        ELSE '历史任务'
+      END as ownerLabel,
+      ${this.taskOwnerBaseSelect()},
+      tasks.created_at as createdAt,
+      tasks.updated_at as updatedAt,
+      tasks.finished_at as finishedAt,
+      tasks.is_favorite as isFavorite,
+      tasks.is_archived as isArchived
+    `
+  }
+
   listTaskPage(input: TaskListQueryInput) {
+    const { whereSql, params } = this.buildTaskListWhereClause(input)
+    const rows = this.sqlite
+      .prepare(`
+        SELECT
+          ${this.taskListSelect()}
+        FROM tasks
+        LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
+        ${whereSql}
+        ORDER BY tasks.created_at DESC
+        LIMIT ? OFFSET ?
+      `)
+      .all(...params, input.limit, input.offset) as TaskRecord[]
+    this.attachUsageCodeOwnerStats(rows)
+    return rows
+  }
+
+  listTaskPageByIds(ids: string[]) {
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(', ')
+    const rows = this.sqlite
+      .prepare(`
+        SELECT
+          ${this.taskListSelect()}
+        FROM tasks
+        LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
+        WHERE tasks.id IN (${placeholders})
+        ORDER BY tasks.created_at DESC
+      `)
+      .all(...ids) as TaskRecord[]
+    this.attachUsageCodeOwnerStats(rows)
+    return rows
+  }
+
+  listTaskPageLight(input: TaskListQueryInput) {
     const { whereSql, params } = this.buildTaskListWhereClause(input)
     return this.sqlite
       .prepare(`
@@ -2821,35 +2901,26 @@ ${selectUsageCodeFields()}
           tasks.prompt,
           tasks.task_type as taskType,
           tasks.status,
-          tasks.progress_percent as progressPercent,
           tasks.current_step as currentStep,
           tasks.params_json as paramsJson,
-          tasks.error_message as errorMessage,
           tasks.provider_profile_id as providerProfileId,
           tasks.provider_profile_model as providerProfileModel,
-          tasks.upstream_request_id as upstreamRequestId,
-          tasks.upstream_usage_json as upstreamUsageJson,
           tasks.owner_usage_code_id as ownerUsageCodeId,
           tasks.owner_kind as ownerKind,
-          tasks.reserved_image_credits as reservedImageCredits,
           CASE
             WHEN tasks.owner_kind = 'admin' THEN '管理员'
             WHEN tasks.owner_kind = 'usage_code' THEN COALESCE(usage_codes.name, '已删除使用码')
             ELSE '历史任务'
           END as ownerLabel,
-          ${this.taskOwnerStatsSelect()},
-          tasks.created_at as createdAt,
-          tasks.updated_at as updatedAt,
-          tasks.finished_at as finishedAt,
-          tasks.is_favorite as isFavorite,
-          tasks.is_archived as isArchived
+          usage_codes.code_encrypted as ownerUsageCodeCodeEncrypted,
+          tasks.created_at as createdAt
         FROM tasks
         LEFT JOIN usage_codes ON usage_codes.id = tasks.owner_usage_code_id
         ${whereSql}
         ORDER BY tasks.created_at DESC
         LIMIT ? OFFSET ?
       `)
-      .all(...params, input.limit, input.offset) as TaskRecord[]
+      .all(...params, input.limit, input.offset) as TaskSearchRow[]
   }
 
   countTaskPage(input: Omit<TaskListQueryInput, 'limit' | 'offset'>) {
@@ -2864,7 +2935,7 @@ ${selectUsageCodeFields()}
     return row.total
   }
 
-  private taskOwnerStatsSelect() {
+  private taskOwnerBaseSelect() {
     return `
       usage_codes.created_at as ownerUsageCodeCreatedAt,
       usage_codes.code_encrypted as ownerUsageCodeCodeEncrypted,
@@ -2876,7 +2947,13 @@ ${selectUsageCodeFields()}
       usage_codes.video_quota as ownerUsageCodeVideoQuota,
       usage_codes.used_video_credits as ownerUsageCodeUsedVideoCredits,
       usage_codes.provider_video_quotas_json as ownerUsageCodeProviderVideoQuotasJson,
-      usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson,
+      usage_codes.provider_used_video_credits_json as ownerUsageCodeProviderUsedVideoCreditsJson
+    `
+  }
+
+  private taskOwnerStatsSelect() {
+    return `
+      ${this.taskOwnerBaseSelect()},
       (
         SELECT COUNT(task_images.id)
         FROM tasks owner_tasks
@@ -2911,6 +2988,70 @@ ${selectUsageCodeFields()}
           AND owner_tasks.provider_profile_id = tasks.provider_profile_id
       ) as ownerUsageCodeProviderOutputVideoCount
     `
+  }
+
+  private attachUsageCodeOwnerStats(rows: TaskRecord[]) {
+    if (rows.length === 0) return
+    const ownerIds = Array.from(new Set(
+      rows.map((row) => row.ownerUsageCodeId).filter((value): value is string => Boolean(value)),
+    ))
+    if (ownerIds.length === 0) return
+    const placeholders = ownerIds.map(() => '?').join(', ')
+    const ownerTotals = new Map<string, { outputImageCount: number; outputVideoCount: number; taskCount: number }>()
+    const providerTotals = new Map<string, { outputImageCount: number; outputVideoCount: number }>()
+
+    const mediaRows = this.sqlite
+      .prepare(`
+        SELECT
+          t.owner_usage_code_id as oid,
+          t.provider_profile_id as pid,
+          COALESCE(SUM(CASE WHEN i.kind = 'output' THEN 1 ELSE 0 END), 0) as out,
+          COALESCE(SUM(CASE WHEN i.kind = 'video_output' THEN 1 ELSE 0 END), 0) as vout
+        FROM tasks t
+        LEFT JOIN task_images i ON i.task_id = t.id
+        WHERE t.owner_usage_code_id IN (${placeholders})
+        GROUP BY t.owner_usage_code_id, t.provider_profile_id
+      `)
+      .all(...ownerIds) as Array<{ oid: string; pid: string | null; out: number; vout: number }>
+
+    for (const row of mediaRows) {
+      const current = ownerTotals.get(row.oid) ?? { outputImageCount: 0, outputVideoCount: 0, taskCount: 0 }
+      current.outputImageCount += row.out
+      current.outputVideoCount += row.vout
+      ownerTotals.set(row.oid, current)
+      const providerKey = `${row.oid}|${row.pid ?? ''}`
+      const providerCurrent = providerTotals.get(providerKey) ?? { outputImageCount: 0, outputVideoCount: 0 }
+      providerCurrent.outputImageCount += row.out
+      providerCurrent.outputVideoCount += row.vout
+      providerTotals.set(providerKey, providerCurrent)
+    }
+
+    const taskRows = this.sqlite
+      .prepare(`
+        SELECT
+          owner_usage_code_id as oid,
+          COUNT(*) as cnt
+        FROM tasks
+        WHERE owner_usage_code_id IN (${placeholders})
+        GROUP BY owner_usage_code_id
+      `)
+      .all(...ownerIds) as Array<{ oid: string; cnt: number }>
+
+    for (const row of taskRows) {
+      const current = ownerTotals.get(row.oid)
+      if (current) current.taskCount = row.cnt
+    }
+
+    for (const row of rows) {
+      const ownerId = row.ownerUsageCodeId ?? ''
+      const owner = ownerId ? ownerTotals.get(ownerId) : undefined
+      const provider = ownerId ? providerTotals.get(`${ownerId}|${row.providerProfileId ?? ''}`) : undefined
+      row.ownerUsageCodeOutputImageCount = owner?.outputImageCount ?? 0
+      row.ownerUsageCodeOutputVideoCount = owner?.outputVideoCount ?? 0
+      row.ownerUsageCodeTaskCount = owner?.taskCount ?? 0
+      row.ownerUsageCodeProviderOutputImageCount = provider?.outputImageCount ?? 0
+      row.ownerUsageCodeProviderOutputVideoCount = provider?.outputVideoCount ?? 0
+    }
   }
 
   listTasksForUsageCode(usageCodeId: string, limit = 50) {

@@ -7,6 +7,9 @@ import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAu
 import { serializeTaskRecord, loadSerializedTask, resolveProviderModelLabel, getMultiModelImageCapabilityError, getReferenceImageLimitError } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
 import { recoverKieNetworkFailedTasks } from '../lib/kieFailedTaskRecover.js'
+import { decryptText } from '../lib/crypto.js'
+import { searchableFromRow, matchesSearchTags } from '../lib/taskSearchText.js'
+import type { TaskImageRecord, TaskSearchRow, ProviderProfileRecord } from '../lib/db.js'
 
 const ADMIN_TASK_LIST_LIMIT = 2000
 const USER_TASK_LIST_LIMIT = 500
@@ -88,111 +91,39 @@ function resolveAbsoluteMediaPath(app: Parameters<FastifyPluginAsync>[0], relati
   return path.join(app.config.mediaDir, relativePath)
 }
 
-function normalizeSearchText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/×/g, 'x')
-    .replace(/：/g, ':')
-}
-
-function formatImageRatio(width: number, height: number) {
-  const roundedWidth = Math.round(width)
-  const roundedHeight = Math.round(height)
-  if (!Number.isFinite(roundedWidth) || !Number.isFinite(roundedHeight) || roundedWidth <= 0 || roundedHeight <= 0) {
-    return ''
-  }
-  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b))
-  const divisor = gcd(roundedWidth, roundedHeight)
-  return `${roundedWidth / divisor}:${roundedHeight / divisor}`
-}
-
-function buildSizeSearchText(width: number, height: number) {
-  return [`${width}x${height}`, `${width}×${height}`, formatImageRatio(width, height)].join(' ')
-}
-
-function buildOwnerSearchText(
-  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
+function toSearchableTask(
+  row: TaskSearchRow,
+  images: TaskImageRecord[],
+  provider: Pick<ProviderProfileRecord, 'name' | 'remarkName'> | null,
+  appSecret: string,
   role: 'admin' | 'user',
 ) {
-  const ownerTerms = [task.ownerUsageCode?.code]
-  if (role === 'admin') {
-    ownerTerms.push(task.ownerLabel)
-    ownerTerms.push(task.ownerUsageCode?.name)
+  let ownerUsageCodeCode: string | null = null
+  if (row.ownerKind === 'usage_code' && row.ownerUsageCodeCodeEncrypted) {
+    try {
+      ownerUsageCodeCode = decryptText(row.ownerUsageCodeCodeEncrypted, appSecret)
+    } catch {
+      ownerUsageCodeCode = null
+    }
   }
-  return ownerTerms.filter(Boolean).join(' ')
+  return searchableFromRow(
+    {
+      prompt: row.prompt,
+      paramsJson: row.paramsJson,
+      taskType: row.taskType,
+      status: row.status,
+      currentStep: row.currentStep,
+      providerProfileId: row.providerProfileId,
+      providerProfileModel: row.providerProfileModel,
+      ownerKind: row.ownerKind,
+      ownerLabel: row.ownerLabel,
+      ownerUsageCodeCode,
+    },
+    images,
+    provider,
+    role,
+  )
 }
-
-function getImageParamDisplayValue(
-  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
-  paramKey: keyof z.infer<typeof taskParamsSchema>,
-) {
-  const params = task.params as z.infer<typeof taskParamsSchema>
-  const requestedValue = params[paramKey]
-  const actualValue = paramKey === 'n' && task.outputImages?.length > 0
-    ? task.outputImages.length
-    : undefined
-  return String(actualValue ?? requestedValue ?? '')
-}
-
-function buildCardTagSearchText(
-  task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never,
-  role: 'admin' | 'user',
-) {
-  const isVideoTask = task.taskType === 'video'
-  const tagTerms = [
-    isVideoTask ? '视频 video' : '图片 image',
-    task.status === 'running' ? '生成中 running' : task.status === 'done' ? '已完成 done' : '失败 error',
-    task.maskImageId ? 'mask 遮罩' : '',
-    task.currentStep,
-    task.providerProfileName,
-    task.providerProfileId,
-    role === 'admin' ? task.providerProfileModel : null,
-    task.ownerLabel,
-    task.ownerUsageCode?.name,
-    task.ownerUsageCode?.code,
-  ]
-
-  if (isVideoTask) {
-    const videoParams = task.params as z.infer<typeof videoParamsSchema>
-    tagTerms.push(videoParams.aspect_ratio)
-    tagTerms.push(videoParams.resolution)
-    tagTerms.push(String(videoParams.duration))
-    tagTerms.push(`${videoParams.duration}s`)
-  } else {
-    tagTerms.push(getImageParamDisplayValue(task, 'quality'))
-    tagTerms.push(getImageParamDisplayValue(task, 'size'))
-    tagTerms.push(getImageParamDisplayValue(task, 'output_format'))
-    tagTerms.push(getImageParamDisplayValue(task, 'n'))
-  }
-
-  return tagTerms.filter(Boolean).join(' ')
-}
-
-function matchesTaskSearch(task: ReturnType<typeof loadSerializedTask> extends infer T ? Exclude<T, null> : never, query: string, role: 'admin' | 'user') {
-  const q = normalizeSearchText(query.trim())
-  if (!q) return true
-
-  const imageSearchText = (task.outputImages ?? [])
-    .map((imageId) => {
-      const size = task.imageSizesById?.[imageId]
-      if (!size?.width || !size.height) return ''
-      return buildSizeSearchText(size.width, size.height)
-    })
-    .join(' ')
-
-  const ownerSearchText = buildOwnerSearchText(task, role)
-
-  const searchText = [
-    task.prompt,
-    JSON.stringify(task.params),
-    imageSearchText,
-    ownerSearchText,
-    buildCardTagSearchText(task, role),
-  ].join(' ')
-
-  return normalizeSearchText(searchText).includes(q)
-}
-
 export const taskRoutes: FastifyPluginAsync = async (app) => {
   const attachRuntimeMeta = <T extends Record<string, unknown>>(task: T, taskId: string) => {
     const runtime = app.taskWorker.getTaskRuntimeMeta(taskId)
@@ -511,23 +442,54 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
     let total = 0
     let items: ReturnType<typeof serializeTaskList> = []
     if (hasTextSearch) {
-      const rawTasks = app.db.listTaskPage({
+      const rawTasks = app.db.listTaskPageLight({
         ...baseInput,
         limit: auth.role === 'admin' ? ADMIN_TASK_LIST_LIMIT : USER_TASK_LIST_LIMIT,
         offset: 0,
       })
-      const filteredTasks = serializeTaskList(rawTasks, auth.role === 'admin', auth.role === 'admin')
-        .filter((task) => {
-          if (!matchesTaskSearch(task, query.query ?? '', auth.role)) return false
-          if (searchTags.length === 0) return true
-          if (query.searchTagMode === 'exclude') {
-            return !searchTags.some((tag) => matchesTaskSearch(task, tag, auth.role))
-          }
-          return searchTags.every((tag) => matchesTaskSearch(task, tag, auth.role))
-        })
-      total = filteredTasks.length
-      const start = (query.page - 1) * query.pageSize
-      items = filteredTasks.slice(start, start + query.pageSize)
+      if (rawTasks.length > 0) {
+        const taskIds = rawTasks.map((task) => task.id)
+        const images = app.db.listTaskImagesForTasks(taskIds)
+        const imagesByTaskId = new Map<string, typeof images>()
+        for (const image of images) {
+          const current = imagesByTaskId.get(image.taskId) ?? []
+          current.push(image)
+          imagesByTaskId.set(image.taskId, current)
+        }
+        const providerIds = Array.from(new Set(
+          rawTasks.map((task) => task.providerProfileId).filter((value): value is string => Boolean(value)),
+        ))
+        const providerMap = new Map(
+          providerIds.map((providerId) => [providerId, app.db.getProviderProfile(providerId) ?? null] as const),
+        )
+        const searchableTasks = rawTasks.map((row) => toSearchableTask(
+          row,
+          imagesByTaskId.get(row.id) ?? [],
+          row.providerProfileId ? providerMap.get(row.providerProfileId) ?? null : null,
+          app.config.appSecret,
+          auth.role,
+        ))
+        const filteredIds = rawTasks
+          .filter((_, index) => matchesSearchTags(
+            searchableTasks[index],
+            query.query ?? '',
+            searchTags,
+            query.searchTagMode,
+            auth.role,
+          ))
+          .map((row) => row.id)
+        total = filteredIds.length
+        const start = (query.page - 1) * query.pageSize
+        const pageIds = filteredIds.slice(start, start + query.pageSize)
+        if (pageIds.length > 0) {
+          const fullRows = app.db.listTaskPageByIds(pageIds)
+          const rowById = new Map(fullRows.map((task) => [task.id, task] as const))
+          const orderedRows = pageIds
+            .map((id) => rowById.get(id))
+            .filter((task): task is NonNullable<typeof task> => Boolean(task))
+          items = serializeTaskList(orderedRows, auth.role === 'admin', auth.role === 'admin')
+        }
+      }
     } else {
       total = app.db.countTaskPage(baseInput)
       const start = (query.page - 1) * query.pageSize
