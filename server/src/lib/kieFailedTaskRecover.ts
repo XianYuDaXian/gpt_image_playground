@@ -178,7 +178,7 @@ function rechargeCreditsIfRefunded(db: AppDatabase, task: TaskRecord, imageCount
   const hasRecoverCharge = events.some((item) => item.eventType === 'reserve' && item.reason === 'task_recover')
   if (!hasRefund || hasRecoverCharge) return 0
 
-  db.reserveUsageCreditsForTaskRecover({
+  db.voidTaskRefundForRecover({
     usageCodeId: task.ownerUsageCodeId,
     taskId: task.id,
     credits,

@@ -2216,37 +2216,44 @@ ${selectUsageCodeFields()}
     }>
   }
 
-  /** 失败恢复成功后重新扣回已退还的额度（reason=task_recover，可幂等） */
-  reserveUsageCreditsForTaskRecover(input: {
+  /**
+   * 失败恢复成功后：撤销该任务的退款记录，保留原 reserve 扣费。
+   * 受 (task_id, event_type) 唯一索引限制，不能再插入第二条 reserve。
+   */
+  voidTaskRefundForRecover(input: {
     usageCodeId: string
     taskId: string
     credits: number
     providerProfileId: string
   }) {
     const tx = this.sqlite.transaction(() => {
-      const existing = this.sqlite.prepare(`
+      const refund = this.sqlite.prepare(`
+        SELECT id, credits, provider_profile_id as providerProfileId
+        FROM usage_quota_events
+        WHERE task_id = ? AND event_type = 'refund'
+        LIMIT 1
+      `).get(input.taskId) as { id: number; credits: number; providerProfileId: string | null } | undefined
+      if (!refund) return 0
+
+      const already = this.sqlite.prepare(`
         SELECT 1 as existsFlag
         FROM usage_quota_events
-        WHERE task_id = ? AND event_type = 'reserve' AND reason = 'task_recover'
+        WHERE task_id = ? AND event_type = 'recover_keep_charge'
         LIMIT 1
       `).get(input.taskId) as { existsFlag: number } | undefined
-      if (existing) return false
+      if (already) return 0
 
+      const credits = Math.max(0, Number(refund.credits) || input.credits || 0)
+      if (credits <= 0) return 0
+      const providerProfileId = refund.providerProfileId || input.providerProfileId
       const code = this.getUsageCode(input.usageCodeId)
-      if (!code || !code.isEnabled) {
-        throw new Error('使用码不可用')
-      }
-      const providerQuota = code.providerImageQuotas?.[input.providerProfileId] ?? 0
-      const providerUsedCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
-      const providerRemaining = providerQuota - providerUsedCredits
-      if (providerRemaining < input.credits) {
-        throw new Error(`当前端点剩余图片额度不足，当前剩余 ${Math.max(0, providerRemaining)} 张`)
-      }
+      if (!code) throw new Error('使用码不存在')
 
       const now = new Date().toISOString()
+      const providerUsedCredits = code.providerUsedImageCredits?.[providerProfileId] ?? 0
       const nextProviderUsedImageCredits = {
         ...(code.providerUsedImageCredits ?? {}),
-        [input.providerProfileId]: providerUsedCredits + input.credits,
+        [providerProfileId]: providerUsedCredits + credits,
       }
       this.sqlite.prepare(`
         UPDATE usage_codes
@@ -2256,12 +2263,13 @@ ${selectUsageCodeFields()}
             last_used_at = ?
         WHERE id = ?
       `).run(
-        input.credits,
+        credits,
         stringifyProviderImageQuotaMap(nextProviderUsedImageCredits),
         now,
         now,
         input.usageCodeId,
       )
+      this.sqlite.prepare('DELETE FROM usage_quota_events WHERE id = ?').run(refund.id)
       this.sqlite.prepare(`
         INSERT INTO usage_quota_events (
           usage_code_id,
@@ -2272,9 +2280,9 @@ ${selectUsageCodeFields()}
           provider_profile_id,
           created_at
         )
-        VALUES (?, ?, 'reserve', ?, 'task_recover', ?, ?)
-      `).run(input.usageCodeId, input.taskId, input.credits, input.providerProfileId, now)
-      return true
+        VALUES (?, ?, 'recover_keep_charge', ?, 'task_recover', ?, ?)
+      `).run(input.usageCodeId, input.taskId, credits, providerProfileId, now)
+      return credits
     })
     return tx()
   }
