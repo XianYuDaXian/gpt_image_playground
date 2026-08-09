@@ -4,6 +4,7 @@ import { decryptText } from './crypto.js'
 import type { AppDatabase } from './db.js'
 import { executeImageTask, writeOutputImage, writeOutputImageThumbnail, type GeneratedImageResult } from './imageApi.js'
 import { recoverKieTaskOutputs } from './kieApi.js'
+import { buildKieUpstreamUsageJson } from './kieFailedTaskRecover.js'
 import { assertAllOutputImagesPersisted, createOutputImagePersistQueue } from './outputImagePersist.js'
 import { downloadVideoOutput, generateVideoPoster, pollVideoGeneration, submitVideoGeneration } from './videoApi.js'
 import type { TaskEventBus } from './eventBus.js'
@@ -260,10 +261,29 @@ export class TaskWorker {
           onUpstreamRequestId: (requestId) => {
             this.db.updateTaskProgress({
               id: taskId,
-              status: "processing",
+              status: 'processing',
               progressPercent: 60,
-              currentStep: "processing",
+              currentStep: 'processing',
               upstreamRequestId: requestId,
+              upstreamUsageJson: buildKieUpstreamUsageJson({
+                kieTaskId: requestId,
+                previousJson: this.db.getTask(taskId)?.upstreamUsageJson,
+              }),
+            })
+          },
+          onUpstreamMeta: (meta) => {
+            const latest = this.db.getTask(taskId)
+            this.db.updateTaskProgress({
+              id: taskId,
+              status: meta.resultUrls?.length ? 'downloading' : 'processing',
+              progressPercent: meta.resultUrls?.length ? 82 : 60,
+              currentStep: meta.resultUrls?.length ? 'downloading' : 'processing',
+              upstreamRequestId: meta.requestId || latest?.upstreamRequestId || null,
+              upstreamUsageJson: buildKieUpstreamUsageJson({
+                kieTaskId: meta.requestId || latest?.upstreamRequestId || null,
+                kieResultUrls: meta.resultUrls || null,
+                previousJson: latest?.upstreamUsageJson,
+              }),
             })
           },
           onImagesReady: shouldPersistIncrementally

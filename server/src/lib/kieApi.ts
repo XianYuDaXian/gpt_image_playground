@@ -387,7 +387,7 @@ async function downloadRemoteImage(url: string): Promise<GeneratedImageResult> {
   return { buffer, mimeType }
 }
 
-async function downloadResultImages(urls: string[]) {
+export async function downloadKieResultUrls(urls: string[]) {
   const images: GeneratedImageResult[] = []
   // 串行下载，避免并发把弱网打满后全部失败
   for (const url of urls) {
@@ -403,7 +403,7 @@ async function materializeKieOutputs(
   urls: string[],
 ) {
   try {
-    return await downloadResultImages(urls)
+    return await downloadKieResultUrls(urls)
   } catch (firstError) {
     // 上游已成功时，再查一次结果 URL 后重下，降低 CDN 短时失效概率
     let freshUrls = urls
@@ -419,7 +419,7 @@ async function materializeKieOutputs(
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 1500))
-      return await downloadResultImages(freshUrls)
+      return await downloadKieResultUrls(freshUrls)
     } catch (secondError) {
       throw new Error(
         `远端已出图但本地下载失败：${formatNetworkError(secondError, formatNetworkError(firstError))}`,
@@ -529,8 +529,10 @@ async function runSingleKie(
     input,
   })
   options.onUpstreamRequestId?.(taskId)
+  options.onUpstreamMeta?.({ requestId: taskId })
 
   const urls = await waitForTask(payload.provider, apiKey, taskId)
+  options.onUpstreamMeta?.({ requestId: taskId, resultUrls: urls })
   return materializeKieOutputs(payload.provider, apiKey, taskId, urls)
 }
 

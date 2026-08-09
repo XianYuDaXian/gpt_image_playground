@@ -52,6 +52,8 @@ export interface ExecuteImageTaskOptions {
   ) => Promise<void> | void
   /** 上游异步任务 ID（如 Kie taskId / WaveSpeed prediction id） */
   onUpstreamRequestId?: (requestId: string) => void
+  /** 上游元数据（taskId / 结果 URL），用于失败后兼容恢复 */
+  onUpstreamMeta?: (meta: { requestId?: string; resultUrls?: string[] }) => void
 }
 
 function normalizeBase64Image(value: string) {

@@ -3,9 +3,10 @@ import fs from 'node:fs/promises'
 import crypto from 'node:crypto'
 import type { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
-import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth } from '../lib/auth.js'
+import { buildAuthStatus, canAccessTask, getAllowedProviderProfileIds, requireAuth, requireAdmin } from '../lib/auth.js'
 import { serializeTaskRecord, loadSerializedTask, resolveProviderModelLabel, getMultiModelImageCapabilityError, getReferenceImageLimitError } from '../lib/taskDto.js'
 import type { TaskListEventRecord } from '../lib/eventBus.js'
+import { recoverKieNetworkFailedTasks } from '../lib/kieFailedTaskRecover.js'
 
 const ADMIN_TASK_LIST_LIMIT = 2000
 const USER_TASK_LIST_LIMIT = 500
@@ -734,4 +735,31 @@ export const taskRoutes: FastifyPluginAsync = async (app) => {
       unsubscribe()
     })
   })
+
+
+  app.post('/api/tasks/recover-kie-failed', async (request, reply) => {
+    const auth = await requireAdmin(app, request, reply)
+    if (!auth) return
+
+    const bodySchema = z.object({
+      taskIds: z.array(z.string().min(1)).max(200).optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+      upstreamTaskIdByLocalId: z.record(z.string(), z.string()).optional(),
+    }).default({})
+    const body = bodySchema.parse(request.body ?? {})
+
+    const result = await recoverKieNetworkFailedTasks({
+      db: app.db,
+      taskEvents: app.taskEvents,
+      appSecret: app.config.appSecret,
+      mediaDir: app.config.mediaDir,
+      outputsDir: app.config.outputsDir,
+      thumbsDir: app.config.thumbsDir,
+      limit: body.limit,
+      taskIds: body.taskIds,
+      upstreamTaskIdByLocalId: body.upstreamTaskIdByLocalId,
+    })
+    return result
+  })
+
 }

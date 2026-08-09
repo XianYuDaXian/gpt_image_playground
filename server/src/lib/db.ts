@@ -2190,6 +2190,95 @@ ${selectUsageCodeFields()}
     return tx()
   }
 
+  listUsageQuotaEventsForTask(taskId: string) {
+    return this.sqlite.prepare(`
+      SELECT
+        id,
+        usage_code_id as usageCodeId,
+        task_id as taskId,
+        event_type as eventType,
+        credits,
+        reason,
+        provider_profile_id as providerProfileId,
+        created_at as createdAt
+      FROM usage_quota_events
+      WHERE task_id = ?
+      ORDER BY id ASC
+    `).all(taskId) as Array<{
+      id: number
+      usageCodeId: string
+      taskId: string | null
+      eventType: string
+      credits: number
+      reason: string | null
+      providerProfileId: string | null
+      createdAt: string
+    }>
+  }
+
+  /** 失败恢复成功后重新扣回已退还的额度（reason=task_recover，可幂等） */
+  reserveUsageCreditsForTaskRecover(input: {
+    usageCodeId: string
+    taskId: string
+    credits: number
+    providerProfileId: string
+  }) {
+    const tx = this.sqlite.transaction(() => {
+      const existing = this.sqlite.prepare(`
+        SELECT 1 as existsFlag
+        FROM usage_quota_events
+        WHERE task_id = ? AND event_type = 'reserve' AND reason = 'task_recover'
+        LIMIT 1
+      `).get(input.taskId) as { existsFlag: number } | undefined
+      if (existing) return false
+
+      const code = this.getUsageCode(input.usageCodeId)
+      if (!code || !code.isEnabled) {
+        throw new Error('使用码不可用')
+      }
+      const providerQuota = code.providerImageQuotas?.[input.providerProfileId] ?? 0
+      const providerUsedCredits = code.providerUsedImageCredits?.[input.providerProfileId] ?? 0
+      const providerRemaining = providerQuota - providerUsedCredits
+      if (providerRemaining < input.credits) {
+        throw new Error(`当前端点剩余图片额度不足，当前剩余 ${Math.max(0, providerRemaining)} 张`)
+      }
+
+      const now = new Date().toISOString()
+      const nextProviderUsedImageCredits = {
+        ...(code.providerUsedImageCredits ?? {}),
+        [input.providerProfileId]: providerUsedCredits + input.credits,
+      }
+      this.sqlite.prepare(`
+        UPDATE usage_codes
+        SET used_image_credits = used_image_credits + ?,
+            provider_used_image_credits_json = ?,
+            updated_at = ?,
+            last_used_at = ?
+        WHERE id = ?
+      `).run(
+        input.credits,
+        stringifyProviderImageQuotaMap(nextProviderUsedImageCredits),
+        now,
+        now,
+        input.usageCodeId,
+      )
+      this.sqlite.prepare(`
+        INSERT INTO usage_quota_events (
+          usage_code_id,
+          task_id,
+          event_type,
+          credits,
+          reason,
+          provider_profile_id,
+          created_at
+        )
+        VALUES (?, ?, 'reserve', ?, 'task_recover', ?, ?)
+      `).run(input.usageCodeId, input.taskId, input.credits, input.providerProfileId, now)
+      return true
+    })
+    return tx()
+  }
+
   refundUsageCreditsForTask(input: {
     usageCodeId: string
     taskId: string

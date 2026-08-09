@@ -10,6 +10,7 @@ import { encryptText } from './lib/crypto.js'
 import { TaskEventBus } from './lib/eventBus.js'
 import { getBackupJobState, getMaintenanceMessage } from './lib/maintenance.js'
 import { TaskWorker } from './lib/taskWorker.js'
+import { recoverKieNetworkFailedTasks } from './lib/kieFailedTaskRecover.js'
 import { canAccessTask, getAuthContext } from './lib/auth.js'
 import { authRoutes } from './routes/auth.js'
 import { metaRoutes } from './routes/meta.js'
@@ -211,6 +212,28 @@ if (webIndexHtml) {
 for (const task of app.db.listActiveTasks()) {
   app.taskWorker.enqueue(task.id)
 }
+
+// 启动后自动重拉 Kie 网络失败任务（兼容已落库 taskId / 结果 URL 的历史失败单）
+void recoverKieNetworkFailedTasks({
+  db: app.db,
+  taskEvents: app.taskEvents,
+  appSecret: appConfig.appSecret,
+  mediaDir: appConfig.mediaDir,
+  outputsDir: appConfig.outputsDir,
+  thumbsDir: appConfig.thumbsDir,
+  limit: 300,
+}).then((result) => {
+  app.log.info({
+    type: 'kie-failed-recover',
+    total: result.total,
+    recovered: result.recovered,
+    skipped: result.skipped,
+    failed: result.failed,
+    items: result.items,
+  }, 'Kie 网络失败任务恢复完成')
+}).catch((error) => {
+  app.log.error({ err: error }, 'Kie 网络失败任务恢复异常')
+})
 
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error)
