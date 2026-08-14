@@ -30,8 +30,8 @@ export interface ProviderProfileRecord {
   proxyEnabled: number
   proxyUrl: string | null
   autoAspectFromReference: number
-  videoMaxResolution: '480p' | '720p'
-  videoResolutionOptions?: Array<'480p' | '720p'>
+  videoMaxResolution: '480p' | '720p' | '1080p'
+  videoResolutionOptions?: Array<'480p' | '720p' | '1080p'>
   videoMaxDuration: 6 | 10 | 15
   videoDurationOptions?: Array<6 | 10 | 15>
   maxReferenceImages: number
@@ -366,21 +366,21 @@ function serializeProviderModelOptions(
   return JSON.stringify(Array.from(new Set(items)))
 }
 
-function normalizeVideoResolutionOptions(value: ReadonlyArray<string> | null | undefined): Array<'480p' | '720p'> {
+function normalizeVideoResolutionOptions(value: ReadonlyArray<string> | null | undefined): Array<'480p' | '720p' | '1080p'> {
   const items = Array.from(new Set(
     (value ?? [])
-      .map((item) => item === '720p' ? '720p' : item === '480p' ? '480p' : null)
-      .filter((item): item is '480p' | '720p' => item !== null),
+      .map((item) => item === '1080p' ? '1080p' : item === '720p' ? '720p' : item === '480p' ? '480p' : null)
+      .filter((item): item is '480p' | '720p' | '1080p' => item !== null),
   ))
   if (!items.length) return ['480p']
-  const sortedOptions: Array<'480p' | '720p'> = ['480p', '720p']
+  const sortedOptions: Array<'480p' | '720p' | '1080p'> = ['480p', '720p', '1080p']
   return sortedOptions.filter((item) => items.includes(item))
 }
 
 function parseVideoResolutionOptions(
   value: string | null | undefined,
   fallbackMaxResolution?: string | null,
-): Array<'480p' | '720p'> {
+): Array<'480p' | '720p' | '1080p'> {
   if (value) {
     try {
       const parsed = JSON.parse(value) as unknown
@@ -388,6 +388,7 @@ function parseVideoResolutionOptions(
     } catch {
     }
   }
+  if (fallbackMaxResolution === '1080p') return ['480p', '720p', '1080p']
   if (fallbackMaxResolution === '720p') return ['480p', '720p']
   return ['480p']
 }
@@ -1194,8 +1195,8 @@ export class AppDatabase {
     proxyEnabled?: boolean
     proxyUrl?: string | null
     autoAspectFromReference?: boolean
-    videoMaxResolution?: '480p' | '720p'
-    videoResolutionOptions?: Array<'480p' | '720p'>
+    videoMaxResolution?: '480p' | '720p' | '1080p'
+    videoResolutionOptions?: Array<'480p' | '720p' | '1080p'>
     videoMaxDuration?: 6 | 10 | 15
     videoDurationOptions?: Array<6 | 10 | 15>
     maxReferenceImages?: number

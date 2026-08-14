@@ -82,11 +82,12 @@ interface UsageCodeEventItem {
 }
 
 const videoDurationOptionSchema = z.union([z.literal(6), z.literal(10), z.literal(15)])
-const videoResolutionOptionSchema = z.enum(['480p', '720p'])
+const videoResolutionOptionSchema = z.enum(['480p', '720p', '1080p'])
+const videoResolutionRank: Record<'480p' | '720p' | '1080p', number> = { '480p': 0, '720p': 1, '1080p': 2 }
 const videoResolutionOptionsSchema = z.array(videoResolutionOptionSchema)
   .min(1)
-  .max(2)
-  .transform((value) => Array.from(new Set(value)).sort((a, b) => a.localeCompare(b)) as Array<'480p' | '720p'>)
+  .max(3)
+  .transform((value) => Array.from(new Set(value)).sort((a, b) => videoResolutionRank[a] - videoResolutionRank[b]) as Array<'480p' | '720p' | '1080p'>)
 const videoDurationOptionsSchema = z.array(videoDurationOptionSchema)
   .min(1)
   .max(3)

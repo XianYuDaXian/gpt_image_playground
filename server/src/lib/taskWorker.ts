@@ -477,7 +477,7 @@ export class TaskWorker {
       const apiKey = decryptText(provider.apiKeyEncrypted, this.config.appSecret)
       const params = JSON.parse(task.paramsJson) as {
         aspect_ratio?: 'auto' | '1:1' | '16:9' | '9:16' | '4:3' | '3:4' | '3:2' | '2:3'
-        resolution: '480p' | '720p'
+        resolution: '480p' | '720p' | '1080p'
         duration: 6 | 10 | 15
       }
 

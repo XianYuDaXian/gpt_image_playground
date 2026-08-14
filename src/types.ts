@@ -2,10 +2,10 @@
 
 export type ApiMode = 'images' | 'responses' | 'videos' | 'venice_images' | 'wavespeed' | 'kie'
 export type ThemeMode = 'system' | 'light' | 'dark'
-export type VideoResolutionOption = '480p' | '720p'
+export type VideoResolutionOption = '480p' | '720p' | '1080p'
 export type VideoDurationOption = 6 | 10 | 15
 
-export const ALL_VIDEO_RESOLUTION_OPTIONS: VideoResolutionOption[] = ['480p', '720p']
+export const ALL_VIDEO_RESOLUTION_OPTIONS: VideoResolutionOption[] = ['480p', '720p', '1080p']
 export const ALL_VIDEO_DURATION_OPTIONS: VideoDurationOption[] = [6, 10, 15]
 
 export function normalizeVideoResolutionOptions(
@@ -13,7 +13,7 @@ export function normalizeVideoResolutionOptions(
 ): VideoResolutionOption[] {
   const items = Array.from(new Set(
     (value ?? [])
-      .map((item) => item === '720p' ? '720p' : item === '480p' ? '480p' : null)
+      .map((item) => item === '1080p' ? '1080p' : item === '720p' ? '720p' : item === '480p' ? '480p' : null)
       .filter((item): item is VideoResolutionOption => item !== null),
   ))
   if (!items.length) return ['480p']

@@ -25,7 +25,7 @@ const taskParamsSchema = z.object({
 
 const videoParamsSchema = z.object({
   aspect_ratio: z.enum(['auto', '1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']).default('auto'),
-  resolution: z.enum(['480p', '720p']).default('480p'),
+  resolution: z.enum(['480p', '720p', '1080p']).default('480p'),
   duration: z.union([z.literal(6), z.literal(10), z.literal(15)]).default(6),
 })
 
@@ -33,17 +33,17 @@ function clampVideoParamsToProvider(
   params: z.infer<typeof videoParamsSchema>,
   provider: {
     grokApiCompat?: number | boolean
-    videoMaxResolution?: '480p' | '720p'
-    videoResolutionOptions?: Array<'480p' | '720p'>
+    videoMaxResolution?: '480p' | '720p' | '1080p'
+    videoResolutionOptions?: Array<'480p' | '720p' | '1080p'>
     videoMaxDuration?: 6 | 10 | 15
     videoDurationOptions?: Array<6 | 10 | 15>
   },
 ) {
   const advancedEnabled = Boolean(provider.grokApiCompat)
-  const allowedResolutions: Array<'480p' | '720p'> = advancedEnabled
-    ? (provider.videoResolutionOptions?.length ? provider.videoResolutionOptions : provider.videoMaxResolution === '720p' ? ['480p', '720p'] : ['480p'])
+  const allowedResolutions: Array<'480p' | '720p' | '1080p'> = advancedEnabled
+    ? (provider.videoResolutionOptions?.length ? provider.videoResolutionOptions : provider.videoMaxResolution === '1080p' ? ['480p', '720p', '1080p'] : provider.videoMaxResolution === '720p' ? ['480p', '720p'] : ['480p'])
     : ['480p']
-  const resolution: '480p' | '720p' = allowedResolutions.includes(params.resolution)
+  const resolution: '480p' | '720p' | '1080p' = allowedResolutions.includes(params.resolution)
     ? params.resolution
     : allowedResolutions[allowedResolutions.length - 1]
   const allowedDurations: Array<6 | 10 | 15> = advancedEnabled
