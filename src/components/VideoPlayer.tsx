@@ -44,6 +44,7 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
   const [activeSrc, setActiveSrc] = useState(src)
   const pendingSrcRef = useRef<string | null>(null)
   const pendingTimeRef = useRef(0)
+  const userPausedRef = useRef(false)
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeGroupRef = useRef<HTMLDivElement>(null)
   const volumeHideTimerRef = useRef<number | null>(null)
@@ -152,7 +153,6 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
     video.addEventListener('volumechange', syncVolume)
 
     return () => {
-      video.pause()
       video.removeEventListener('loadedmetadata', syncDuration)
       video.removeEventListener('durationchange', syncDuration)
       video.removeEventListener('timeupdate', syncTime)
@@ -178,6 +178,34 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
     pendingSrcRef.current = null
     setActiveSrc(src)
   }, [activeSrc, src])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video || !activeSrc || userPausedRef.current) return
+
+    let cancelled = false
+    const tryPlay = () => {
+      if (cancelled || userPausedRef.current) return
+      void video.play().then(() => {
+        if (!cancelled) setIsPlaying(true)
+      }).catch(() => {
+        if (!cancelled) setIsPlaying(false)
+      })
+    }
+
+    if (video.readyState >= 2) {
+      tryPlay()
+    } else {
+      video.addEventListener('canplay', tryPlay)
+      video.addEventListener('loadeddata', tryPlay)
+    }
+
+    return () => {
+      cancelled = true
+      video.removeEventListener('canplay', tryPlay)
+      video.removeEventListener('loadeddata', tryPlay)
+    }
+  }, [activeSrc])
 
   useEffect(() => {
     const video = videoRef.current
@@ -337,6 +365,7 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
     if (!video) return
 
     if (video.paused || video.ended) {
+      userPausedRef.current = false
       await ensureIosAudioGraphReady()
       if (video.ended || hasEnded) {
         try {
@@ -355,6 +384,7 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
       return
     }
 
+    userPausedRef.current = true
     video.pause()
     showFeedback('pause', '暂停')
   }

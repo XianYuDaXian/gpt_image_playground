@@ -152,13 +152,18 @@ export default function DetailModal() {
       })
     }
 
+    const cacheTimers: number[] = []
     for (const videoId of task.outputVideos || []) {
       const remoteUrl = task.mediaUrlsById?.[videoId] || task.imageUrlsById?.[videoId]
       const expectedBytes = task.imageBytesById?.[videoId] ?? null
       if (remoteUrl) {
-        void cacheTaskVideoForPlayback(videoId, remoteUrl, expectedBytes).then((url) => {
-          if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
-        })
+        const delay = nextVideoSrcs[videoId] ? 0 : 800
+        const timer = window.setTimeout(() => {
+          void cacheTaskVideoForPlayback(videoId, remoteUrl, expectedBytes).then((url) => {
+            if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
+          })
+        }, delay)
+        cacheTimers.push(timer)
       } else {
         ensureTaskVideoAvailable(videoId).then((url) => {
           if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
@@ -168,6 +173,7 @@ export default function DetailModal() {
 
     return () => {
       cancelled = true
+      for (const timer of cacheTimers) window.clearTimeout(timer)
     }
   }, [task])
 

@@ -2442,9 +2442,8 @@ export default function InputBar() {
           </div>
 
           <div className="mt-3">
-            <div className="hidden sm:flex sm:flex-col sm:gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            <div className="hidden items-center justify-between gap-2 sm:flex">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto hide-scrollbar">
                 <div className="flex h-10 shrink-0 rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <button
                     type="button"
@@ -2466,11 +2465,28 @@ export default function InputBar() {
                     <button
                       type="button"
                       onClick={() => setShowVideoAspectPicker(true)}
-                      className="flex h-10 min-w-[104px] items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-3 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
+                      className="flex h-10 min-w-[88px] shrink-0 items-center justify-between rounded-xl border border-gray-200/60 bg-white/70 px-2.5 text-sm text-gray-700 shadow-sm transition-all hover:bg-white dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:hover:bg-white/[0.06]"
                     >
                       <span className="text-gray-400 dark:text-gray-500">比例</span>
                       <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
                     </button>
+                    {canShowVideoResolutionControl && (
+                      <CompactSegmentedSlider
+                        label="分辨率"
+                        value={videoResolution}
+                        labels={allowedVideoResolutions}
+                        onChange={(value) => setVideoResolution(value as VideoTaskParams['resolution'])}
+                      />
+                    )}
+                    {canShowVideoDurationControl && (
+                      <CompactSegmentedSlider
+                        label="时长"
+                        value={String(videoDuration)}
+                        labels={allowedVideoDurationLabels}
+                        suffix="s"
+                        onChange={(value) => setVideoDuration(Number(value) as VideoTaskParams['duration'])}
+                      />
+                    )}
                   </>
                 ) : (
                   <div
@@ -2559,28 +2575,6 @@ export default function InputBar() {
                   </button>
                 </div>
               </div>
-            </div>
-            {(canShowVideoResolutionControl || canShowVideoDurationControl) && (
-              <div className="flex flex-wrap items-center gap-2">
-                {canShowVideoResolutionControl && (
-                  <CompactSegmentedSlider
-                    label="分辨率"
-                    value={videoResolution}
-                    labels={allowedVideoResolutions}
-                    onChange={(value) => setVideoResolution(value as VideoTaskParams['resolution'])}
-                  />
-                )}
-                {canShowVideoDurationControl && (
-                  <CompactSegmentedSlider
-                    label="时长"
-                    value={String(videoDuration)}
-                    labels={allowedVideoDurationLabels}
-                    suffix="s"
-                    onChange={(value) => setVideoDuration(Number(value) as VideoTaskParams['duration'])}
-                  />
-                )}
-              </div>
-            )}
             </div>
 
             <div className="mobile-submit-row mt-2 flex items-center gap-2 sm:hidden">
