@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  formatByteSize,
+  resolveImageLoadPercent,
+  type ImageLoadProgress,
+} from '../lib/imageLoadProgress'
 
 const VIDEO_PLAYER_VOLUME_STORAGE_KEY = 'gpt-image-playground-video-volume'
 const VIDEO_SEEK_STEP_SECONDS = 5
@@ -15,6 +20,7 @@ interface VideoPlayerProps {
   poster?: string
   nativeControls?: boolean
   blurred?: boolean
+  cacheProgress?: ImageLoadProgress | null
 }
 
 function formatVideoTime(seconds: number) {
@@ -33,8 +39,11 @@ function sliderValueToVolume(value: number) {
   return Math.min(1, Math.max(0, value)) ** VIDEO_VOLUME_CURVE_POWER
 }
 
-export default function VideoPlayer({ src, poster, nativeControls = false, blurred = false }: VideoPlayerProps) {
+export default function VideoPlayer({ src, poster, nativeControls = false, blurred = false, cacheProgress = null }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const [activeSrc, setActiveSrc] = useState(src)
+  const pendingSrcRef = useRef<string | null>(null)
+  const pendingTimeRef = useRef(0)
   const playerRef = useRef<HTMLDivElement>(null)
   const volumeGroupRef = useRef<HTMLDivElement>(null)
   const volumeHideTimerRef = useRef<number | null>(null)
@@ -97,7 +106,17 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
       setIsPlaying(!video.paused && !video.ended)
       setHasEnded(false)
     }
-    const syncPause = () => setIsPlaying(false)
+    const applyPendingSrc = () => {
+      const nextSrc = pendingSrcRef.current
+      if (!nextSrc || nextSrc === activeSrc) return
+      pendingTimeRef.current = video.ended ? 0 : (video.currentTime || 0)
+      pendingSrcRef.current = null
+      setActiveSrc(nextSrc)
+    }
+    const syncPause = () => {
+      setIsPlaying(false)
+      applyPendingSrc()
+    }
     const syncEnded = () => {
       setIsPlaying(false)
       setHasEnded(true)
@@ -107,6 +126,7 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
       } catch {
         /* 忽略当前时间回写失败 */
       }
+      applyPendingSrc()
     }
     const syncVolume = () => {
       if (isIosBrowser) return
@@ -141,7 +161,43 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
       video.removeEventListener('ended', syncEnded)
       video.removeEventListener('volumechange', syncVolume)
     }
-  }, [isIosBrowser, src])
+  }, [activeSrc, isIosBrowser])
+
+  useEffect(() => {
+    if (!src || src === activeSrc) {
+      pendingSrcRef.current = null
+      return
+    }
+    const video = videoRef.current
+    const shouldDefer = Boolean(video && !video.paused && !video.ended && video.currentTime > 0.05)
+    if (shouldDefer) {
+      pendingSrcRef.current = src
+      return
+    }
+    pendingTimeRef.current = video?.currentTime || 0
+    pendingSrcRef.current = null
+    setActiveSrc(src)
+  }, [activeSrc, src])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    const resumeTime = pendingTimeRef.current
+    if (resumeTime <= 0.05) return
+    const restoreTime = () => {
+      try {
+        video.currentTime = resumeTime
+      } catch {
+        /* 忽略本地视频定位失败 */
+      }
+    }
+    if (video.readyState >= 1) {
+      restoreTime()
+      return
+    }
+    video.addEventListener('loadedmetadata', restoreTime, { once: true })
+    return () => video.removeEventListener('loadedmetadata', restoreTime)
+  }, [activeSrc])
 
   useEffect(() => {
     const video = videoRef.current
@@ -571,11 +627,11 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
     >
       <video
         ref={videoRef}
-        src={src}
+        src={activeSrc}
         poster={poster}
         playsInline
         controls={nativeControls}
-        preload="metadata"
+        preload="auto"
         className={`detail-video-element${nativeControls ? ' detail-video-element-native' : ''}${shouldShowPosterOverlay && !nativeControls ? ' detail-video-element-hidden' : ''}${blurred ? ' blur-md scale-[1.02]' : ''}`}
       />
       {shouldShowPosterOverlay && (
@@ -629,6 +685,32 @@ export default function VideoPlayer({ src, poster, nativeControls = false, blurr
         )
       )}
       {blurred && <div className="pointer-events-none absolute inset-0 bg-black/20" />}
+      {cacheProgress && (cacheProgress.stage === 'downloading' || cacheProgress.stage === 'preparing') && (
+        <div className="pointer-events-none absolute inset-x-3 bottom-14 z-10 sm:bottom-16">
+          <div className="rounded-xl bg-black/55 px-3 py-2 text-white backdrop-blur-sm">
+            <div className="mb-1 flex items-center justify-between gap-3 text-[11px] leading-none">
+              <span>{cacheProgress.stage === 'preparing' ? '准备缓存视频' : '边播边缓存'}</span>
+              <span className="tabular-nums text-white/80">
+                {resolveImageLoadPercent(cacheProgress) != null
+                  ? `${resolveImageLoadPercent(cacheProgress)}%`
+                  : cacheProgress.loadedBytes > 0
+                    ? formatByteSize(cacheProgress.loadedBytes)
+                    : '连接中'}
+              </span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-white/20">
+              {resolveImageLoadPercent(cacheProgress) != null ? (
+                <div
+                  className="h-full rounded-full bg-white/90 transition-[width] duration-200"
+                  style={{ width: `${Math.max(4, resolveImageLoadPercent(cacheProgress) ?? 0)}%` }}
+                />
+              ) : (
+                <div className="h-full w-2/5 animate-pulse rounded-full bg-white/80" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {!nativeControls && (
         <div
           className="detail-video-controls"

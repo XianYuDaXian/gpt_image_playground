@@ -37,19 +37,22 @@ export function resolveImageLoadPercent(progress: ImageLoadProgress) {
   return Math.min(99, Math.round((progress.loadedBytes / total) * 100))
 }
 
-export function getImageLoadStageLabel(progress: ImageLoadProgress) {
+export function getImageLoadStageLabel(progress: ImageLoadProgress, mediaKind: 'image' | 'video' = 'image') {
   const percent = resolveImageLoadPercent(progress)
   const total = progress.totalBytes ?? progress.expectedBytes
+  const downloadingLabel = mediaKind === 'video' ? '下载视频' : '下载原图'
+  const preparingLabel = mediaKind === 'video' ? '准备加载视频...' : '准备加载...'
+  const decodingLabel = mediaKind === 'video' ? '准备播放...' : '解码图片...'
 
-  if (progress.stage === 'preparing') return '准备加载...'
+  if (progress.stage === 'preparing') return preparingLabel
   if (progress.stage === 'downloading') {
-    if (percent != null) return `下载原图 ${percent}%`
+    if (percent != null) return `${downloadingLabel} ${percent}%`
     if (total) {
-      return `下载原图 ${formatByteSize(progress.loadedBytes)} / ${formatByteSize(total)}`
+      return `${downloadingLabel} ${formatByteSize(progress.loadedBytes)} / ${formatByteSize(total)}`
     }
-    return `下载原图 ${formatByteSize(progress.loadedBytes)}`
+    return `${downloadingLabel} ${formatByteSize(progress.loadedBytes)}`
   }
-  if (progress.stage === 'decoding') return '解码图片...'
+  if (progress.stage === 'decoding') return decodingLabel
   if (progress.stage === 'error') return '加载失败'
   return ''
 }

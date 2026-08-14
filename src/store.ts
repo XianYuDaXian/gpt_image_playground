@@ -40,6 +40,8 @@ import {
   isSameTaskListRequestKey,
   type TaskListRequestKey,
 } from './lib/taskListRequest'
+import { fetchImageBlobWithProgress } from './lib/imageLoadProgress'
+import { markVideoLoadDone, setVideoLoadProgress } from './lib/videoLoadState'
 
 // ===== Image cache =====
 // 内存缓存，id → dataUrl，避免每次从 IndexedDB 读取
@@ -66,6 +68,7 @@ let taskListLastSuccessAt: number | null = null
 let taskListLastRequestKey: TaskListRequestKey | null = null
 const MAX_IMAGE_CACHE_ENTRIES = 8
 const MAX_THUMBNAIL_CACHE_ENTRIES = 80
+const MAX_VIDEO_CACHE_ENTRIES = 3
 
 function getEmptyMaintenanceStatus(): AuthStatus['maintenance'] {
   return {
@@ -160,6 +163,39 @@ function revokeCachedVideoUrl(id: string) {
 function cacheVideoUrl(id: string, objectUrl: string) {
   revokeCachedVideoUrl(id)
   videoUrlCache.set(id, objectUrl)
+  while (videoUrlCache.size > MAX_VIDEO_CACHE_ENTRIES) {
+    const oldestKey = videoUrlCache.keys().next().value
+    if (oldestKey == null || oldestKey === id) break
+    revokeCachedVideoUrl(oldestKey)
+  }
+}
+
+function toPlayableVideoBlob(blob: Blob) {
+  if (blob.type.startsWith('video/')) return blob
+  return new Blob([blob], { type: 'video/mp4' })
+}
+
+async function maybeStoreVideoThumbnail(videoId: string, blob?: Blob) {
+  const thumbnail = await getStoredFreshImageThumbnail(videoId)
+  if (thumbnail?.thumbnailDataUrl) return
+  const sourceBlob = blob ?? await getCachedVideoBlob(videoId)
+  if (!sourceBlob) return
+  try {
+    const generatedThumbnail = await createAndStoreVideoThumbnail(videoId, sourceBlob)
+    cacheThumbnail(videoId, {
+      dataUrl: generatedThumbnail.thumbnailDataUrl,
+      width: generatedThumbnail.width,
+      height: generatedThumbnail.height,
+      thumbnailVersion: generatedThumbnail.thumbnailVersion,
+    })
+    notifyImageThumbnail(videoId, {
+      dataUrl: generatedThumbnail.thumbnailDataUrl,
+      width: generatedThumbnail.width,
+      height: generatedThumbnail.height,
+    })
+  } catch {
+    /* 视频首帧生成失败时保留占位，不影响播放 */
+  }
 }
 
 export function getCachedVideoUrl(id: string): string | undefined {
@@ -1491,31 +1527,12 @@ export async function cacheTaskImageForEditing(
 export async function cacheTaskVideoForPlayback(
   videoId: string,
   remoteUrl: string,
+  expectedBytes: number | null = null,
 ): Promise<string | undefined> {
   const cached = await ensureVideoCached(videoId)
   if (cached) {
-    const thumbnail = await getStoredFreshImageThumbnail(videoId)
-    if (!thumbnail?.thumbnailDataUrl) {
-      const cachedBlob = await getCachedVideoBlob(videoId)
-      if (cachedBlob) {
-        try {
-          const generatedThumbnail = await createAndStoreVideoThumbnail(videoId, cachedBlob)
-          cacheThumbnail(videoId, {
-            dataUrl: generatedThumbnail.thumbnailDataUrl,
-            width: generatedThumbnail.width,
-            height: generatedThumbnail.height,
-            thumbnailVersion: generatedThumbnail.thumbnailVersion,
-          })
-          notifyImageThumbnail(videoId, {
-            dataUrl: generatedThumbnail.thumbnailDataUrl,
-            width: generatedThumbnail.width,
-            height: generatedThumbnail.height,
-          })
-        } catch {
-          /* 视频首帧生成失败时保留占位，不影响播放 */
-        }
-      }
-    }
+    markVideoLoadDone(videoId, expectedBytes)
+    void maybeStoreVideoThumbnail(videoId)
     return cached
   }
 
@@ -1523,35 +1540,37 @@ export async function cacheTaskVideoForPlayback(
   if (loading) return loading
 
   const loadPromise = (async () => {
-    const response = await fetch(remoteUrl)
-    const blob = await response.blob()
-    await putCachedVideoBlob(videoId, blob)
-
+    setVideoLoadProgress(videoId, {
+      stage: 'downloading',
+      loadedBytes: 0,
+      totalBytes: expectedBytes,
+      percent: expectedBytes ? 0 : null,
+      expectedBytes,
+    })
+    const blob = toPlayableVideoBlob(await fetchImageBlobWithProgress(
+      remoteUrl,
+      (progress) => setVideoLoadProgress(videoId, progress),
+      undefined,
+      expectedBytes,
+    ))
     const objectUrl = URL.createObjectURL(blob)
     cacheVideoUrl(videoId, objectUrl)
-
-    const thumbnail = await getStoredFreshImageThumbnail(videoId)
-    if (!thumbnail?.thumbnailDataUrl) {
-      try {
-        const generatedThumbnail = await createAndStoreVideoThumbnail(videoId, blob)
-        cacheThumbnail(videoId, {
-          dataUrl: generatedThumbnail.thumbnailDataUrl,
-          width: generatedThumbnail.width,
-          height: generatedThumbnail.height,
-          thumbnailVersion: generatedThumbnail.thumbnailVersion,
-        })
-        notifyImageThumbnail(videoId, {
-          dataUrl: generatedThumbnail.thumbnailDataUrl,
-          width: generatedThumbnail.width,
-          height: generatedThumbnail.height,
-        })
-      } catch {
-        /* 视频首帧生成失败时保留占位，不影响播放 */
-      }
-    }
-
+    markVideoLoadDone(videoId, blob.size)
+    void putCachedVideoBlob(videoId, blob).catch(() => {
+      /* 持久缓存失败时仍可使用内存 blob 播放 */
+    })
+    void maybeStoreVideoThumbnail(videoId, blob)
     return objectUrl
-  })()
+  })().catch((error) => {
+    setVideoLoadProgress(videoId, {
+      stage: 'error',
+      loadedBytes: 0,
+      totalBytes: expectedBytes,
+      percent: null,
+      expectedBytes,
+    })
+    throw error
+  })
 
   videoLoadPromises.set(videoId, loadPromise)
 

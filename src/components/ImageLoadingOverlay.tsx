@@ -10,6 +10,7 @@ interface ImageLoadingOverlayProps {
   imageIndex?: number
   imageTotal?: number
   variant?: 'light' | 'dark'
+  mediaKind?: 'image' | 'video'
 }
 
 export default function ImageLoadingOverlay({
@@ -17,9 +18,10 @@ export default function ImageLoadingOverlay({
   imageIndex,
   imageTotal,
   variant = 'light',
+  mediaKind = 'image',
 }: ImageLoadingOverlayProps) {
   const percent = resolveImageLoadPercent(progress)
-  const stageLabel = getImageLoadStageLabel(progress)
+  const stageLabel = getImageLoadStageLabel(progress, mediaKind)
   const total = progress.totalBytes ?? progress.expectedBytes
   const isDark = variant === 'dark'
 
@@ -62,7 +64,7 @@ export default function ImageLoadingOverlay({
           : progress.loadedBytes > 0
             ? `已下载 ${formatByteSize(progress.loadedBytes)}`
             : progress.stage === 'preparing'
-              ? '等待图片地址'
+              ? (mediaKind === 'video' ? '等待视频地址' : '等待图片地址')
               : '正在读取'}
       </div>
     </div>

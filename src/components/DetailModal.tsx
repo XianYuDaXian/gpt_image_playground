@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, useMemo, useRef, type SyntheticEvent } from 'react'
-import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useStore, cacheTaskImageForEditing, cacheTaskVideoForPlayback, getCachedImage, getCachedVideoUrl, ensureTaskImageAvailable, ensureTaskVideoAvailable, reuseConfig, removeTask, updateTaskInStore, showCodexCliPrompt, getCodexCliPromptKey } from '../store'
+import { useVideoLoadProgress } from '../hooks/useVideoLoadProgress'
+import ImageLoadingOverlay from './ImageLoadingOverlay'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import DetailOutputImageCarousel from './DetailOutputImageCarousel'
@@ -64,15 +66,6 @@ export default function DetailModal() {
   const imagePanelRef = useRef<HTMLDivElement>(null)
   const carouselRef = useRef<ImageCarouselHandle>(null)
   const taskIdPopoverRef = useRef<HTMLDivElement>(null)
-
-  const useNativeVideoControls = useMemo(() => {
-    if (typeof navigator === 'undefined') return false
-    const ua = navigator.userAgent || ''
-    const isIPhone = /iPhone/i.test(ua)
-    const isSafariEngine = /Safari/i.test(ua) && /Version\/[\d.]+/i.test(ua)
-    const isOtherIosBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|DuckDuckGo|Puffin|Mercury/i.test(ua)
-    return isIPhone && isSafariEngine && !isOtherIosBrowser
-  }, [])
 
   const task = useMemo(
     () => tasks.find((t) => t.id === detailTaskId) ?? null,
@@ -146,7 +139,12 @@ export default function DetailModal() {
       if (cached) initial[id] = cached
     }
     setImageSrcs(initial)
-    setVideoSrcs({})
+    const nextVideoSrcs: Record<string, string> = {}
+    for (const videoId of task.outputVideos || []) {
+      const cached = getCachedVideoUrl(videoId)
+      if (cached) nextVideoSrcs[videoId] = cached
+    }
+    setVideoSrcs(nextVideoSrcs)
     for (const id of ids) {
       if (initial[id]) continue
       ensureTaskImageAvailable(id).then((url) => {
@@ -155,13 +153,14 @@ export default function DetailModal() {
     }
 
     for (const videoId of task.outputVideos || []) {
-      ensureTaskVideoAvailable(videoId).then((url) => {
-        if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
-      })
-
       const remoteUrl = task.mediaUrlsById?.[videoId] || task.imageUrlsById?.[videoId]
+      const expectedBytes = task.imageBytesById?.[videoId] ?? null
       if (remoteUrl) {
-        void cacheTaskVideoForPlayback(videoId, remoteUrl).then((url) => {
+        void cacheTaskVideoForPlayback(videoId, remoteUrl, expectedBytes).then((url) => {
+          if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
+        })
+      } else {
+        ensureTaskVideoAvailable(videoId).then((url) => {
           if (!cancelled && url) setVideoSrcs((prev) => ({ ...prev, [videoId]: url }))
         })
       }
@@ -185,11 +184,13 @@ export default function DetailModal() {
   const currentOutputVideoRemoteSrc = currentOutputVideoId
     ? task?.mediaUrlsById?.[currentOutputVideoId] || task?.imageUrlsById?.[currentOutputVideoId] || ''
     : ''
-  const currentOutputVideoSrc = currentOutputVideoId
-    ? useNativeVideoControls
-      ? currentOutputVideoRemoteSrc || videoSrcs[currentOutputVideoId] || ''
-      : videoSrcs[currentOutputVideoId] || currentOutputVideoRemoteSrc || ''
+  const currentOutputVideoLocalSrc = currentOutputVideoId
+    ? videoSrcs[currentOutputVideoId] || ''
     : ''
+  const currentOutputVideoSrc = currentOutputVideoId
+    ? (currentOutputVideoLocalSrc || currentOutputVideoRemoteSrc)
+    : ''
+  const videoLoad = useVideoLoadProgress(currentOutputVideoId)
   const currentOutputVideoPoster = currentOutputVideoId
     ? imageSrcs[currentOutputVideoId] || task?.videoPosterUrlsById?.[currentOutputVideoId] || ''
     : ''
@@ -395,12 +396,28 @@ export default function DetailModal() {
           {hasRenderedOutput && (
             <>
               {isVideoTask ? (
+                currentOutputVideoSrc ? (
                 <VideoPlayer
                   src={currentOutputVideoSrc}
                   poster={currentOutputVideoPoster || undefined}
                   nativeControls={false}
                   blurred={isTaskBlurred}
+                  cacheProgress={videoLoad.progress}
                 />
+                ) : (
+                  <div className="relative h-full w-full">
+                    {currentOutputVideoPoster ? (
+                      <img src={currentOutputVideoPoster} alt="" className="h-full w-full object-contain" />
+                    ) : null}
+                    <ImageLoadingOverlay
+                      progress={videoLoad.progress.stage === 'idle'
+                        ? { ...videoLoad.progress, stage: 'preparing' }
+                        : videoLoad.progress}
+                      mediaKind="video"
+                      variant="dark"
+                    />
+                  </div>
+                )
               ) : (
                 <div className="absolute inset-0">
                   <DetailOutputImageCarousel

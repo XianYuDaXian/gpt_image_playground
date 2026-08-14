@@ -61,7 +61,7 @@ function CompactSegmentedSlider({
   onChange: (value: string) => void
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex h-10 shrink-0 items-center rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+    <div role="radiogroup" aria-label={label} className="inline-flex h-10 shrink-0 items-center rounded-xl border border-gray-200/60 bg-white/70 p-0.5 text-[13px] shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
       {labels.map((item) => {
         const selected = item === value
         return (
@@ -71,7 +71,7 @@ function CompactSegmentedSlider({
             role="radio"
             aria-checked={selected}
             onClick={() => onChange(item)}
-            className={`inline-flex h-full min-w-12 items-center justify-center rounded-lg px-3 leading-none transition ${
+            className={`inline-flex h-full min-w-9 items-center justify-center rounded-lg px-2 leading-none transition ${
               selected
                 ? 'bg-gray-900 text-white dark:bg-white dark:text-gray-900'
                 : 'text-gray-500 hover:text-gray-800 dark:text-gray-300 dark:hover:text-white'
@@ -2442,8 +2442,9 @@ export default function InputBar() {
           </div>
 
           <div className="mt-3">
-            <div className="hidden items-center justify-between gap-3 sm:flex">
-              <div className="flex items-center gap-2 overflow-visible">
+            <div className="hidden sm:flex sm:flex-col sm:gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                 <div className="flex h-10 shrink-0 rounded-xl border border-gray-200/60 bg-white/70 p-1 text-sm shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
                   <button
                     type="button"
@@ -2470,27 +2471,6 @@ export default function InputBar() {
                       <span className="text-gray-400 dark:text-gray-500">比例</span>
                       <span>{hasVideoReferenceImage ? 'auto' : videoAspectRatio}</span>
                     </button>
-                    {(canShowVideoResolutionControl || canShowVideoDurationControl) && (
-                      <>
-                        {canShowVideoResolutionControl && (
-                        <CompactSegmentedSlider
-                          label="分辨率"
-                          value={videoResolution}
-                          labels={allowedVideoResolutions}
-                          onChange={(value) => setVideoResolution(value as VideoTaskParams['resolution'])}
-                        />
-                        )}
-                        {canShowVideoDurationControl && (
-                        <CompactSegmentedSlider
-                          label="时长"
-                          value={String(videoDuration)}
-                          labels={allowedVideoDurationLabels}
-                          suffix="s"
-                          onChange={(value) => setVideoDuration(Number(value) as VideoTaskParams['duration'])}
-                        />
-                        )}
-                      </>
-                    )}
                   </>
                 ) : (
                   <div
@@ -2545,7 +2525,7 @@ export default function InputBar() {
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex shrink-0 items-center gap-2">
                 {renderProviderSelector('w-[144px]')}
                 <div
                   className="relative"
@@ -2579,6 +2559,28 @@ export default function InputBar() {
                   </button>
                 </div>
               </div>
+            </div>
+            {(canShowVideoResolutionControl || canShowVideoDurationControl) && (
+              <div className="flex flex-wrap items-center gap-2">
+                {canShowVideoResolutionControl && (
+                  <CompactSegmentedSlider
+                    label="分辨率"
+                    value={videoResolution}
+                    labels={allowedVideoResolutions}
+                    onChange={(value) => setVideoResolution(value as VideoTaskParams['resolution'])}
+                  />
+                )}
+                {canShowVideoDurationControl && (
+                  <CompactSegmentedSlider
+                    label="时长"
+                    value={String(videoDuration)}
+                    labels={allowedVideoDurationLabels}
+                    suffix="s"
+                    onChange={(value) => setVideoDuration(Number(value) as VideoTaskParams['duration'])}
+                  />
+                )}
+              </div>
+            )}
             </div>
 
             <div className="mobile-submit-row mt-2 flex items-center gap-2 sm:hidden">
